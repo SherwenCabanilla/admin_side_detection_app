@@ -1,11 +1,11 @@
 {
-  "requests": [
+  "scan_requests": [
     {
       "id": "REQ_001",
       "userId": "USER_001",
       "userName": "Maria Santos",
-      "status": "reviewed",
-      "submittedAt": "2024-06-10 09:15",
+      "status": "completed",
+      "reviewedAt": "2024-06-10 09:15",
       "images": [
         {
           "path": "https://your-s3-bucket.s3.amazonaws.com/users/USER_001/requests/REQ_001/IMG_20240610_090000.jpg",

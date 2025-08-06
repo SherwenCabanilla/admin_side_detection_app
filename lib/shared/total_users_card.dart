@@ -1,17 +1,2601 @@
 import 'package:flutter/material.dart';
 import '../models/user_store.dart';
+import '../services/scan_requests_service.dart';
 
 class TotalUsersCard extends StatefulWidget {
-  const TotalUsersCard({Key? key}) : super(key: key);
+  final VoidCallback? onTap;
+  const TotalUsersCard({Key? key, this.onTap}) : super(key: key);
 
   @override
   State<TotalUsersCard> createState() => _TotalUsersCardState();
+}
+
+class TotalReportsReviewedCard extends StatefulWidget {
+  final int totalReports;
+  final List<Map<String, dynamic>> reportsTrend;
+  final VoidCallback? onTap;
+
+  const TotalReportsReviewedCard({
+    Key? key,
+    required this.totalReports,
+    required this.reportsTrend,
+    this.onTap,
+  }) : super(key: key);
+
+  @override
+  State<TotalReportsReviewedCard> createState() =>
+      _TotalReportsReviewedCardState();
+}
+
+class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
+  int _completedReports = 0;
+  int _pendingReports = 0;
+  bool _isLoading = true;
+  bool _showBoundingBoxes =
+      false; // Toggle for bounding boxes visibility (default disabled)
+  bool _isHovered = false;
+
+  String _fixDiseaseName(String disease) {
+    // Fix common spelling issues
+    if (disease == 'backterial_b' || disease == 'backterial_blackspot') {
+      return 'bacterial_blackspot';
+    } else if (disease == 'bacterial_b') {
+      return 'bacterial_blackspot';
+    }
+    return disease;
+  }
+
+  List<Widget> _buildRecommendationsList(dynamic recommendations) {
+    if (recommendations == null) return [];
+
+    if (recommendations is List) {
+      return recommendations.map<Widget>((rec) {
+        if (rec is Map<String, dynamic>) {
+          final treatment = rec['treatment'] ?? '';
+          final dosage = rec['dosage'] ?? '';
+          final frequency = rec['frequency'] ?? '';
+          final duration = rec['duration'] ?? '';
+
+          String displayText = '';
+          if (treatment.isNotEmpty) displayText += 'Treatment: $treatment';
+          if (dosage.isNotEmpty)
+            displayText +=
+                '${displayText.isNotEmpty ? ', ' : ''}Dosage: $dosage';
+          if (frequency.isNotEmpty)
+            displayText +=
+                '${displayText.isNotEmpty ? ', ' : ''}Frequency: $frequency';
+          if (duration.isNotEmpty)
+            displayText +=
+                '${displayText.isNotEmpty ? ', ' : ''}Duration: $duration';
+
+          if (displayText.isEmpty) displayText = 'No details available';
+
+          return Padding(
+            padding: const EdgeInsets.only(left: 8, bottom: 2),
+            child: Text(
+              '• $displayText',
+              style: const TextStyle(fontSize: 11, color: Colors.green),
+            ),
+          );
+        } else {
+          return Padding(
+            padding: const EdgeInsets.only(left: 8, bottom: 2),
+            child: Text(
+              '• ${rec.toString()}',
+              style: const TextStyle(fontSize: 11, color: Colors.green),
+            ),
+          );
+        }
+      }).toList();
+    } else {
+      return [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 2),
+          child: Text(
+            '• ${recommendations.toString()}',
+            style: const TextStyle(fontSize: 11, color: Colors.green),
+          ),
+        ),
+      ];
+    }
+  }
+
+  List<Widget> _buildPreventiveMeasuresList(dynamic preventiveMeasures) {
+    if (preventiveMeasures == null) return [];
+
+    if (preventiveMeasures is List) {
+      return preventiveMeasures.map<Widget>((measure) {
+        return Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 2),
+          child: Text(
+            '• ${measure.toString()}',
+            style: const TextStyle(fontSize: 11, color: Colors.green),
+          ),
+        );
+      }).toList();
+    } else {
+      return [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 2),
+          child: Text(
+            '• ${preventiveMeasures.toString()}',
+            style: const TextStyle(fontSize: 11, color: Colors.green),
+          ),
+        ),
+      ];
+    }
+  }
+
+  Widget _buildExpertReviewWidget(dynamic expertReview) {
+    try {
+      if (expertReview == null) {
+        return const Text(
+          'No expert review available.',
+          style: TextStyle(fontSize: 14, color: Colors.grey),
+        );
+      }
+
+      // Debug: Print the actual data structure
+      print('Expert review data type: ${expertReview.runtimeType}');
+      print('Expert review data: $expertReview');
+
+      // If it's already a Map (most likely case)
+      if (expertReview is Map<String, dynamic>) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (expertReview['expertName'] != null) ...[
+              Text(
+                'Expert: ${expertReview['expertName']}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            if (expertReview['comment'] != null &&
+                expertReview['comment'].toString().isNotEmpty) ...[
+              Text(
+                'Comment: ${expertReview['comment']}',
+                style: const TextStyle(fontSize: 12, color: Colors.green),
+              ),
+              const SizedBox(height: 4),
+            ],
+            if (expertReview['severityAssessment'] != null) ...[
+              Builder(
+                builder: (context) {
+                  final severity = expertReview['severityAssessment'];
+                  if (severity is Map<String, dynamic> &&
+                      severity['level'] != null) {
+                    return Text(
+                      'Severity: ${severity['level']}',
+                      style: const TextStyle(fontSize: 12, color: Colors.green),
+                    );
+                  } else if (severity is String) {
+                    return Text(
+                      'Severity: $severity',
+                      style: const TextStyle(fontSize: 12, color: Colors.green),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+              const SizedBox(height: 4),
+            ],
+            if (expertReview['treatmentPlan'] != null) ...[
+              Builder(
+                builder: (context) {
+                  final treatmentPlan = expertReview['treatmentPlan'];
+                  if (treatmentPlan is Map<String, dynamic>) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (treatmentPlan['recommendations'] != null) ...[
+                          Text(
+                            'Recommendations:',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          ..._buildRecommendationsList(
+                            treatmentPlan['recommendations'],
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                        if (treatmentPlan['preventiveMeasures'] != null) ...[
+                          Text(
+                            'Preventive Measures:',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          ..._buildPreventiveMeasuresList(
+                            treatmentPlan['preventiveMeasures'],
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                      ],
+                    );
+                  } else {
+                    return Text(
+                      'Treatment Plan: $treatmentPlan',
+                      style: const TextStyle(fontSize: 12, color: Colors.green),
+                    );
+                  }
+                },
+              ),
+              const SizedBox(height: 4),
+            ],
+          ],
+        );
+      }
+
+      // Try to parse as JSON string
+      if (expertReview is String) {
+        try {
+          // Remove any extra formatting and parse
+          final cleanString = expertReview.replaceAll(RegExp(r'[{}]'), '');
+          final parts = cleanString.split(',');
+
+          Map<String, String> reviewData = {};
+          for (String part in parts) {
+            final keyValue = part.split(':');
+            if (keyValue.length >= 2) {
+              final key = keyValue[0].trim();
+              final value = keyValue.sublist(1).join(':').trim();
+              reviewData[key] = value;
+            }
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (reviewData['expertName'] != null) ...[
+                Text(
+                  'Expert: ${reviewData['expertName']}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green,
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (reviewData['comment'] != null &&
+                  reviewData['comment']!.isNotEmpty) ...[
+                Text(
+                  'Comment: ${reviewData['comment']}',
+                  style: const TextStyle(fontSize: 12, color: Colors.green),
+                ),
+                const SizedBox(height: 4),
+              ],
+              if (reviewData['severityAssessment'] != null) ...[
+                Text(
+                  'Severity: ${reviewData['severityAssessment']}',
+                  style: const TextStyle(fontSize: 12, color: Colors.green),
+                ),
+                const SizedBox(height: 4),
+              ],
+              if (reviewData['treatmentPlan'] != null) ...[
+                Text(
+                  'Treatment Plan: ${reviewData['treatmentPlan']}',
+                  style: const TextStyle(fontSize: 12, color: Colors.green),
+                ),
+                const SizedBox(height: 4),
+              ],
+            ],
+          );
+        } catch (e) {
+          // If parsing fails, show as plain text
+          return Text(
+            expertReview,
+            style: TextStyle(fontSize: 14, color: Colors.green[700]),
+          );
+        }
+      }
+
+      return Text(
+        expertReview.toString(),
+        style: TextStyle(fontSize: 14, color: Colors.green[700]),
+      );
+    } catch (e) {
+      return Text(
+        'Error parsing expert review: $e',
+        style: TextStyle(fontSize: 14, color: Colors.red[600]),
+      );
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // Get actual counts from the service
+      final completedCount =
+          await ScanRequestsService.getCompletedReportsCount();
+      final pendingCount = await ScanRequestsService.getPendingReportsCount();
+
+      setState(() {
+        _completedReports = completedCount;
+        _pendingReports = pendingCount;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isClickable = widget.onTap != null;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      cursor: isClickable ? SystemMouseCursors.click : MouseCursor.defer,
+      child: Card(
+        elevation: _isHovered && isClickable ? 8 : 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: InkWell(
+          onTap: widget.onTap ?? () => _showReportsModal(context),
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Header with refresh button
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const SizedBox(width: 24), // Spacer to center the content
+                    const Spacer(),
+                    IconButton(
+                      onPressed: _loadData,
+                      icon: const Icon(Icons.refresh, size: 16),
+                      tooltip: 'Refresh',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+
+                // Icon
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.assignment_turned_in,
+                    size: 24,
+                    color: Colors.green,
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Number
+                _isLoading
+                    ? const CircularProgressIndicator()
+                    : Text(
+                      '${widget.totalReports}',
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                const SizedBox(height: 8),
+
+                // Title
+                const Text(
+                  'Total Reports Reviewed',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Breakdown
+                if (!_isLoading) ...[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Colors.green,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$_completedReports Completed',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Colors.orange,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$_pendingReports Pending Review',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showReportsModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.9,
+            height: MediaQuery.of(context).size.height * 0.8,
+            padding: const EdgeInsets.all(20),
+            child: ReportsModalContent(),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCompletedReportsTab(bool showBoundingBoxes) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _getCompletedReports(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+
+        final reports = snapshot.data ?? [];
+
+        if (reports.isEmpty) {
+          return const Center(
+            child: Text(
+              'No completed reports found',
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+          );
+        }
+
+        return ListView.builder(
+          itemCount: reports.length,
+          itemBuilder: (context, index) {
+            final report = reports[index];
+            return _buildReportCard(report, true, showBoundingBoxes);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildPendingReportsTab(bool showBoundingBoxes) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _getPendingReports(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+
+        final reports = snapshot.data ?? [];
+
+        if (reports.isEmpty) {
+          return const Center(
+            child: Text(
+              'No pending reports found',
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+          );
+        }
+
+        return ListView.builder(
+          itemCount: reports.length,
+          itemBuilder: (context, index) {
+            final report = reports[index];
+            return _buildReportCard(report, false, showBoundingBoxes);
+          },
+        );
+      },
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _getCompletedReports() async {
+    try {
+      final allReports = await ScanRequestsService.getScanRequests();
+      return allReports
+          .where((report) => report['status'] == 'completed')
+          .toList();
+    } catch (e) {
+      print('Error getting completed reports: $e');
+      return [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _getPendingReports() async {
+    try {
+      final allReports = await ScanRequestsService.getScanRequests();
+      return allReports
+          .where((report) => report['status'] == 'pending')
+          .toList();
+    } catch (e) {
+      print('Error getting pending reports: $e');
+      return [];
+    }
+  }
+
+  Widget _buildReportCard(
+    Map<String, dynamic> report,
+    bool isCompleted,
+    bool showBoundingBoxes,
+  ) {
+    final userName = report['userName'] ?? 'Unknown User';
+    final createdAt = report['createdAt'];
+    final images = report['images'] ?? [];
+    final diseaseSummary = report['diseaseSummary'] ?? [];
+    final expertReview = report['expertReview'];
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        userName,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        'Submitted: ${_formatDate(createdAt)}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isCompleted ? Colors.green : Colors.orange,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    isCompleted ? 'Completed' : 'Pending',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // Images with bounding boxes
+            if (images.isNotEmpty) ...[
+              const Text(
+                'Images:',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 200,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: images.length,
+                  itemBuilder: (context, imageIndex) {
+                    final imageData = images[imageIndex];
+                    String imageUrl = '';
+
+                    // Debug: Print the image data structure
+                    print('Image data at index $imageIndex: $imageData');
+                    print('Image data type: ${imageData.runtimeType}');
+
+                    // Handle different image data structures
+                    if (imageData is String) {
+                      imageUrl = imageData;
+                      print('Using string URL: $imageUrl');
+                    } else if (imageData is Map<String, dynamic>) {
+                      // Try different possible field names for the URL
+                      imageUrl =
+                          imageData['url'] ??
+                          imageData['imageUrl'] ??
+                          imageData['image'] ??
+                          imageData['src'] ??
+                          imageData['link'] ??
+                          imageData['downloadURL'] ??
+                          imageData['storageURL'] ??
+                          imageData.toString();
+                      print('Using map URL: $imageUrl');
+                    } else {
+                      imageUrl = imageData.toString();
+                      print('Using toString URL: $imageUrl');
+                    }
+
+                    // Clean up the URL - remove line breaks and extra spaces
+                    imageUrl =
+                        imageUrl
+                            .replaceAll('\n', '')
+                            .replaceAll('\r', '')
+                            .trim();
+                    print('Cleaned URL: $imageUrl');
+
+                    return GestureDetector(
+                      onTap:
+                          () => _showImageModal(
+                            context,
+                            imageUrl,
+                            imageData,
+                            showBoundingBoxes,
+                          ),
+                      child: Container(
+                        width: 200,
+                        margin: const EdgeInsets.only(right: 12),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey[300]!),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Stack(
+                            children: [
+                              // Image
+                              Builder(
+                                builder: (context) {
+                                  try {
+                                    return Image.network(
+                                      imageUrl,
+                                      width: 200,
+                                      height: 200,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (
+                                        context,
+                                        error,
+                                        stackTrace,
+                                      ) {
+                                        print('Image error for URL: $imageUrl');
+                                        print('Error: $error');
+                                        return Container(
+                                          width: 200,
+                                          height: 200,
+                                          color: Colors.grey[300],
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              const Icon(
+                                                Icons.image_not_supported,
+                                                size: 50,
+                                                color: Colors.grey,
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                'Image Error',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey[600],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  } catch (e) {
+                                    print('Exception loading image: $e');
+                                    return Container(
+                                      width: 200,
+                                      height: 200,
+                                      color: Colors.red[100],
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          const Icon(
+                                            Icons.error,
+                                            size: 50,
+                                            color: Colors.red,
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Image Error',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.red[600],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
+                              // Bounding boxes overlay (if available)
+                              if (showBoundingBoxes &&
+                                  imageData is Map<String, dynamic>) ...[
+                                ..._buildBoundingBoxes(imageData),
+                              ],
+                              // Click indicator overlay
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.6),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Icon(
+                                    Icons.fullscreen,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // Disease Summary
+            if (diseaseSummary.isNotEmpty) ...[
+              const Text(
+                'Detected Diseases:',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children:
+                    diseaseSummary.map<Widget>((disease) {
+                      final diseaseName = disease['name'] ?? 'Unknown';
+                      final count = disease['count'] ?? 0;
+                      final confidence = disease['confidence'];
+
+                      String displayText;
+                      if (confidence != null) {
+                        displayText =
+                            '$diseaseName (${(confidence * 100).toStringAsFixed(1)}%)';
+                      } else {
+                        displayText =
+                            '$diseaseName (${count} detection${count != 1 ? 's' : ''})';
+                      }
+
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.blue.withOpacity(0.3),
+                          ),
+                        ),
+                        child: Text(
+                          displayText,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.blue,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // Expert Review (for completed reports)
+            if (isCompleted && expertReview != null) ...[
+              const Text(
+                'Expert Review:',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.withOpacity(0.3)),
+                ),
+                child: _buildExpertReviewWidget(expertReview),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatDate(dynamic date) {
+    if (date == null) return 'Unknown date';
+
+    try {
+      DateTime dateTime;
+      if (date is String) {
+        dateTime = DateTime.parse(date);
+      } else {
+        dateTime = date.toDate();
+      }
+      return '${dateTime.day}/${dateTime.month}/${dateTime.year} ${dateTime.hour}:${dateTime.minute}';
+    } catch (e) {
+      return 'Invalid date';
+    }
+  }
+
+  void _showImageModal(
+    BuildContext context,
+    String imageUrl,
+    dynamic imageData,
+    bool showBoundingBoxes,
+  ) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            // Create local state for the image modal
+            bool imageModalShowBoundingBoxes = showBoundingBoxes;
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.95,
+                height: MediaQuery.of(context).size.height * 0.9,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Image View',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Row(
+                            children: [
+                              // Bounding Box Toggle for large image
+                              Row(
+                                children: [
+                                  const Text(
+                                    'Bounding Boxes',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Switch(
+                                    value: imageModalShowBoundingBoxes,
+                                    onChanged: (value) {
+                                      setModalState(() {
+                                        imageModalShowBoundingBoxes = value;
+                                      });
+                                    },
+                                    activeColor: Colors.blue,
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(width: 16),
+                              IconButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                icon: const Icon(Icons.close),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Image content
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey[300]!),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Stack(
+                            children: [
+                              // Large image
+                              Builder(
+                                builder: (context) {
+                                  try {
+                                    return Image.network(
+                                      imageUrl,
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (
+                                        context,
+                                        error,
+                                        stackTrace,
+                                      ) {
+                                        return Container(
+                                          width: double.infinity,
+                                          height: double.infinity,
+                                          color: Colors.grey[300],
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              const Icon(
+                                                Icons.image_not_supported,
+                                                size: 100,
+                                                color: Colors.grey,
+                                              ),
+                                              const SizedBox(height: 16),
+                                              Text(
+                                                'Image Error',
+                                                style: TextStyle(
+                                                  fontSize: 18,
+                                                  color: Colors.grey[600],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  } catch (e) {
+                                    return Container(
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      color: Colors.red[100],
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          const Icon(
+                                            Icons.error,
+                                            size: 100,
+                                            color: Colors.red,
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Text(
+                                            'Image Error',
+                                            style: TextStyle(
+                                              fontSize: 18,
+                                              color: Colors.red[600],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
+                              // Bounding boxes overlay for large image
+                              if (imageModalShowBoundingBoxes &&
+                                  imageData is Map<String, dynamic>)
+                                ..._buildLargeBoundingBoxes(imageData),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  List<Widget> _buildLargeBoundingBoxes(Map<String, dynamic> imageData) {
+    final results = imageData['results'] as List<dynamic>? ?? [];
+
+    // Get actual image dimensions from the data
+    final imageWidth =
+        (imageData['imageWidth'] as double?) ??
+        (imageData['imageWidth'] as int?)?.toDouble() ??
+        4064.0;
+    final imageHeight =
+        (imageData['imageHeight'] as double?) ??
+        (imageData['imageHeight'] as int?)?.toDouble() ??
+        3048.0;
+
+    return results.map<Widget>((result) {
+      final boundingBox = result['boundingBox'] as Map<String, dynamic>?;
+      if (boundingBox == null) {
+        return const SizedBox.shrink();
+      }
+
+      // Get original coordinates
+      final originalLeft =
+          (boundingBox['left'] as double?) ??
+          (boundingBox['left'] as int?)?.toDouble() ??
+          0.0;
+      final originalTop =
+          (boundingBox['top'] as double?) ??
+          (boundingBox['top'] as int?)?.toDouble() ??
+          0.0;
+      final originalRight =
+          (boundingBox['right'] as double?) ??
+          (boundingBox['right'] as int?)?.toDouble() ??
+          0.0;
+      final originalBottom =
+          (boundingBox['bottom'] as double?) ??
+          (boundingBox['bottom'] as int?)?.toDouble() ??
+          0.0;
+
+      final disease = _fixDiseaseName(
+        result['disease'] as String? ?? 'Unknown',
+      );
+      final confidence = result['confidence'] as double? ?? 0.0;
+
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // For BoxFit.cover, we need to calculate the actual displayed image size
+          // and its position within the container
+          final containerWidth = constraints.maxWidth;
+          final containerHeight = constraints.maxHeight;
+
+          // Calculate the scale to fit the image in the container while maintaining aspect ratio
+          final scaleX = containerWidth / imageWidth;
+          final scaleY = containerHeight / imageHeight;
+          final scale =
+              scaleX < scaleY
+                  ? scaleX
+                  : scaleY; // Use the smaller scale for contain
+
+          // Calculate the actual displayed image dimensions
+          final displayedWidth = imageWidth * scale;
+          final displayedHeight = imageHeight * scale;
+
+          // Calculate the offset to center the image
+          final offsetX = (containerWidth - displayedWidth) / 2;
+          final offsetY = (containerHeight - displayedHeight) / 2;
+
+          // Scale coordinates and apply offset
+          final left = (originalLeft * scale) + offsetX;
+          final top = (originalTop * scale) + offsetY;
+          final right = (originalRight * scale) + offsetX;
+          final bottom = (originalBottom * scale) + offsetY;
+
+          final width = right - left;
+          final height = bottom - top;
+
+          return Stack(
+            children: [
+              // Large bounding box
+              Positioned(
+                left: left,
+                top: top,
+                child: Container(
+                  width: width,
+                  height: height,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.red, width: 4),
+                    color: Colors.red.withOpacity(0.1),
+                  ),
+                ),
+              ),
+              // Large disease label
+              Positioned(
+                left: left - 10,
+                top: top - 40,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  child: Text(
+                    '${disease.substring(0, disease.length > 20 ? 20 : disease.length)}\n${(confidence * 100).toStringAsFixed(0)}%',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      );
+    }).toList();
+  }
+
+  List<Widget> _buildBoundingBoxes(Map<String, dynamic> imageData) {
+    final results = imageData['results'] as List<dynamic>? ?? [];
+
+    // Get actual image dimensions from the data
+    final imageWidth =
+        (imageData['imageWidth'] as double?) ??
+        (imageData['imageWidth'] as int?)?.toDouble() ??
+        4064.0;
+    final imageHeight =
+        (imageData['imageHeight'] as double?) ??
+        (imageData['imageHeight'] as int?)?.toDouble() ??
+        3048.0;
+
+    // Debug: Print image dimensions
+    print('=== BOUNDING BOX DEBUG ===');
+    print('Image data: $imageData');
+    print('Image width: $imageWidth, height: $imageHeight');
+    print('Results count: ${results.length}');
+
+    // For BoxFit.contain, we need to calculate the actual displayed image size
+    // and its position within the 200x200 container
+    final containerWidth = 200.0;
+    final containerHeight = 200.0;
+
+    // Calculate the scale to fit the image in the container while maintaining aspect ratio
+    final scaleX = containerWidth / imageWidth;
+    final scaleY = containerHeight / imageHeight;
+    final scale =
+        scaleX < scaleY ? scaleX : scaleY; // Use the smaller scale for contain
+
+    // Calculate the actual displayed image dimensions
+    final displayedWidth = imageWidth * scale;
+    final displayedHeight = imageHeight * scale;
+
+    // Calculate the offset to center the image
+    final offsetX = (containerWidth - displayedWidth) / 2;
+    final offsetY = (containerHeight - displayedHeight) / 2;
+
+    print('Scale factors: scaleX=$scaleX, scaleY=$scaleY, final scale=$scale');
+    print('Displayed size: ${displayedWidth}x${displayedHeight}');
+    print('Offset: $offsetX, $offsetY');
+
+    return results.map<Widget>((result) {
+      final boundingBox = result['boundingBox'] as Map<String, dynamic>?;
+      if (boundingBox == null) {
+        print('No bounding box found in result: $result');
+        return const SizedBox.shrink();
+      }
+
+      // Get original coordinates
+      final originalLeft =
+          (boundingBox['left'] as double?) ??
+          (boundingBox['left'] as int?)?.toDouble() ??
+          0.0;
+      final originalTop =
+          (boundingBox['top'] as double?) ??
+          (boundingBox['top'] as int?)?.toDouble() ??
+          0.0;
+      final originalRight =
+          (boundingBox['right'] as double?) ??
+          (boundingBox['right'] as int?)?.toDouble() ??
+          0.0;
+      final originalBottom =
+          (boundingBox['bottom'] as double?) ??
+          (boundingBox['bottom'] as int?)?.toDouble() ??
+          0.0;
+
+      // Scale coordinates and apply offset
+      final left = (originalLeft * scale) + offsetX;
+      final top = (originalTop * scale) + offsetY;
+      final right = (originalRight * scale) + offsetX;
+      final bottom = (originalBottom * scale) + offsetY;
+
+      final width = right - left;
+      final height = bottom - top;
+
+      final disease = _fixDiseaseName(
+        result['disease'] as String? ?? 'Unknown',
+      );
+      final confidence = result['confidence'] as double? ?? 0.0;
+
+      print(
+        'Original coords: left=$originalLeft, top=$originalTop, right=$originalRight, bottom=$originalBottom',
+      );
+      print(
+        'Scaled coords: left=$left, top=$top, width=$width, height=$height',
+      );
+      print('Disease: $disease, Confidence: $confidence');
+      print('========================');
+
+      return Stack(
+        children: [
+          // Accurate bounding box (no labels inside)
+          Positioned(
+            left: left,
+            top: top,
+            child: Container(
+              width: width,
+              height: height,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.red, width: 3),
+                color: Colors.red.withOpacity(0.1),
+              ),
+            ),
+          ),
+          // Single disease label outside the box (top-left)
+          Positioned(
+            left: left - 5,
+            top: top - 25,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.white, width: 1),
+              ),
+              child: Text(
+                '${disease.substring(0, disease.length > 15 ? 15 : disease.length)}\n${(confidence * 100).toStringAsFixed(0)}%',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 8,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ],
+      );
+    }).toList();
+  }
+}
+
+class ReportsModalContent extends StatefulWidget {
+  @override
+  _ReportsModalContentState createState() => _ReportsModalContentState();
+}
+
+class _ReportsModalContentState extends State<ReportsModalContent> {
+  final ValueNotifier<bool> _showBoundingBoxesNotifier = ValueNotifier(false);
+
+  @override
+  void dispose() {
+    _showBoundingBoxesNotifier.dispose();
+    super.dispose();
+  }
+
+  String _fixDiseaseName(String disease) {
+    // Fix common spelling issues
+    if (disease == 'backterial_b' || disease == 'backterial_blackspot') {
+      return 'bacterial_blackspot';
+    } else if (disease == 'bacterial_b') {
+      return 'bacterial_blackspot';
+    }
+    return disease;
+  }
+
+  List<Widget> _buildRecommendationsList(dynamic recommendations) {
+    if (recommendations == null) return [];
+
+    if (recommendations is List) {
+      return recommendations.map<Widget>((rec) {
+        if (rec is Map<String, dynamic>) {
+          final treatment = rec['treatment'] ?? '';
+          final dosage = rec['dosage'] ?? '';
+          final frequency = rec['frequency'] ?? '';
+          final duration = rec['duration'] ?? '';
+
+          String displayText = '';
+          if (treatment.isNotEmpty) displayText += 'Treatment: $treatment';
+          if (dosage.isNotEmpty)
+            displayText +=
+                '${displayText.isNotEmpty ? ', ' : ''}Dosage: $dosage';
+          if (frequency.isNotEmpty)
+            displayText +=
+                '${displayText.isNotEmpty ? ', ' : ''}Frequency: $frequency';
+          if (duration.isNotEmpty)
+            displayText +=
+                '${displayText.isNotEmpty ? ', ' : ''}Duration: $duration';
+
+          if (displayText.isEmpty) displayText = 'No details available';
+
+          return Padding(
+            padding: const EdgeInsets.only(left: 8, bottom: 2),
+            child: Text(
+              '• $displayText',
+              style: const TextStyle(fontSize: 11, color: Colors.green),
+            ),
+          );
+        } else {
+          return Padding(
+            padding: const EdgeInsets.only(left: 8, bottom: 2),
+            child: Text(
+              '• ${rec.toString()}',
+              style: const TextStyle(fontSize: 11, color: Colors.green),
+            ),
+          );
+        }
+      }).toList();
+    } else {
+      return [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 2),
+          child: Text(
+            '• ${recommendations.toString()}',
+            style: const TextStyle(fontSize: 11, color: Colors.green),
+          ),
+        ),
+      ];
+    }
+  }
+
+  List<Widget> _buildPreventiveMeasuresList(dynamic preventiveMeasures) {
+    if (preventiveMeasures == null) return [];
+
+    if (preventiveMeasures is List) {
+      return preventiveMeasures.map<Widget>((measure) {
+        return Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 2),
+          child: Text(
+            '• ${measure.toString()}',
+            style: const TextStyle(fontSize: 11, color: Colors.green),
+          ),
+        );
+      }).toList();
+    } else {
+      return [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 2),
+          child: Text(
+            '• ${preventiveMeasures.toString()}',
+            style: const TextStyle(fontSize: 11, color: Colors.green),
+          ),
+        ),
+      ];
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // Header
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'Reports Overview',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            Row(
+              children: [
+                // Bounding Box Toggle
+                Row(
+                  children: [
+                    const Text(
+                      'Bounding Boxes',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: _showBoundingBoxesNotifier,
+                      builder:
+                          (context, value, _) => Switch(
+                            value: value,
+                            onChanged: (val) {
+                              _showBoundingBoxesNotifier.value = val;
+                            },
+                            activeColor: Colors.blue,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 16),
+                IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+
+        // Tab Bar
+        Expanded(
+          child: DefaultTabController(
+            length: 2,
+            child: Column(
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: TabBar(
+                    labelColor: Colors.white,
+                    unselectedLabelColor: Colors.black87,
+                    indicator: const BoxDecoration(
+                      color: Colors.blue,
+                      borderRadius: BorderRadius.all(Radius.circular(8)),
+                    ),
+                    tabs: const [
+                      Tab(text: 'Completed Reports'),
+                      Tab(text: 'Pending Reports'),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Tab Content
+                Expanded(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _showBoundingBoxesNotifier,
+                    builder:
+                        (context, value, _) => TabBarView(
+                          children: [
+                            _buildCompletedReportsTab(value),
+                            _buildPendingReportsTab(value),
+                          ],
+                        ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCompletedReportsTab(bool showBoundingBoxes) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _getCompletedReports(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+
+        final reports = snapshot.data ?? [];
+
+        if (reports.isEmpty) {
+          return const Center(
+            child: Text(
+              'No completed reports found',
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+          );
+        }
+
+        return ListView.builder(
+          itemCount: reports.length,
+          itemBuilder: (context, index) {
+            final report = reports[index];
+            return _buildReportCard(report, true, showBoundingBoxes);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildPendingReportsTab(bool showBoundingBoxes) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _getPendingReports(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+
+        final reports = snapshot.data ?? [];
+
+        if (reports.isEmpty) {
+          return const Center(
+            child: Text(
+              'No pending reports found',
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+          );
+        }
+
+        return ListView.builder(
+          itemCount: reports.length,
+          itemBuilder: (context, index) {
+            final report = reports[index];
+            return _buildReportCard(report, false, showBoundingBoxes);
+          },
+        );
+      },
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _getCompletedReports() async {
+    try {
+      final allReports = await ScanRequestsService.getScanRequests();
+      return allReports
+          .where((report) => report['status'] == 'completed')
+          .toList();
+    } catch (e) {
+      print('Error getting completed reports: $e');
+      return [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _getPendingReports() async {
+    try {
+      final allReports = await ScanRequestsService.getScanRequests();
+      return allReports
+          .where((report) => report['status'] == 'pending')
+          .toList();
+    } catch (e) {
+      print('Error getting pending reports: $e');
+      return [];
+    }
+  }
+
+  Widget _buildReportCard(
+    Map<String, dynamic> report,
+    bool isCompleted,
+    bool showBoundingBoxes,
+  ) {
+    final userName = report['userName'] ?? 'Unknown User';
+    final createdAt = report['createdAt'];
+    final images = report['images'] ?? [];
+    final diseaseSummary = report['diseaseSummary'] ?? [];
+    final expertReview = report['expertReview'];
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        userName,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        'Submitted: ${_formatDate(createdAt)}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isCompleted ? Colors.green : Colors.orange,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    isCompleted ? 'Completed' : 'Pending',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // Images with bounding boxes
+            if (images.isNotEmpty) ...[
+              const Text(
+                'Images:',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 200,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: images.length,
+                  itemBuilder: (context, imageIndex) {
+                    final imageData = images[imageIndex];
+                    String imageUrl = '';
+
+                    // Debug: Print the image data structure
+                    print('Image data at index $imageIndex: $imageData');
+                    print('Image data type: ${imageData.runtimeType}');
+
+                    // Handle different image data structures
+                    if (imageData is String) {
+                      imageUrl = imageData;
+                      print('Using string URL: $imageUrl');
+                    } else if (imageData is Map<String, dynamic>) {
+                      // Try different possible field names for the URL
+                      imageUrl =
+                          imageData['url'] ??
+                          imageData['imageUrl'] ??
+                          imageData['image'] ??
+                          imageData['src'] ??
+                          imageData['link'] ??
+                          imageData['downloadURL'] ??
+                          imageData['storageURL'] ??
+                          imageData.toString();
+                      print('Using map URL: $imageUrl');
+                    } else {
+                      imageUrl = imageData.toString();
+                      print('Using toString URL: $imageUrl');
+                    }
+
+                    // Clean up the URL - remove line breaks and extra spaces
+                    imageUrl =
+                        imageUrl
+                            .replaceAll('\n', '')
+                            .replaceAll('\r', '')
+                            .trim();
+                    print('Cleaned URL: $imageUrl');
+
+                    return GestureDetector(
+                      onTap:
+                          () => _showEnlargedImageModal(
+                            context,
+                            imageUrl,
+                            imageData,
+                          ),
+                      child: Container(
+                        width: 200,
+                        margin: const EdgeInsets.only(right: 12),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey[300]!),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Stack(
+                            children: [
+                              // Image
+                              Builder(
+                                builder: (context) {
+                                  try {
+                                    return Image.network(
+                                      imageUrl,
+                                      width: 200,
+                                      height: 200,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (
+                                        context,
+                                        error,
+                                        stackTrace,
+                                      ) {
+                                        print('Image error for URL: $imageUrl');
+                                        print('Error: $error');
+                                        return Container(
+                                          width: 200,
+                                          height: 200,
+                                          color: Colors.grey[300],
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              const Icon(
+                                                Icons.image_not_supported,
+                                                size: 50,
+                                                color: Colors.grey,
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                'Image Error',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey[600],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  } catch (e) {
+                                    print('Exception loading image: $e');
+                                    return Container(
+                                      width: 200,
+                                      height: 200,
+                                      color: Colors.red[100],
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          const Icon(
+                                            Icons.error,
+                                            size: 50,
+                                            color: Colors.red,
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Image Error',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.red[600],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
+                              // Bounding boxes overlay (if available)
+                              if (showBoundingBoxes &&
+                                  imageData is Map<String, dynamic>) ...[
+                                ..._buildBoundingBoxes(imageData),
+                              ],
+                              // Click indicator overlay
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.6),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Icon(
+                                    Icons.fullscreen,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // Disease Summary
+            if (diseaseSummary.isNotEmpty) ...[
+              const Text(
+                'Detected Diseases:',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children:
+                    diseaseSummary.map<Widget>((disease) {
+                      final diseaseName = disease['name'] ?? 'Unknown';
+                      final count = disease['count'] ?? 0;
+                      final confidence = disease['confidence'];
+
+                      String displayText;
+                      if (confidence != null) {
+                        displayText =
+                            '$diseaseName (${(confidence * 100).toStringAsFixed(1)}%)';
+                      } else {
+                        displayText =
+                            '$diseaseName (${count} detection${count != 1 ? 's' : ''})';
+                      }
+
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.blue.withOpacity(0.3),
+                          ),
+                        ),
+                        child: Text(
+                          displayText,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.blue,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // Expert Review (for completed reports)
+            if (isCompleted && expertReview != null) ...[
+              const Text(
+                'Expert Review:',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.withOpacity(0.3)),
+                ),
+                child: _buildExpertReviewWidget(expertReview),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatDate(dynamic date) {
+    if (date == null) return 'Unknown date';
+
+    try {
+      DateTime dateTime;
+      if (date is String) {
+        dateTime = DateTime.parse(date);
+      } else {
+        dateTime = date.toDate();
+      }
+      return '${dateTime.day}/${dateTime.month}/${dateTime.year} ${dateTime.hour}:${dateTime.minute}';
+    } catch (e) {
+      return 'Invalid date';
+    }
+  }
+
+  Widget _buildExpertReviewWidget(dynamic expertReview) {
+    try {
+      if (expertReview == null) {
+        return const Text(
+          'No expert review available.',
+          style: TextStyle(fontSize: 14, color: Colors.grey),
+        );
+      }
+
+      // Debug: Print the actual data structure
+      print('Expert review data type: ${expertReview.runtimeType}');
+      print('Expert review data: $expertReview');
+
+      // If it's already a Map (most likely case)
+      if (expertReview is Map<String, dynamic>) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (expertReview['expertName'] != null) ...[
+              Text(
+                'Expert: ${expertReview['expertName']}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            if (expertReview['comment'] != null &&
+                expertReview['comment'].toString().isNotEmpty) ...[
+              Text(
+                'Comment: ${expertReview['comment']}',
+                style: const TextStyle(fontSize: 12, color: Colors.green),
+              ),
+              const SizedBox(height: 4),
+            ],
+            if (expertReview['severityAssessment'] != null) ...[
+              Builder(
+                builder: (context) {
+                  final severity = expertReview['severityAssessment'];
+                  if (severity is Map<String, dynamic> &&
+                      severity['level'] != null) {
+                    return Text(
+                      'Severity: ${severity['level']}',
+                      style: const TextStyle(fontSize: 12, color: Colors.green),
+                    );
+                  } else if (severity is String) {
+                    return Text(
+                      'Severity: $severity',
+                      style: const TextStyle(fontSize: 12, color: Colors.green),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+              const SizedBox(height: 4),
+            ],
+            if (expertReview['treatmentPlan'] != null) ...[
+              Builder(
+                builder: (context) {
+                  final treatmentPlan = expertReview['treatmentPlan'];
+                  if (treatmentPlan is Map<String, dynamic>) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (treatmentPlan['recommendations'] != null) ...[
+                          Text(
+                            'Recommendations:',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          ..._buildRecommendationsList(
+                            treatmentPlan['recommendations'],
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                        if (treatmentPlan['preventiveMeasures'] != null) ...[
+                          Text(
+                            'Preventive Measures:',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          ..._buildPreventiveMeasuresList(
+                            treatmentPlan['preventiveMeasures'],
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                      ],
+                    );
+                  } else {
+                    return Text(
+                      'Treatment Plan: $treatmentPlan',
+                      style: const TextStyle(fontSize: 12, color: Colors.green),
+                    );
+                  }
+                },
+              ),
+              const SizedBox(height: 4),
+            ],
+          ],
+        );
+      }
+
+      // Try to parse as JSON string
+      if (expertReview is String) {
+        try {
+          // Remove any extra formatting and parse
+          final cleanString = expertReview.replaceAll(RegExp(r'[{}]'), '');
+          final parts = cleanString.split(',');
+
+          Map<String, String> reviewData = {};
+          for (String part in parts) {
+            final keyValue = part.split(':');
+            if (keyValue.length >= 2) {
+              final key = keyValue[0].trim();
+              final value = keyValue.sublist(1).join(':').trim();
+              reviewData[key] = value;
+            }
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (reviewData['expertName'] != null) ...[
+                Text(
+                  'Expert: ${reviewData['expertName']}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green,
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (reviewData['comment'] != null &&
+                  reviewData['comment']!.isNotEmpty) ...[
+                Text(
+                  'Comment: ${reviewData['comment']}',
+                  style: const TextStyle(fontSize: 12, color: Colors.green),
+                ),
+                const SizedBox(height: 4),
+              ],
+              if (reviewData['severityAssessment'] != null) ...[
+                Text(
+                  'Severity: ${reviewData['severityAssessment']}',
+                  style: const TextStyle(fontSize: 12, color: Colors.green),
+                ),
+                const SizedBox(height: 4),
+              ],
+              if (reviewData['treatmentPlan'] != null) ...[
+                Text(
+                  'Treatment Plan: ${reviewData['treatmentPlan']}',
+                  style: const TextStyle(fontSize: 12, color: Colors.green),
+                ),
+                const SizedBox(height: 4),
+              ],
+            ],
+          );
+        } catch (e) {
+          // If parsing fails, show as plain text
+          return Text(
+            expertReview,
+            style: TextStyle(fontSize: 14, color: Colors.green[700]),
+          );
+        }
+      }
+
+      return Text(
+        expertReview.toString(),
+        style: TextStyle(fontSize: 14, color: Colors.green[700]),
+      );
+    } catch (e) {
+      return Text(
+        'Error parsing expert review: $e',
+        style: TextStyle(fontSize: 14, color: Colors.red[600]),
+      );
+    }
+  }
+
+  void _showEnlargedImageModal(
+    BuildContext context,
+    String imageUrl,
+    dynamic imageData,
+  ) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.95,
+                height: MediaQuery.of(context).size.height * 0.9,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Image View',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Row(
+                            children: [
+                              // Bounding Box Toggle for large image
+                              Row(
+                                children: [
+                                  const Text(
+                                    'Bounding Boxes',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ValueListenableBuilder<bool>(
+                                    valueListenable: _showBoundingBoxesNotifier,
+                                    builder:
+                                        (context, value, _) => Switch(
+                                          value: value,
+                                          onChanged: (val) {
+                                            _showBoundingBoxesNotifier.value =
+                                                val;
+                                          },
+                                          activeColor: Colors.blue,
+                                          materialTapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(width: 16),
+                              IconButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                icon: const Icon(Icons.close),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Image content
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey[300]!),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Stack(
+                            children: [
+                              // Large image
+                              Builder(
+                                builder: (context) {
+                                  try {
+                                    return Image.network(
+                                      imageUrl,
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (
+                                        context,
+                                        error,
+                                        stackTrace,
+                                      ) {
+                                        return Container(
+                                          width: double.infinity,
+                                          height: double.infinity,
+                                          color: Colors.grey[300],
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              const Icon(
+                                                Icons.image_not_supported,
+                                                size: 100,
+                                                color: Colors.grey,
+                                              ),
+                                              const SizedBox(height: 16),
+                                              Text(
+                                                'Image Error',
+                                                style: TextStyle(
+                                                  fontSize: 18,
+                                                  color: Colors.grey[600],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  } catch (e) {
+                                    return Container(
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      color: Colors.red[100],
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          const Icon(
+                                            Icons.error,
+                                            size: 100,
+                                            color: Colors.red,
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Text(
+                                            'Image Error',
+                                            style: TextStyle(
+                                              fontSize: 18,
+                                              color: Colors.red[600],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
+                              // Bounding boxes overlay for large image
+                              ValueListenableBuilder<bool>(
+                                valueListenable: _showBoundingBoxesNotifier,
+                                builder: (context, value, _) {
+                                  if (value &&
+                                      imageData is Map<String, dynamic>) {
+                                    return Stack(
+                                      children: _buildLargeBoundingBoxes(
+                                        imageData,
+                                      ),
+                                    );
+                                  } else {
+                                    return const SizedBox.shrink();
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  List<Widget> _buildLargeBoundingBoxes(Map<String, dynamic> imageData) {
+    final results = imageData['results'] as List<dynamic>? ?? [];
+
+    // Get actual image dimensions from the data
+    final imageWidth =
+        (imageData['imageWidth'] as double?) ??
+        (imageData['imageWidth'] as int?)?.toDouble() ??
+        4064.0;
+    final imageHeight =
+        (imageData['imageHeight'] as double?) ??
+        (imageData['imageHeight'] as int?)?.toDouble() ??
+        3048.0;
+
+    return results.map<Widget>((result) {
+      final boundingBox = result['boundingBox'] as Map<String, dynamic>?;
+      if (boundingBox == null) {
+        return const SizedBox.shrink();
+      }
+
+      // Get original coordinates
+      final originalLeft =
+          (boundingBox['left'] as double?) ??
+          (boundingBox['left'] as int?)?.toDouble() ??
+          0.0;
+      final originalTop =
+          (boundingBox['top'] as double?) ??
+          (boundingBox['top'] as int?)?.toDouble() ??
+          0.0;
+      final originalRight =
+          (boundingBox['right'] as double?) ??
+          (boundingBox['right'] as int?)?.toDouble() ??
+          0.0;
+      final originalBottom =
+          (boundingBox['bottom'] as double?) ??
+          (boundingBox['bottom'] as int?)?.toDouble() ??
+          0.0;
+
+      final disease = _fixDiseaseName(
+        result['disease'] as String? ?? 'Unknown',
+      );
+      final confidence = result['confidence'] as double? ?? 0.0;
+
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // For BoxFit.cover, we need to calculate the actual displayed image size
+          // and its position within the container
+          final containerWidth = constraints.maxWidth;
+          final containerHeight = constraints.maxHeight;
+
+          // Calculate the scale to fit the image in the container while maintaining aspect ratio
+          final scaleX = containerWidth / imageWidth;
+          final scaleY = containerHeight / imageHeight;
+          final scale =
+              scaleX < scaleY
+                  ? scaleX
+                  : scaleY; // Use the smaller scale for contain
+
+          // Calculate the actual displayed image dimensions
+          final displayedWidth = imageWidth * scale;
+          final displayedHeight = imageHeight * scale;
+
+          // Calculate the offset to center the image
+          final offsetX = (containerWidth - displayedWidth) / 2;
+          final offsetY = (containerHeight - displayedHeight) / 2;
+
+          // Scale coordinates and apply offset
+          final left = (originalLeft * scale) + offsetX;
+          final top = (originalTop * scale) + offsetY;
+          final right = (originalRight * scale) + offsetX;
+          final bottom = (originalBottom * scale) + offsetY;
+
+          final width = right - left;
+          final height = bottom - top;
+
+          return Stack(
+            children: [
+              // Large bounding box
+              Positioned(
+                left: left,
+                top: top,
+                child: Container(
+                  width: width,
+                  height: height,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.red, width: 4),
+                    color: Colors.red.withOpacity(0.1),
+                  ),
+                ),
+              ),
+              // Large disease label
+              Positioned(
+                left: left - 10,
+                top: top - 40,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  child: Text(
+                    '${disease.substring(0, disease.length > 20 ? 20 : disease.length)}\n${(confidence * 100).toStringAsFixed(0)}%',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      );
+    }).toList();
+  }
+
+  List<Widget> _buildBoundingBoxes(Map<String, dynamic> imageData) {
+    final results = imageData['results'] as List<dynamic>? ?? [];
+
+    // Get actual image dimensions from the data
+    final imageWidth =
+        (imageData['imageWidth'] as double?) ??
+        (imageData['imageWidth'] as int?)?.toDouble() ??
+        4064.0;
+    final imageHeight =
+        (imageData['imageHeight'] as double?) ??
+        (imageData['imageHeight'] as int?)?.toDouble() ??
+        3048.0;
+
+    // Debug: Print image dimensions
+    print('=== BOUNDING BOX DEBUG ===');
+    print('Image data: $imageData');
+    print('Image width: $imageWidth, height: $imageHeight');
+    print('Results count: ${results.length}');
+
+    // For BoxFit.contain, we need to calculate the actual displayed image size
+    // and its position within the 200x200 container
+    final containerWidth = 200.0;
+    final containerHeight = 200.0;
+
+    // Calculate the scale to fit the image in the container while maintaining aspect ratio
+    final scaleX = containerWidth / imageWidth;
+    final scaleY = containerHeight / imageHeight;
+    final scale =
+        scaleX < scaleY ? scaleX : scaleY; // Use the smaller scale for contain
+
+    // Calculate the actual displayed image dimensions
+    final displayedWidth = imageWidth * scale;
+    final displayedHeight = imageHeight * scale;
+
+    // Calculate the offset to center the image
+    final offsetX = (containerWidth - displayedWidth) / 2;
+    final offsetY = (containerHeight - displayedHeight) / 2;
+
+    print('Scale factors: scaleX=$scaleX, scaleY=$scaleY, final scale=$scale');
+    print('Displayed size: ${displayedWidth}x${displayedHeight}');
+    print('Offset: $offsetX, $offsetY');
+
+    return results.map<Widget>((result) {
+      final boundingBox = result['boundingBox'] as Map<String, dynamic>?;
+      if (boundingBox == null) {
+        print('No bounding box found in result: $result');
+        return const SizedBox.shrink();
+      }
+
+      // Get original coordinates
+      final originalLeft =
+          (boundingBox['left'] as double?) ??
+          (boundingBox['left'] as int?)?.toDouble() ??
+          0.0;
+      final originalTop =
+          (boundingBox['top'] as double?) ??
+          (boundingBox['top'] as int?)?.toDouble() ??
+          0.0;
+      final originalRight =
+          (boundingBox['right'] as double?) ??
+          (boundingBox['right'] as int?)?.toDouble() ??
+          0.0;
+      final originalBottom =
+          (boundingBox['bottom'] as double?) ??
+          (boundingBox['bottom'] as int?)?.toDouble() ??
+          0.0;
+
+      // Scale coordinates and apply offset
+      final left = (originalLeft * scale) + offsetX;
+      final top = (originalTop * scale) + offsetY;
+      final right = (originalRight * scale) + offsetX;
+      final bottom = (originalBottom * scale) + offsetY;
+
+      final width = right - left;
+      final height = bottom - top;
+
+      final disease = _fixDiseaseName(
+        result['disease'] as String? ?? 'Unknown',
+      );
+      final confidence = result['confidence'] as double? ?? 0.0;
+
+      print(
+        'Original coords: left=$originalLeft, top=$originalTop, right=$originalRight, bottom=$originalBottom',
+      );
+      print(
+        'Scaled coords: left=$left, top=$top, width=$width, height=$height',
+      );
+      print('Disease: $disease, Confidence: $confidence');
+      print('========================');
+
+      return Stack(
+        children: [
+          // Accurate bounding box (no labels inside)
+          Positioned(
+            left: left,
+            top: top,
+            child: Container(
+              width: width,
+              height: height,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.red, width: 3),
+                color: Colors.red.withOpacity(0.1),
+              ),
+            ),
+          ),
+          // Single disease label outside the box (top-left)
+          Positioned(
+            left: left - 5,
+            top: top - 25,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.white, width: 1),
+              ),
+              child: Text(
+                '${disease.substring(0, disease.length > 15 ? 15 : disease.length)}\n${(confidence * 100).toStringAsFixed(0)}%',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 8,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ],
+      );
+    }).toList();
+  }
 }
 
 class _TotalUsersCardState extends State<TotalUsersCard> {
   int _totalUsers = 0;
   int _pendingUsers = 0;
   bool _isLoading = true;
+  bool _isHovered = false;
 
   @override
   void initState() {
@@ -42,102 +2626,118 @@ class _TotalUsersCardState extends State<TotalUsersCard> {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // Header with refresh button
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    final isClickable = widget.onTap != null;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      cursor: isClickable ? SystemMouseCursors.click : MouseCursor.defer,
+      child: Card(
+        elevation: _isHovered && isClickable ? 8 : 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: InkWell(
+          onTap: widget.onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const SizedBox(width: 24), // Spacer to center the content
-                const Spacer(),
-                IconButton(
-                  onPressed: _loadData,
-                  icon: const Icon(Icons.refresh, size: 16),
-                  tooltip: 'Refresh',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-              ],
-            ),
-
-            // Icon
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.people, size: 24, color: Colors.blue),
-            ),
-            const SizedBox(height: 16),
-
-            // Number
-            _isLoading
-                ? const CircularProgressIndicator()
-                : Text(
-                  '$_totalUsers',
-                  style: const TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-            const SizedBox(height: 8),
-
-            // Title
-            const Text(
-              'Total Users',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // Breakdown
-            if (!_isLoading) ...[
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
+                // Header with refresh button
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const SizedBox(width: 24), // Spacer to center the content
+                    const Spacer(),
+                    IconButton(
+                      onPressed: _loadData,
+                      icon: const Icon(Icons.refresh, size: 16),
+                      tooltip: 'Refresh',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
                     ),
+                  ],
+                ),
+
+                // Icon
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${_totalUsers - _pendingUsers} Active',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  const SizedBox(width: 12),
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.orange,
-                      shape: BoxShape.circle,
+                  child: const Icon(Icons.people, size: 24, color: Colors.blue),
+                ),
+                const SizedBox(height: 16),
+
+                // Number
+                _isLoading
+                    ? const CircularProgressIndicator()
+                    : Text(
+                      '$_totalUsers',
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
                     ),
+                const SizedBox(height: 8),
+
+                // Title
+                const Text(
+                  'Total Users',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w500,
                   ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '$_pendingUsers Pending',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 12),
+
+                // Breakdown
+                if (!_isLoading) ...[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Colors.green,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${_totalUsers - _pendingUsers} Active',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Colors.orange,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$_pendingUsers Pending',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
-              ),
-            ],
-          ],
+              ],
+            ),
+          ),
         ),
       ),
     );

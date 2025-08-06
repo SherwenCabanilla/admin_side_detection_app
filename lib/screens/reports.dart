@@ -4,9 +4,12 @@ import 'reports_list.dart';
 import '../shared/total_users_card.dart';
 import '../shared/pending_approvals_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/scan_requests_service.dart';
+import '../utils/sample_data_generator.dart';
 
 class Reports extends StatefulWidget {
-  const Reports({Key? key}) : super(key: key);
+  final VoidCallback? onGoToUsers;
+  const Reports({Key? key, this.onGoToUsers}) : super(key: key);
 
   @override
   State<Reports> createState() => _ReportsState();
@@ -14,44 +17,19 @@ class Reports extends StatefulWidget {
 
 class _ReportsState extends State<Reports> {
   String _selectedTimeRange = 'Last 7 Days';
+  bool _isLoading = true;
 
-  // Dummy data for testing
-  final Map<String, dynamic> _stats = {
-    'totalUsers': 1234,
-    'totalExperts': 45,
-    'activeUsers': 890,
-    'pendingApprovals': 12,
-    'averageResponseTime': '2.39 hours',
+  // Real data from Firestore
+  Map<String, dynamic> _stats = {
+    'totalUsers': 0,
+    'totalExperts': 0,
+    'activeUsers': 0,
+    'pendingApprovals': 0,
+    'averageResponseTime': '0 hours',
   };
 
-  // Dummy data for reports trend
-  final List<Map<String, dynamic>> _reportsTrend = [
-    {'date': '2024-03-01', 'count': 45},
-    {'date': '2024-03-02', 'count': 52},
-    {'date': '2024-03-03', 'count': 48},
-    {'date': '2024-03-04', 'count': 65},
-    {'date': '2024-03-05', 'count': 58},
-    {'date': '2024-03-06', 'count': 72},
-    {'date': '2024-03-07', 'count': 68},
-  ];
-
-  // Dummy previous period data for trend indicators
-  final Map<String, dynamic> _previousStats = {
-    'totalUsers': 1200,
-    'totalReports': 600,
-    'activeUsers': 850,
-    'pendingApprovals': 15,
-    'averageResponseTime': '2.8 hours',
-  };
-
-  final List<Map<String, dynamic>> _diseaseStats = [
-    {'name': 'Anthracnose', 'count': 156, 'percentage': 0.25},
-    {'name': 'Bacterial Blackspot', 'count': 98, 'percentage': 0.16},
-    {'name': 'Powdery Mildew', 'count': 145, 'percentage': 0.23},
-    {'name': 'Dieback', 'count': 70, 'percentage': 0.11},
-    {'name': 'Tip Burn (Unknown)', 'count': 42, 'percentage': 0.07},
-    {'name': 'Healthy', 'count': 112, 'percentage': 0.18},
-  ];
+  List<Map<String, dynamic>> _reportsTrend = [];
+  List<Map<String, dynamic>> _diseaseStats = [];
 
   Color _getDiseaseColor(String disease) {
     switch (disease.toLowerCase()) {
@@ -62,9 +40,7 @@ class _ReportsState extends State<Reports> {
       case 'powdery mildew':
         return const Color.fromARGB(255, 9, 46, 2);
       case 'dieback':
-        return Colors.brown;
-      case 'tip burn':
-        return Colors.amber;
+        return Colors.red;
       case 'healthy':
         return const Color.fromARGB(255, 2, 119, 252);
       default:
@@ -75,14 +51,129 @@ class _ReportsState extends State<Reports> {
   @override
   void initState() {
     super.initState();
-    // Force rebuild when widget is created
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      setState(() {});
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    setState(() {
+      _isLoading = true;
     });
+
+    try {
+      // Load data in parallel
+      final futures = await Future.wait([
+        _loadStats(),
+        _loadReportsTrend(),
+        _loadDiseaseStats(),
+      ]);
+
+      setState(() {
+        _isLoading = false;
+      });
+    } catch (e) {
+      print('Error loading data: $e');
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadStats() async {
+    try {
+      final completedReports =
+          await ScanRequestsService.getCompletedReportsCount();
+      final pendingReports = await ScanRequestsService.getPendingReportsCount();
+      final averageResponseTime =
+          await ScanRequestsService.getAverageResponseTime(
+            timeRange: _selectedTimeRange,
+          );
+
+      setState(() {
+        _stats['totalReportsReviewed'] = completedReports;
+        _stats['pendingRequests'] = pendingReports;
+        _stats['averageResponseTime'] = averageResponseTime;
+      });
+    } catch (e) {
+      print('Error loading stats: $e');
+    }
+  }
+
+  Future<void> _loadReportsTrend() async {
+    try {
+      final trendData = await ScanRequestsService.getReportsTrend(
+        timeRange: _selectedTimeRange,
+      );
+      print('Loaded reports trend: $trendData');
+
+      // If no data, show a message
+      if (trendData.isEmpty) {
+        setState(() {
+          _reportsTrend = [
+            {'date': DateTime.now().toString().split(' ')[0], 'count': 0},
+          ];
+        });
+      } else {
+        setState(() {
+          _reportsTrend = trendData;
+        });
+      }
+    } catch (e) {
+      print('Error loading reports trend: $e');
+      // Fallback data
+      setState(() {
+        _reportsTrend = [
+          {'date': DateTime.now().toString().split(' ')[0], 'count': 0},
+        ];
+      });
+    }
+  }
+
+  Future<void> _loadDiseaseStats() async {
+    try {
+      final diseaseData = await ScanRequestsService.getDiseaseStats(
+        timeRange: _selectedTimeRange,
+      );
+      print('Loaded disease stats: $diseaseData');
+
+      // If no data, show a message
+      if (diseaseData.isEmpty) {
+        setState(() {
+          _diseaseStats = [
+            {
+              'name': 'No Data Available',
+              'count': 0,
+              'percentage': 0.0,
+              'type': 'disease',
+            },
+          ];
+        });
+      } else {
+        setState(() {
+          _diseaseStats = diseaseData;
+        });
+      }
+    } catch (e) {
+      print('Error loading disease stats: $e');
+      // Fallback data
+      setState(() {
+        _diseaseStats = [
+          {
+            'name': 'Error Loading Data',
+            'count': 0,
+            'percentage': 0.0,
+            'type': 'disease',
+          },
+        ];
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return SingleChildScrollView(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -125,72 +216,6 @@ class _ReportsState extends State<Reports> {
                         }
                       },
                     ),
-                    const SizedBox(width: 12),
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.edit),
-                      label: const Text('Edit PDF Utility Name'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Color(0xFF2D7204),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () async {
-                        final docRef = FirebaseFirestore.instance
-                            .collection('pdf_utilities')
-                            .doc('main');
-                        final currentName =
-                            (await docRef.get()).data()?['name'] ?? '';
-                        final controller = TextEditingController(
-                          text: currentName,
-                        );
-                        final newName = await showDialog<String>(
-                          context: context,
-                          builder:
-                              (context) => AlertDialog(
-                                title: const Text('Edit PDF Utility Name'),
-                                content: TextField(
-                                  controller: controller,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Name for PDF',
-                                  ),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    child: const Text('Cancel'),
-                                  ),
-                                  ElevatedButton(
-                                    onPressed:
-                                        () => Navigator.pop(
-                                          context,
-                                          controller.text.trim(),
-                                        ),
-                                    child: const Text('Save'),
-                                  ),
-                                ],
-                              ),
-                        );
-                        if (newName != null && newName.isNotEmpty) {
-                          try {
-                            await docRef.set({
-                              'name': newName,
-                            }, SetOptions(merge: true));
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('PDF utility name updated!'),
-                                backgroundColor: Colors.green,
-                              ),
-                            );
-                          } catch (e) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Failed to update PDF name: $e'),
-                                backgroundColor: Colors.red,
-                              ),
-                            );
-                          }
-                        }
-                      },
-                    ),
                   ],
                 ),
               ],
@@ -206,12 +231,32 @@ class _ReportsState extends State<Reports> {
               mainAxisSpacing: 16,
               childAspectRatio: 1.2,
               children: [
-                const TotalUsersCard(),
-                TotalReportsCard(reportsTrend: _reportsTrend),
-                const PendingApprovalsCard(),
+                TotalUsersCard(onTap: widget.onGoToUsers),
+                TotalReportsReviewedCard(
+                  totalReports: _stats['totalReportsReviewed'] ?? 0,
+                  reportsTrend: _reportsTrend,
+                  onTap: () {
+                    showDialog(
+                      context: context,
+                      builder:
+                          (context) => Dialog(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Container(
+                              width: MediaQuery.of(context).size.width * 0.9,
+                              height: MediaQuery.of(context).size.height * 0.8,
+                              padding: const EdgeInsets.all(20),
+                              child: ReportsModalContent(),
+                            ),
+                          ),
+                    );
+                  },
+                ),
+                PendingApprovalsCard(),
                 _buildStatCard(
                   'Avg. Response Time',
-                  _stats['averageResponseTime'],
+                  _stats['averageResponseTime'] ?? '0 hours',
                   Icons.timer,
                   Colors.teal,
                   onTap: () => _showAvgResponseTimeModal(context),
@@ -226,7 +271,17 @@ class _ReportsState extends State<Reports> {
               children: [
                 // Disease Distribution Chart
                 Expanded(
-                  child: DiseaseDistributionChart(diseaseStats: _diseaseStats),
+                  child: DiseaseDistributionChart(
+                    diseaseStats: _diseaseStats,
+                    selectedTimeRange: _selectedTimeRange,
+                    onTimeRangeChanged: (String newTimeRange) async {
+                      setState(() {
+                        _selectedTimeRange = newTimeRange;
+                        _isLoading = true;
+                      });
+                      await _loadData();
+                    },
+                  ),
                 ),
               ],
             ),
@@ -306,76 +361,121 @@ class _ReportsState extends State<Reports> {
       builder: (context) => const AvgResponseTimeModal(),
     );
   }
+
+  void _showReportsModal(BuildContext context) {
+    // No longer used, or can be removed if not referenced elsewhere
+  }
 }
 
 class TotalReportsCard extends StatelessWidget {
-  final List<Map<String, dynamic>> reportsTrend;
+  final int completedCount;
+  final int pendingCount;
+  final VoidCallback? onRefresh;
 
-  const TotalReportsCard({Key? key, required this.reportsTrend})
-    : super(key: key);
+  const TotalReportsCard({
+    Key? key,
+    required this.completedCount,
+    required this.pendingCount,
+    this.onRefresh,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    final totalReports = reportsTrend.fold<int>(
-      0,
-      (sum, item) => sum + (item['count'] as int),
-    );
-
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: InkWell(
-        onTap: () => _showReportsTrendDialog(context),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // Icon
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.purple.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Header with refresh button
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const SizedBox(width: 24), // Spacer to center the content
+                const Spacer(),
+                IconButton(
+                  onPressed: onRefresh,
+                  icon: const Icon(Icons.refresh, size: 16),
+                  tooltip: 'Refresh',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
                 ),
-                child: const Icon(
-                  Icons.assessment,
-                  size: 24,
-                  color: Colors.purple,
-                ),
+              ],
+            ),
+            // Icon
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
               ),
-              const SizedBox(height: 16),
-
-              // Number
-              Text(
-                totalReports.toString(),
-                style: const TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
+              child: const Icon(
+                Icons.assignment_turned_in,
+                size: 24,
+                color: Colors.green,
               ),
-              const SizedBox(height: 8),
-
-              // Title
-              const Text(
-                'Total Reports',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey,
-                  fontWeight: FontWeight.w500,
-                ),
+            ),
+            const SizedBox(height: 16),
+            // Number
+            Text(
+              completedCount.toString(),
+              style: const TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: Colors.black87,
               ),
-            ],
-          ),
+            ),
+            const SizedBox(height: 8),
+            // Title
+            const Text(
+              'Total Reports Reviewed',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Breakdown row
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: Colors.green,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '$completedCount Completed',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: Colors.orange,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '$pendingCount Pending Review',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
-  }
-
-  void _showReportsTrendDialog(BuildContext context) {
-    showDialog(context: context, builder: (context) => ReportsTrendDialog());
   }
 }
 
@@ -572,10 +672,14 @@ class _ReportsListTableState extends State<ReportsListTable> {
 class DiseaseDistributionChart extends StatefulWidget {
   final List<Map<String, dynamic>> diseaseStats;
   final double? height;
+  final Function(String)? onTimeRangeChanged;
+  final String selectedTimeRange;
   const DiseaseDistributionChart({
     Key? key,
     required this.diseaseStats,
     this.height,
+    this.onTimeRangeChanged,
+    required this.selectedTimeRange,
   }) : super(key: key);
 
   @override
@@ -584,124 +688,7 @@ class DiseaseDistributionChart extends StatefulWidget {
 }
 
 class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
-  String _selectedTimeRange = 'Last 7 Days';
-
-  // Dummy data for different time ranges
-  final Map<String, List<Map<String, dynamic>>> _timeRangeData = {
-    '1 Day': [
-      {
-        'name': 'Anthracnose',
-        'count': 12,
-        'percentage': 0.30,
-        'type': 'disease',
-      },
-      {
-        'name': 'Bacterial Blackspot',
-        'count': 8,
-        'percentage': 0.20,
-        'type': 'disease',
-      },
-      {
-        'name': 'Powdery Mildew',
-        'count': 10,
-        'percentage': 0.25,
-        'type': 'disease',
-      },
-      {'name': 'Dieback', 'count': 4, 'percentage': 0.10, 'type': 'disease'},
-      {'name': 'Healthy', 'count': 4, 'percentage': 0.15, 'type': 'healthy'},
-    ],
-    'Last 7 Days': [
-      {
-        'name': 'Anthracnose',
-        'count': 156,
-        'percentage': 0.25,
-        'type': 'disease',
-      },
-      {
-        'name': 'Bacterial Blackspot',
-        'count': 98,
-        'percentage': 0.16,
-        'type': 'disease',
-      },
-      {
-        'name': 'Powdery Mildew',
-        'count': 145,
-        'percentage': 0.23,
-        'type': 'disease',
-      },
-      {'name': 'Dieback', 'count': 70, 'percentage': 0.11, 'type': 'disease'},
-      {'name': 'Healthy', 'count': 112, 'percentage': 0.25, 'type': 'healthy'},
-    ],
-    'Last 30 Days': [
-      {
-        'name': 'Anthracnose',
-        'count': 450,
-        'percentage': 0.28,
-        'type': 'disease',
-      },
-      {
-        'name': 'Bacterial Blackspot',
-        'count': 320,
-        'percentage': 0.20,
-        'type': 'disease',
-      },
-      {
-        'name': 'Powdery Mildew',
-        'count': 380,
-        'percentage': 0.24,
-        'type': 'disease',
-      },
-      {'name': 'Dieback', 'count': 180, 'percentage': 0.11, 'type': 'disease'},
-      {'name': 'Healthy', 'count': 150, 'percentage': 0.17, 'type': 'healthy'},
-    ],
-    'Last 90 Days': [
-      {
-        'name': 'Anthracnose',
-        'count': 1200,
-        'percentage': 0.30,
-        'type': 'disease',
-      },
-      {
-        'name': 'Bacterial Blackspot',
-        'count': 850,
-        'percentage': 0.21,
-        'type': 'disease',
-      },
-      {
-        'name': 'Powdery Mildew',
-        'count': 950,
-        'percentage': 0.24,
-        'type': 'disease',
-      },
-      {'name': 'Dieback', 'count': 450, 'percentage': 0.11, 'type': 'disease'},
-      {'name': 'Healthy', 'count': 300, 'percentage': 0.14, 'type': 'healthy'},
-    ],
-    'Last Year': [
-      {
-        'name': 'Anthracnose',
-        'count': 4800,
-        'percentage': 0.32,
-        'type': 'disease',
-      },
-      {
-        'name': 'Bacterial Blackspot',
-        'count': 3200,
-        'percentage': 0.21,
-        'type': 'disease',
-      },
-      {
-        'name': 'Powdery Mildew',
-        'count': 3600,
-        'percentage': 0.24,
-        'type': 'disease',
-      },
-      {'name': 'Dieback', 'count': 1800, 'percentage': 0.12, 'type': 'disease'},
-      {'name': 'Healthy', 'count': 700, 'percentage': 0.11, 'type': 'healthy'},
-    ],
-  };
-
-  List<Map<String, dynamic>> get _currentData =>
-      _timeRangeData[_selectedTimeRange] ?? _timeRangeData['Last 7 Days']!;
+  List<Map<String, dynamic>> get _currentData => widget.diseaseStats;
 
   List<Map<String, dynamic>> get _diseaseData =>
       _currentData.where((item) => item['type'] == 'disease').toList();
@@ -759,25 +746,100 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: DropdownButton<String>(
-                    value: _selectedTimeRange,
-                    items:
-                        _timeRangeData.keys.map((String value) {
-                          return DropdownMenuItem<String>(
-                            value: value,
-                            child: Text(
-                              value,
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                              ),
+                    value: widget.selectedTimeRange,
+                    items: [
+                      ...[
+                        '1 Day',
+                        'Last 7 Days',
+                        'Last 30 Days',
+                        'Last 60 Days',
+                        'Last 90 Days',
+                        'Last Year',
+                        'Custom',
+                      ].map((String value) {
+                        return DropdownMenuItem<String>(
+                          value: value,
+                          child: Text(
+                            value,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
                             ),
-                          );
-                        }).toList(),
-                    onChanged: (String? newValue) {
+                          ),
+                        );
+                      }),
+                      // Add dynamic custom range if it exists and doesn't match 'Custom'
+                      if (widget.selectedTimeRange.startsWith('Custom (') &&
+                          widget.selectedTimeRange != 'Custom')
+                        DropdownMenuItem<String>(
+                          value: widget.selectedTimeRange,
+                          child: Text(
+                            widget.selectedTimeRange,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                    ],
+                    onChanged: (String? newValue) async {
                       if (newValue != null) {
-                        setState(() {
-                          _selectedTimeRange = newValue;
-                        });
+                        if (newValue == 'Custom') {
+                          try {
+                            // Show date range picker for custom dates
+                            final DateTimeRange? pickedRange =
+                                await showDateRangePicker(
+                                  context: context,
+                                  firstDate: DateTime(2020),
+                                  lastDate: DateTime.now(),
+                                  initialDateRange: DateTimeRange(
+                                    start: DateTime.now().subtract(
+                                      const Duration(days: 7),
+                                    ),
+                                    end: DateTime.now(),
+                                  ),
+                                  builder: (context, child) {
+                                    return Theme(
+                                      data: Theme.of(context).copyWith(
+                                        colorScheme: Theme.of(context)
+                                            .colorScheme
+                                            .copyWith(primary: Colors.blue),
+                                      ),
+                                      child: child!,
+                                    );
+                                  },
+                                );
+
+                            if (pickedRange != null) {
+                              // Format the custom range for display
+                              final startDate =
+                                  '${pickedRange.start.year}-${pickedRange.start.month.toString().padLeft(2, '0')}-${pickedRange.start.day.toString().padLeft(2, '0')}';
+                              final endDate =
+                                  '${pickedRange.end.year}-${pickedRange.end.month.toString().padLeft(2, '0')}-${pickedRange.end.day.toString().padLeft(2, '0')}';
+                              final customRange =
+                                  'Custom ($startDate to $endDate)';
+
+                              // Call the callback with custom range info
+                              widget.onTimeRangeChanged?.call(customRange);
+                            }
+                          } catch (e) {
+                            print('Error showing date picker: $e');
+                            // Show error message to user
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Error selecting date range. Using default range.',
+                                ),
+                                backgroundColor: Colors.orange,
+                              ),
+                            );
+                            // Fallback to default range if picker fails
+                            widget.onTimeRangeChanged?.call('Last 7 Days');
+                          }
+                        } else {
+                          // Call the callback to notify parent
+                          widget.onTimeRangeChanged?.call(newValue);
+                        }
                       }
                     },
                     underline: const SizedBox(),
@@ -842,7 +904,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                               ),
                               const Spacer(),
                               Text(
-                                'Total: ${_diseaseData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
+                                'Total: ${_diseaseData.isEmpty ? 0 : _diseaseData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: Colors.grey[600],
@@ -853,159 +915,213 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                           ),
                           const SizedBox(height: 24),
                           Expanded(
-                            child: BarChart(
-                              BarChartData(
-                                alignment: BarChartAlignment.spaceAround,
-                                maxY:
-                                    _diseaseData
-                                        .map((d) => d['count'].toDouble())
-                                        .reduce((a, b) => a > b ? a : b) *
-                                    1.2,
-                                barTouchData: BarTouchData(
-                                  enabled: true,
-                                  touchTooltipData: BarTouchTooltipData(
-                                    tooltipBgColor: Colors.blueGrey,
-                                    getTooltipItem: (
-                                      group,
-                                      groupIndex,
-                                      rod,
-                                      rodIndex,
-                                    ) {
-                                      if (groupIndex < 0 ||
-                                          groupIndex >= _diseaseData.length) {
-                                        return null;
-                                      }
-                                      final disease = _diseaseData[groupIndex];
-                                      return BarTooltipItem(
-                                        '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
-                                        const TextStyle(color: Colors.white),
-                                      );
-                                    },
-                                  ),
-                                ),
-                                titlesData: FlTitlesData(
-                                  show: true,
-                                  bottomTitles: AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      getTitlesWidget: (value, meta) {
-                                        if (value < 0 ||
-                                            value >= _diseaseData.length) {
-                                          return const SizedBox.shrink();
-                                        }
-                                        final disease =
-                                            _diseaseData[value.toInt()];
-                                        return Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 8.0,
+                            child:
+                                _diseaseData.isEmpty
+                                    ? const Center(
+                                      child: Text(
+                                        'No disease data available',
+                                        style: TextStyle(
+                                          color: Colors.grey,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                    )
+                                    : BarChart(
+                                      BarChartData(
+                                        alignment:
+                                            BarChartAlignment.spaceAround,
+                                        maxY:
+                                            _diseaseData.isEmpty
+                                                ? 100.0
+                                                : _diseaseData
+                                                        .map(
+                                                          (d) =>
+                                                              d['count']
+                                                                  .toDouble(),
+                                                        )
+                                                        .reduce(
+                                                          (a, b) =>
+                                                              a > b ? a : b,
+                                                        ) *
+                                                    1.2,
+                                        barTouchData: BarTouchData(
+                                          enabled: true,
+                                          touchTooltipData: BarTouchTooltipData(
+                                            tooltipBgColor: Colors.blueGrey,
+                                            getTooltipItem: (
+                                              group,
+                                              groupIndex,
+                                              rod,
+                                              rodIndex,
+                                            ) {
+                                              if (groupIndex < 0 ||
+                                                  groupIndex >=
+                                                      _diseaseData.length ||
+                                                  _diseaseData.isEmpty) {
+                                                return null;
+                                              }
+                                              final disease =
+                                                  _diseaseData[groupIndex];
+                                              return BarTooltipItem(
+                                                '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                const TextStyle(
+                                                  color: Colors.white,
+                                                ),
+                                              );
+                                            },
                                           ),
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                disease['name'],
-                                                style: TextStyle(
-                                                  color: _getDiseaseColor(
-                                                    disease['name'],
+                                        ),
+                                        titlesData: FlTitlesData(
+                                          show: true,
+                                          bottomTitles: AxisTitles(
+                                            sideTitles: SideTitles(
+                                              showTitles: true,
+                                              getTitlesWidget: (value, meta) {
+                                                if (value < 0 ||
+                                                    value >=
+                                                        _diseaseData.length ||
+                                                    _diseaseData.isEmpty) {
+                                                  return const SizedBox.shrink();
+                                                }
+                                                final disease =
+                                                    _diseaseData[value.toInt()];
+                                                return Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                        top: 8.0,
+                                                      ),
+                                                  child: Column(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Text(
+                                                        disease['name'],
+                                                        style: TextStyle(
+                                                          color:
+                                                              _getDiseaseColor(
+                                                                disease['name'],
+                                                              ),
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          fontSize: 14,
+                                                        ),
+                                                        textAlign:
+                                                            TextAlign.center,
+                                                      ),
+                                                      const SizedBox(height: 6),
+                                                      Container(
+                                                        padding:
+                                                            const EdgeInsets.symmetric(
+                                                              horizontal: 8,
+                                                              vertical: 2,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color:
+                                                              _getDiseaseColor(
+                                                                disease['name'],
+                                                              ).withOpacity(
+                                                                0.1,
+                                                              ),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                        ),
+                                                        child: Text(
+                                                          '${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                          style: TextStyle(
+                                                            color:
+                                                                _getDiseaseColor(
+                                                                  disease['name'],
+                                                                ),
+                                                            fontWeight:
+                                                                FontWeight.w500,
+                                                            fontSize: 12,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
                                                   ),
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 14,
-                                                ),
-                                                textAlign: TextAlign.center,
-                                              ),
-                                              const SizedBox(height: 6),
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 8,
-                                                      vertical: 2,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: _getDiseaseColor(
-                                                    disease['name'],
-                                                  ).withOpacity(0.1),
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                ),
-                                                child: Text(
-                                                  '${(disease['percentage'] * 100).toStringAsFixed(1)}%',
-                                                  style: TextStyle(
-                                                    color: _getDiseaseColor(
-                                                      disease['name'],
-                                                    ),
-                                                    fontWeight: FontWeight.w500,
-                                                    fontSize: 12,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                      reservedSize: 72,
-                                    ),
-                                  ),
-                                  leftTitles: AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      reservedSize: 40,
-                                      getTitlesWidget: (value, meta) {
-                                        if (value % 50 == 0) {
-                                          return Text(
-                                            value.toInt().toString(),
-                                            style: TextStyle(
-                                              color: Colors.grey[600],
-                                              fontWeight: FontWeight.w500,
-                                              fontSize: 12,
+                                                );
+                                              },
+                                              reservedSize: 72,
                                             ),
-                                          );
-                                        }
-                                        return const SizedBox.shrink();
-                                      },
-                                    ),
-                                  ),
-                                  topTitles: AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false),
-                                  ),
-                                  rightTitles: AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false),
-                                  ),
-                                ),
-                                borderData: FlBorderData(show: false),
-                                gridData: FlGridData(
-                                  show: true,
-                                  drawVerticalLine: false,
-                                  horizontalInterval: 50,
-                                  getDrawingHorizontalLine: (value) {
-                                    return FlLine(
-                                      color: Colors.grey[200],
-                                      strokeWidth: 1,
-                                    );
-                                  },
-                                ),
-                                barGroups:
-                                    _diseaseData.asMap().entries.map((entry) {
-                                      final index = entry.key;
-                                      final disease = entry.value;
-                                      return BarChartGroupData(
-                                        x: index,
-                                        barRods: [
-                                          BarChartRodData(
-                                            toY: disease['count'].toDouble(),
-                                            color: _getDiseaseColor(
-                                              disease['name'],
-                                            ),
-                                            width: 36,
-                                            borderRadius:
-                                                const BorderRadius.vertical(
-                                                  top: Radius.circular(8),
-                                                ),
                                           ),
-                                        ],
-                                      );
-                                    }).toList(),
-                              ),
-                            ),
+                                          leftTitles: AxisTitles(
+                                            sideTitles: SideTitles(
+                                              showTitles: true,
+                                              reservedSize: 40,
+                                              getTitlesWidget: (value, meta) {
+                                                if (value % 50 == 0) {
+                                                  return Text(
+                                                    value.toInt().toString(),
+                                                    style: TextStyle(
+                                                      color: Colors.grey[600],
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                      fontSize: 12,
+                                                    ),
+                                                  );
+                                                }
+                                                return const SizedBox.shrink();
+                                              },
+                                            ),
+                                          ),
+                                          topTitles: AxisTitles(
+                                            sideTitles: SideTitles(
+                                              showTitles: false,
+                                            ),
+                                          ),
+                                          rightTitles: AxisTitles(
+                                            sideTitles: SideTitles(
+                                              showTitles: false,
+                                            ),
+                                          ),
+                                        ),
+                                        borderData: FlBorderData(show: false),
+                                        gridData: FlGridData(
+                                          show: true,
+                                          drawVerticalLine: false,
+                                          horizontalInterval: 50,
+                                          getDrawingHorizontalLine: (value) {
+                                            return FlLine(
+                                              color: Colors.grey[200],
+                                              strokeWidth: 1,
+                                            );
+                                          },
+                                        ),
+                                        barGroups:
+                                            _diseaseData.isEmpty
+                                                ? []
+                                                : _diseaseData.asMap().entries.map((
+                                                  entry,
+                                                ) {
+                                                  final index = entry.key;
+                                                  final disease = entry.value;
+                                                  return BarChartGroupData(
+                                                    x: index,
+                                                    barRods: [
+                                                      BarChartRodData(
+                                                        toY:
+                                                            disease['count']
+                                                                .toDouble(),
+                                                        color: _getDiseaseColor(
+                                                          disease['name'],
+                                                        ),
+                                                        width: 36,
+                                                        borderRadius:
+                                                            const BorderRadius.vertical(
+                                                              top:
+                                                                  Radius.circular(
+                                                                    8,
+                                                                  ),
+                                                            ),
+                                                      ),
+                                                    ],
+                                                  );
+                                                }).toList(),
+                                      ),
+                                    ),
                           ),
                         ],
                       ),
@@ -1058,7 +1174,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                               ),
                               const Spacer(),
                               Text(
-                                'Total: ${_healthyData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
+                                'Total: ${_healthyData.isEmpty ? 0 : _healthyData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: Colors.grey[600],
@@ -1069,159 +1185,213 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                           ),
                           const SizedBox(height: 24),
                           Expanded(
-                            child: BarChart(
-                              BarChartData(
-                                alignment: BarChartAlignment.spaceAround,
-                                maxY:
-                                    _healthyData
-                                        .map((d) => d['count'].toDouble())
-                                        .reduce((a, b) => a > b ? a : b) *
-                                    1.2,
-                                barTouchData: BarTouchData(
-                                  enabled: true,
-                                  touchTooltipData: BarTouchTooltipData(
-                                    tooltipBgColor: Colors.blueGrey,
-                                    getTooltipItem: (
-                                      group,
-                                      groupIndex,
-                                      rod,
-                                      rodIndex,
-                                    ) {
-                                      if (groupIndex < 0 ||
-                                          groupIndex >= _healthyData.length) {
-                                        return null;
-                                      }
-                                      final disease = _healthyData[groupIndex];
-                                      return BarTooltipItem(
-                                        '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
-                                        const TextStyle(color: Colors.white),
-                                      );
-                                    },
-                                  ),
-                                ),
-                                titlesData: FlTitlesData(
-                                  show: true,
-                                  bottomTitles: AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      getTitlesWidget: (value, meta) {
-                                        if (value < 0 ||
-                                            value >= _healthyData.length) {
-                                          return const SizedBox.shrink();
-                                        }
-                                        final disease =
-                                            _healthyData[value.toInt()];
-                                        return Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 8.0,
+                            child:
+                                _healthyData.isEmpty
+                                    ? const Center(
+                                      child: Text(
+                                        'No healthy data available',
+                                        style: TextStyle(
+                                          color: Colors.grey,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                    )
+                                    : BarChart(
+                                      BarChartData(
+                                        alignment:
+                                            BarChartAlignment.spaceAround,
+                                        maxY:
+                                            _healthyData.isEmpty
+                                                ? 100.0
+                                                : _healthyData
+                                                        .map(
+                                                          (d) =>
+                                                              d['count']
+                                                                  .toDouble(),
+                                                        )
+                                                        .reduce(
+                                                          (a, b) =>
+                                                              a > b ? a : b,
+                                                        ) *
+                                                    1.2,
+                                        barTouchData: BarTouchData(
+                                          enabled: true,
+                                          touchTooltipData: BarTouchTooltipData(
+                                            tooltipBgColor: Colors.blueGrey,
+                                            getTooltipItem: (
+                                              group,
+                                              groupIndex,
+                                              rod,
+                                              rodIndex,
+                                            ) {
+                                              if (groupIndex < 0 ||
+                                                  groupIndex >=
+                                                      _healthyData.length ||
+                                                  _healthyData.isEmpty) {
+                                                return null;
+                                              }
+                                              final disease =
+                                                  _healthyData[groupIndex];
+                                              return BarTooltipItem(
+                                                '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                const TextStyle(
+                                                  color: Colors.white,
+                                                ),
+                                              );
+                                            },
                                           ),
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                disease['name'],
-                                                style: TextStyle(
-                                                  color: _getDiseaseColor(
-                                                    disease['name'],
+                                        ),
+                                        titlesData: FlTitlesData(
+                                          show: true,
+                                          bottomTitles: AxisTitles(
+                                            sideTitles: SideTitles(
+                                              showTitles: true,
+                                              getTitlesWidget: (value, meta) {
+                                                if (value < 0 ||
+                                                    value >=
+                                                        _healthyData.length ||
+                                                    _healthyData.isEmpty) {
+                                                  return const SizedBox.shrink();
+                                                }
+                                                final disease =
+                                                    _healthyData[value.toInt()];
+                                                return Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                        top: 8.0,
+                                                      ),
+                                                  child: Column(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Text(
+                                                        disease['name'],
+                                                        style: TextStyle(
+                                                          color:
+                                                              _getDiseaseColor(
+                                                                disease['name'],
+                                                              ),
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          fontSize: 14,
+                                                        ),
+                                                        textAlign:
+                                                            TextAlign.center,
+                                                      ),
+                                                      const SizedBox(height: 6),
+                                                      Container(
+                                                        padding:
+                                                            const EdgeInsets.symmetric(
+                                                              horizontal: 8,
+                                                              vertical: 2,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color:
+                                                              _getDiseaseColor(
+                                                                disease['name'],
+                                                              ).withOpacity(
+                                                                0.1,
+                                                              ),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                        ),
+                                                        child: Text(
+                                                          '${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                          style: TextStyle(
+                                                            color:
+                                                                _getDiseaseColor(
+                                                                  disease['name'],
+                                                                ),
+                                                            fontWeight:
+                                                                FontWeight.w500,
+                                                            fontSize: 12,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
                                                   ),
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 14,
-                                                ),
-                                                textAlign: TextAlign.center,
-                                              ),
-                                              const SizedBox(height: 6),
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 8,
-                                                      vertical: 2,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: _getDiseaseColor(
-                                                    disease['name'],
-                                                  ).withOpacity(0.1),
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                ),
-                                                child: Text(
-                                                  '${(disease['percentage'] * 100).toStringAsFixed(1)}%',
-                                                  style: TextStyle(
-                                                    color: _getDiseaseColor(
-                                                      disease['name'],
-                                                    ),
-                                                    fontWeight: FontWeight.w500,
-                                                    fontSize: 12,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                      reservedSize: 72,
-                                    ),
-                                  ),
-                                  leftTitles: AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      reservedSize: 40,
-                                      getTitlesWidget: (value, meta) {
-                                        if (value % 50 == 0) {
-                                          return Text(
-                                            value.toInt().toString(),
-                                            style: TextStyle(
-                                              color: Colors.grey[600],
-                                              fontWeight: FontWeight.w500,
-                                              fontSize: 12,
+                                                );
+                                              },
+                                              reservedSize: 72,
                                             ),
-                                          );
-                                        }
-                                        return const SizedBox.shrink();
-                                      },
-                                    ),
-                                  ),
-                                  topTitles: AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false),
-                                  ),
-                                  rightTitles: AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false),
-                                  ),
-                                ),
-                                borderData: FlBorderData(show: false),
-                                gridData: FlGridData(
-                                  show: true,
-                                  drawVerticalLine: false,
-                                  horizontalInterval: 50,
-                                  getDrawingHorizontalLine: (value) {
-                                    return FlLine(
-                                      color: Colors.grey[200],
-                                      strokeWidth: 1,
-                                    );
-                                  },
-                                ),
-                                barGroups:
-                                    _healthyData.asMap().entries.map((entry) {
-                                      final index = entry.key;
-                                      final disease = entry.value;
-                                      return BarChartGroupData(
-                                        x: index,
-                                        barRods: [
-                                          BarChartRodData(
-                                            toY: disease['count'].toDouble(),
-                                            color: _getDiseaseColor(
-                                              disease['name'],
-                                            ),
-                                            width: 36,
-                                            borderRadius:
-                                                const BorderRadius.vertical(
-                                                  top: Radius.circular(8),
-                                                ),
                                           ),
-                                        ],
-                                      );
-                                    }).toList(),
-                              ),
-                            ),
+                                          leftTitles: AxisTitles(
+                                            sideTitles: SideTitles(
+                                              showTitles: true,
+                                              reservedSize: 40,
+                                              getTitlesWidget: (value, meta) {
+                                                if (value % 50 == 0) {
+                                                  return Text(
+                                                    value.toInt().toString(),
+                                                    style: TextStyle(
+                                                      color: Colors.grey[600],
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                      fontSize: 12,
+                                                    ),
+                                                  );
+                                                }
+                                                return const SizedBox.shrink();
+                                              },
+                                            ),
+                                          ),
+                                          topTitles: AxisTitles(
+                                            sideTitles: SideTitles(
+                                              showTitles: false,
+                                            ),
+                                          ),
+                                          rightTitles: AxisTitles(
+                                            sideTitles: SideTitles(
+                                              showTitles: false,
+                                            ),
+                                          ),
+                                        ),
+                                        borderData: FlBorderData(show: false),
+                                        gridData: FlGridData(
+                                          show: true,
+                                          drawVerticalLine: false,
+                                          horizontalInterval: 50,
+                                          getDrawingHorizontalLine: (value) {
+                                            return FlLine(
+                                              color: Colors.grey[200],
+                                              strokeWidth: 1,
+                                            );
+                                          },
+                                        ),
+                                        barGroups:
+                                            _healthyData.isEmpty
+                                                ? []
+                                                : _healthyData.asMap().entries.map((
+                                                  entry,
+                                                ) {
+                                                  final index = entry.key;
+                                                  final disease = entry.value;
+                                                  return BarChartGroupData(
+                                                    x: index,
+                                                    barRods: [
+                                                      BarChartRodData(
+                                                        toY:
+                                                            disease['count']
+                                                                .toDouble(),
+                                                        color: _getDiseaseColor(
+                                                          disease['name'],
+                                                        ),
+                                                        width: 36,
+                                                        borderRadius:
+                                                            const BorderRadius.vertical(
+                                                              top:
+                                                                  Radius.circular(
+                                                                    8,
+                                                                  ),
+                                                            ),
+                                                      ),
+                                                    ],
+                                                  );
+                                                }).toList(),
+                                      ),
+                                    ),
                           ),
                         ],
                       ),

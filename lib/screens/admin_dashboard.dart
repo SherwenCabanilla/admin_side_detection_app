@@ -4,10 +4,11 @@ import 'user_management.dart';
 // import 'expert_management.dart';
 import 'reports.dart';
 import 'settings.dart';
-import 'reports.dart' show DiseaseDistributionChart, TotalReportsCard;
+import 'reports.dart' show DiseaseDistributionChart;
 import '../models/user_store.dart';
 import '../shared/total_users_card.dart';
 import '../shared/pending_approvals_card.dart';
+import '../services/scan_requests_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 
 class AdminDashboard extends StatefulWidget {
@@ -23,26 +24,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
   List<Map<String, dynamic>> _users = [];
   bool _isLoading = true;
 
-  // Dummy data for disease distribution (same as in reports.dart)
-  final List<Map<String, dynamic>> _diseaseStats = [
-    {'name': 'Anthracnose', 'count': 156, 'percentage': 0.25},
-    {'name': 'Bacterial Blackspot', 'count': 98, 'percentage': 0.16},
-    {'name': 'Powdery Mildew', 'count': 145, 'percentage': 0.23},
-    {'name': 'Dieback', 'count': 70, 'percentage': 0.11},
-    {'name': 'Tip Burn (Unknown)', 'count': 42, 'percentage': 0.07},
-    {'name': 'Healthy', 'count': 112, 'percentage': 0.18},
-  ];
+  // Real data for disease distribution and reports
+  List<Map<String, dynamic>> _diseaseStats = [];
+  List<Map<String, dynamic>> _reportsTrend = [];
+  Map<String, dynamic> _stats = {
+    'totalReportsReviewed': 0,
+    'pendingRequests': 0,
+    'averageResponseTime': '0 hours',
+  };
 
-  // Dummy data for reports trend
-  final List<Map<String, dynamic>> _reportsTrend = [
-    {'date': '2024-03-01', 'count': 45},
-    {'date': '2024-03-02', 'count': 52},
-    {'date': '2024-03-03', 'count': 48},
-    {'date': '2024-03-04', 'count': 65},
-    {'date': '2024-03-05', 'count': 58},
-    {'date': '2024-03-06', 'count': 72},
-    {'date': '2024-03-07', 'count': 68},
-  ];
+  // Add selected time range for disease distribution
+  String _selectedTimeRange = 'Last 7 Days';
 
   // Remove the hardcoded activities list
   // List<Map<String, dynamic>> activities = [
@@ -96,24 +88,85 @@ class _AdminDashboardState extends State<AdminDashboard> {
   @override
   void initState() {
     super.initState();
-    _loadUsers();
+    _loadData();
   }
 
-  Future<void> _loadUsers() async {
+  Future<void> _loadData() async {
     setState(() {
       _isLoading = true;
     });
 
     try {
+      // Load all data in parallel
+      await Future.wait([
+        _loadUsers(),
+        _loadStats(),
+        _loadReportsTrend(),
+        _loadDiseaseStats(),
+      ]);
+    } catch (e) {
+      print('Error loading dashboard data: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadUsers() async {
+    try {
       final users = await UserStore.getUsers();
       setState(() {
         _users = users;
-        _isLoading = false;
       });
     } catch (e) {
+      print('Error loading users: $e');
+    }
+  }
+
+  Future<void> _loadStats() async {
+    try {
+      final completedReports =
+          await ScanRequestsService.getCompletedReportsCount();
+      final pendingReports = await ScanRequestsService.getPendingReportsCount();
+      final averageResponseTime =
+          await ScanRequestsService.getAverageResponseTime(
+            timeRange: 'Last 7 Days',
+          );
+
       setState(() {
-        _isLoading = false;
+        _stats['totalReportsReviewed'] = completedReports;
+        _stats['pendingRequests'] = pendingReports;
+        _stats['averageResponseTime'] = averageResponseTime;
       });
+    } catch (e) {
+      print('Error loading stats: $e');
+    }
+  }
+
+  Future<void> _loadReportsTrend() async {
+    try {
+      final trend = await ScanRequestsService.getReportsTrend(
+        timeRange: 'Last 7 Days',
+      );
+      setState(() {
+        _reportsTrend = trend;
+      });
+    } catch (e) {
+      print('Error loading reports trend: $e');
+    }
+  }
+
+  Future<void> _loadDiseaseStats() async {
+    try {
+      final stats = await ScanRequestsService.getDiseaseStats(
+        timeRange: _selectedTimeRange,
+      );
+      setState(() {
+        _diseaseStats = stats;
+      });
+    } catch (e) {
+      print('Error loading disease stats: $e');
     }
   }
 
@@ -125,26 +178,39 @@ class _AdminDashboardState extends State<AdminDashboard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Header
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  'Welcome, ${widget.adminUser.username}',
-                  style: const TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Welcome, ${widget.adminUser.username}',
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Glad to see you back!',
+                      style: TextStyle(fontSize: 18, color: Colors.blueGrey),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Dashboard',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 2),
-                const Text(
-                  'Glad to see you back!',
-                  style: TextStyle(fontSize: 18, color: Colors.blueGrey),
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  'Dashboard',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                IconButton(
+                  onPressed: _loadData,
+                  icon: const Icon(Icons.refresh),
+                  tooltip: 'Refresh Dashboard',
                 ),
               ],
             ),
@@ -162,12 +228,41 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   mainAxisSpacing: 24,
                   childAspectRatio: 1.4,
                   children: [
-                    const TotalUsersCard(),
+                    TotalUsersCard(
+                      onTap: () {
+                        setState(() {
+                          _selectedIndex = 1; // Switch to users tab
+                        });
+                      },
+                    ),
                     GestureDetector(
                       onTap: () => _showPendingApprovalsDialog(context),
                       child: const PendingApprovalsCard(),
                     ),
-                    TotalReportsCard(reportsTrend: _reportsTrend),
+                    // Replace TotalReportsCard with TotalReportsReviewedCard
+                    TotalReportsReviewedCard(
+                      totalReports: _stats['totalReportsReviewed'],
+                      reportsTrend: _reportsTrend,
+                      onTap: () {
+                        showDialog(
+                          context: context,
+                          builder:
+                              (context) => Dialog(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Container(
+                                  width:
+                                      MediaQuery.of(context).size.width * 0.9,
+                                  height:
+                                      MediaQuery.of(context).size.height * 0.8,
+                                  padding: const EdgeInsets.all(20),
+                                  child: ReportsModalContent(),
+                                ),
+                              ),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -175,7 +270,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
             const SizedBox(height: 24),
 
             // Disease Distribution Chart
-            DiseaseDistributionChart(diseaseStats: _diseaseStats),
+            DiseaseDistributionChart(
+              diseaseStats: _diseaseStats,
+              selectedTimeRange: _selectedTimeRange,
+              onTimeRangeChanged: (String newTimeRange) {
+                setState(() {
+                  _selectedTimeRange = newTimeRange;
+                });
+                _loadDiseaseStats();
+                _loadReportsTrend();
+              },
+            ),
             const SizedBox(height: 24),
 
             // Admin Activity Feed
@@ -298,7 +403,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
       case 1:
         return const UserManagement();
       case 2:
-        return const Reports();
+        return Reports(
+          onGoToUsers: () {
+            setState(() {
+              _selectedIndex = 1;
+            });
+          },
+        );
       case 3:
         return Settings(
           onViewReports: () {
