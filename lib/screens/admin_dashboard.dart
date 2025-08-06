@@ -3,13 +3,55 @@ import '../models/admin_user.dart';
 import 'user_management.dart';
 // import 'expert_management.dart';
 import 'reports.dart';
-import 'settings.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'reports.dart' show DiseaseDistributionChart;
 import '../models/user_store.dart';
 import '../shared/total_users_card.dart';
 import '../shared/pending_approvals_card.dart';
 import '../services/scan_requests_service.dart';
-import 'package:cloud_firestore/cloud_firestore.dart' as cf;
+import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'settings.dart' as admin_settings;
+
+// --- Custom snapshot wrappers ---
+class UsersSnapshot {
+  final QuerySnapshot? snapshot;
+  UsersSnapshot(this.snapshot);
+}
+
+class ScanRequestsSnapshot {
+  final QuerySnapshot? snapshot;
+  ScanRequestsSnapshot(this.snapshot);
+}
+
+class AdminDashboardWrapper extends StatelessWidget {
+  final AdminUser adminUser;
+  const AdminDashboardWrapper({Key? key, required this.adminUser})
+    : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        StreamProvider<UsersSnapshot?>.value(
+          value: FirebaseFirestore.instance
+              .collection('users')
+              .snapshots()
+              .map((s) => UsersSnapshot(s)),
+          initialData: null,
+        ),
+        StreamProvider<ScanRequestsSnapshot?>.value(
+          value: FirebaseFirestore.instance
+              .collection('scan_requests')
+              .snapshots()
+              .map((s) => ScanRequestsSnapshot(s)),
+          initialData: null,
+        ),
+      ],
+      child: AdminDashboard(adminUser: adminUser),
+    );
+  }
+}
 
 class AdminDashboard extends StatefulWidget {
   final AdminUser adminUser;
@@ -19,7 +61,8 @@ class AdminDashboard extends StatefulWidget {
   State<AdminDashboard> createState() => _AdminDashboardState();
 }
 
-class _AdminDashboardState extends State<AdminDashboard> {
+class _AdminDashboardState extends State<AdminDashboard>
+    with AutomaticKeepAliveClientMixin {
   int _selectedIndex = 0;
   List<Map<String, dynamic>> _users = [];
   bool _isLoading = true;
@@ -35,6 +78,23 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   // Add selected time range for disease distribution
   String _selectedTimeRange = 'Last 7 Days';
+
+  // Helper function to format timestamp
+  String _formatTimestamp(cf.Timestamp timestamp) {
+    final now = DateTime.now();
+    final date = timestamp.toDate();
+    final difference = now.difference(date);
+
+    if (difference.inDays > 0) {
+      return '${difference.inDays} day${difference.inDays == 1 ? '' : 's'} ago';
+    } else if (difference.inHours > 0) {
+      return '${difference.inHours} hour${difference.inHours == 1 ? '' : 's'} ago';
+    } else if (difference.inMinutes > 0) {
+      return '${difference.inMinutes} minute${difference.inMinutes == 1 ? '' : 's'} ago';
+    } else {
+      return 'Just now';
+    }
+  }
 
   // Remove the hardcoded activities list
   // List<Map<String, dynamic>> activities = [
@@ -235,10 +295,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         });
                       },
                     ),
-                    GestureDetector(
-                      onTap: () => _showPendingApprovalsDialog(context),
-                      child: const PendingApprovalsCard(),
-                    ),
+                    const PendingApprovalsCard(),
                     // Replace TotalReportsCard with TotalReportsReviewedCard
                     TotalReportsReviewedCard(
                       totalReports: _stats['totalReportsReviewed'],
@@ -338,7 +395,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 title: Text(data['action'] ?? ''),
                                 subtitle: Text(
                                   '${data['user'] ?? ''} • '
-                                  '${data['timestamp'] != null ? (data['timestamp'] as cf.Timestamp).toDate().toString() : ''}',
+                                  '${_formatTimestamp(data['timestamp'] as cf.Timestamp)}',
                                 ),
                               );
                             },
@@ -411,7 +468,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           },
         );
       case 3:
-        return Settings(
+        return admin_settings.Settings(
           onViewReports: () {
             setState(() {
               _selectedIndex = 2;
@@ -424,7 +481,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
+    super.build(context); // Important for AutomaticKeepAliveClientMixin
     final sidebarItems = [
       {'icon': Icons.dashboard, 'label': 'Dashboard'},
       {'icon': Icons.people, 'label': 'Users'},
@@ -555,420 +616,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ),
         );
       },
-    );
-  }
-
-  void _showPendingApprovalsDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder:
-          (context) => Dialog(
-            insetPadding: const EdgeInsets.all(32),
-            child: SizedBox(
-              width: 1150, // Increased width for full table visibility
-              child: _PendingApprovalsTableModal(onAction: _loadUsers),
-            ),
-          ),
-    );
-  }
-}
-
-class _PendingApprovalsTableModal extends StatefulWidget {
-  final VoidCallback onAction;
-  const _PendingApprovalsTableModal({required this.onAction});
-  @override
-  State<_PendingApprovalsTableModal> createState() =>
-      _PendingApprovalsTableModalState();
-}
-
-class _PendingApprovalsTableModalState
-    extends State<_PendingApprovalsTableModal> {
-  List<Map<String, dynamic>> _users = [];
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadUsers();
-  }
-
-  Future<void> _loadUsers() async {
-    setState(() => _isLoading = true);
-    final users = await UserStore.getUsers();
-    setState(() {
-      _users = users;
-      _isLoading = false;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final pendingUsers = _users.where((u) => u['status'] == 'pending').toList();
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Pending Approvals',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                ),
-                onPressed:
-                    pendingUsers.isEmpty
-                        ? null
-                        : () async {
-                          final confirm = await showDialog<bool>(
-                            context: context,
-                            builder:
-                                (context) => AlertDialog(
-                                  title: const Text('Accept All Pending Users'),
-                                  content: const Text(
-                                    'Are you sure you want to accept all pending users?',
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed:
-                                          () => Navigator.pop(context, false),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.green,
-                                      ),
-                                      onPressed:
-                                          () => Navigator.pop(context, true),
-                                      child: const Text('Accept All'),
-                                    ),
-                                  ],
-                                ),
-                          );
-                          if (confirm == true) {
-                            bool allSuccess = true;
-                            for (var user in pendingUsers) {
-                              final success = await UserStore.updateUserStatus(
-                                user['id'],
-                                'active',
-                              );
-                              if (!success) allSuccess = false;
-                            }
-                            await _loadUsers();
-                            widget.onAction();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  allSuccess
-                                      ? 'All pending users have been accepted'
-                                      : 'Some users could not be accepted. Please check Firebase configuration.',
-                                ),
-                                backgroundColor:
-                                    allSuccess ? Colors.green : Colors.orange,
-                              ),
-                            );
-                          }
-                        },
-                child: const Text('Accept All'),
-              ),
-              const SizedBox(width: 12),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                ),
-                onPressed:
-                    pendingUsers.isEmpty
-                        ? null
-                        : () async {
-                          final confirm = await showDialog<bool>(
-                            context: context,
-                            builder:
-                                (context) => AlertDialog(
-                                  title: const Text('Delete All Pending Users'),
-                                  content: const Text(
-                                    'Are you sure you want to delete all pending users? This cannot be undone.',
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed:
-                                          () => Navigator.pop(context, false),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.red,
-                                      ),
-                                      onPressed:
-                                          () => Navigator.pop(context, true),
-                                      child: const Text('Delete All'),
-                                    ),
-                                  ],
-                                ),
-                          );
-                          if (confirm == true) {
-                            bool allSuccess = true;
-                            for (var user in pendingUsers) {
-                              final success = await UserStore.deleteUser(
-                                user['id'],
-                              );
-                              if (!success) allSuccess = false;
-                            }
-                            await _loadUsers();
-                            widget.onAction();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  allSuccess
-                                      ? 'All pending users have been deleted'
-                                      : 'Some users could not be deleted. Please check Firebase configuration.',
-                                ),
-                                backgroundColor:
-                                    allSuccess ? Colors.red : Colors.orange,
-                              ),
-                            );
-                          }
-                        },
-                child: const Text('Delete All'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: DataTable(
-                  columns: const [
-                    DataColumn(label: Text('Name')),
-                    DataColumn(label: Text('Email')),
-                    DataColumn(label: Text('Phone Number')),
-                    DataColumn(label: Text('Address')),
-                    DataColumn(label: Text('Role')),
-                    DataColumn(label: Text('Actions')),
-                  ],
-                  rows:
-                      pendingUsers
-                          .map(
-                            (user) => DataRow(
-                              cells: [
-                                DataCell(Text(user['name'])),
-                                DataCell(Text(user['email'])),
-                                DataCell(Text(user['phone'] ?? '')),
-                                DataCell(Text(user['address'] ?? '')),
-                                DataCell(
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.blue.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Text(
-                                      user['role'].toString().toUpperCase(),
-                                      style: const TextStyle(
-                                        color: Colors.blue,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                DataCell(
-                                  Row(
-                                    children: [
-                                      ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.green,
-                                          foregroundColor: Colors.white,
-                                        ),
-                                        child: const Text('Accept'),
-                                        onPressed: () async {
-                                          final confirm = await showDialog<
-                                            bool
-                                          >(
-                                            context: context,
-                                            builder:
-                                                (context) => AlertDialog(
-                                                  title: const Text(
-                                                    'Accept User',
-                                                  ),
-                                                  content: Text(
-                                                    'Are you sure you want to accept ${user['name']}?',
-                                                  ),
-                                                  actions: [
-                                                    TextButton(
-                                                      onPressed:
-                                                          () => Navigator.pop(
-                                                            context,
-                                                            false,
-                                                          ),
-                                                      child: const Text(
-                                                        'Cancel',
-                                                      ),
-                                                    ),
-                                                    ElevatedButton(
-                                                      style:
-                                                          ElevatedButton.styleFrom(
-                                                            backgroundColor:
-                                                                Colors.green,
-                                                          ),
-                                                      onPressed:
-                                                          () => Navigator.pop(
-                                                            context,
-                                                            true,
-                                                          ),
-                                                      child: const Text(
-                                                        'Accept',
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                          );
-                                          if (confirm == true) {
-                                            await UserStore.updateUserStatus(
-                                              user['id'],
-                                              'active',
-                                            );
-                                            await cf.FirebaseFirestore.instance
-                                                .collection('activities')
-                                                .add({
-                                                  'action': 'Accepted user',
-                                                  'user': user['name'],
-                                                  'type': 'accept',
-                                                  'color': Colors.green.value,
-                                                  'icon':
-                                                      Icons
-                                                          .person_add
-                                                          .codePoint,
-                                                  'timestamp':
-                                                      cf.FieldValue.serverTimestamp(),
-                                                });
-                                            await _loadUsers();
-                                            widget.onAction();
-                                            ScaffoldMessenger.of(
-                                              context,
-                                            ).showSnackBar(
-                                              SnackBar(
-                                                content: Text(
-                                                  '${user['name']} has been accepted',
-                                                ),
-                                                backgroundColor: Colors.green,
-                                              ),
-                                            );
-                                          }
-                                        },
-                                      ),
-                                      const SizedBox(width: 8),
-                                      ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.red,
-                                          foregroundColor: Colors.white,
-                                        ),
-                                        child: const Text('Delete'),
-                                        onPressed: () async {
-                                          final confirm = await showDialog<
-                                            bool
-                                          >(
-                                            context: context,
-                                            builder:
-                                                (context) => AlertDialog(
-                                                  title: const Text(
-                                                    'Delete User',
-                                                  ),
-                                                  content: Text(
-                                                    'Are you sure you want to delete ${user['name']}? This cannot be undone.',
-                                                  ),
-                                                  actions: [
-                                                    TextButton(
-                                                      onPressed:
-                                                          () => Navigator.pop(
-                                                            context,
-                                                            false,
-                                                          ),
-                                                      child: const Text(
-                                                        'Cancel',
-                                                      ),
-                                                    ),
-                                                    ElevatedButton(
-                                                      style:
-                                                          ElevatedButton.styleFrom(
-                                                            backgroundColor:
-                                                                Colors.red,
-                                                          ),
-                                                      onPressed:
-                                                          () => Navigator.pop(
-                                                            context,
-                                                            true,
-                                                          ),
-                                                      child: const Text(
-                                                        'Delete',
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                          );
-                                          if (confirm == true) {
-                                            await UserStore.deleteUser(
-                                              user['id'],
-                                            );
-                                            await _loadUsers();
-                                            widget.onAction();
-                                            ScaffoldMessenger.of(
-                                              context,
-                                            ).showSnackBar(
-                                              SnackBar(
-                                                content: Text(
-                                                  '${user['name']} has been deleted',
-                                                ),
-                                                backgroundColor: Colors.red,
-                                              ),
-                                            );
-                                          }
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                          .toList(),
-                ),
-              ),
-        ],
-      ),
     );
   }
 }

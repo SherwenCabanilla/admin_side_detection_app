@@ -73,7 +73,7 @@ class _AdminLoginState extends State<AdminLogin> {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (context) => AdminDashboard(adminUser: adminUser),
+              builder: (context) => AdminDashboardWrapper(adminUser: adminUser),
             ),
           );
         } else {

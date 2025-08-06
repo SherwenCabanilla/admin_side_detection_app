@@ -1,49 +1,27 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_store.dart';
+import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../screens/admin_dashboard.dart';
 
 class PendingApprovalsCard extends StatefulWidget {
   final int? pendingCount;
-  const PendingApprovalsCard({Key? key, this.pendingCount}) : super(key: key);
+  final VoidCallback? onTap;
+  const PendingApprovalsCard({Key? key, this.pendingCount, this.onTap})
+    : super(key: key);
 
   @override
   State<PendingApprovalsCard> createState() => _PendingApprovalsCardState();
 }
 
 class _PendingApprovalsCardState extends State<PendingApprovalsCard> {
-  int _pendingCount = 0;
-  bool _isLoading = true;
-  bool _isHovered = false;
+  final ValueNotifier<bool> _isHovered = ValueNotifier(false);
 
   @override
-  void initState() {
-    super.initState();
-    if (widget.pendingCount != null) {
-      _pendingCount = widget.pendingCount!;
-      _isLoading = false;
-    } else {
-      _loadData();
-    }
-  }
-
-  Future<void> _loadData() async {
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      final allUsers = await UserStore.getUsers();
-      final pendingUsers =
-          allUsers.where((user) => user['status'] == 'pending').toList();
-
-      setState(() {
-        _pendingCount = pendingUsers.length;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-    }
+  void dispose() {
+    _isHovered.dispose();
+    super.dispose();
   }
 
   void _showPendingUsersModal() {
@@ -63,113 +41,121 @@ class _PendingApprovalsCardState extends State<PendingApprovalsCard> {
 
   @override
   Widget build(BuildContext context) {
+    final isClickable = widget.onTap != null;
+    final UsersSnapshot? usersProvider = Provider.of<UsersSnapshot?>(context);
+    final QuerySnapshot? usersSnapshot = usersProvider?.snapshot;
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: _showPendingUsersModal,
-        child: Card(
-          elevation: _isHovered ? 8 : 2,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
+      onEnter: (_) => _isHovered.value = true,
+      onExit: (_) => _isHovered.value = false,
+      cursor: isClickable ? SystemMouseCursors.click : MouseCursor.defer,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _isHovered,
+        builder: (context, isHovered, child) {
+          return Card(
+            elevation: isHovered && isClickable ? 8 : 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: InkWell(
+              onTap: widget.onTap ?? _showPendingUsersModal,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: child, // Use the child below
+              ),
+            ),
+          );
+        },
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Header (no refresh button)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Header with refresh button
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                const SizedBox(width: 24), // Spacer to center the content
+                const Spacer(),
+              ],
+            ),
+            // Icon
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.pending_actions,
+                size: 24,
+                color: Colors.orangeAccent,
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Number (real-time count)
+            Builder(
+              builder: (context) {
+                if (usersSnapshot == null) {
+                  return const CircularProgressIndicator();
+                }
+                final docs = usersSnapshot.docs;
+                final count =
+                    docs.where((doc) => doc['status'] == 'pending').length;
+                return Column(
                   children: [
-                    const SizedBox(width: 24), // Spacer to center the content
-                    const Spacer(),
-                    IconButton(
-                      onPressed: _loadData,
-                      icon: const Icon(Icons.refresh, size: 16),
-                      tooltip: 'Refresh',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                  ],
-                ),
-
-                // Icon
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.pending_actions,
-                    size: 24,
-                    color: Colors.orangeAccent,
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Number
-                _isLoading
-                    ? const CircularProgressIndicator()
-                    : Text(
-                      '$_pendingCount',
+                    Text(
+                      '$count',
                       style: const TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
                         color: Colors.black87,
                       ),
                     ),
-                const SizedBox(height: 8),
-
-                // Title
-                const Text(
-                  'Pending User Registrations',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // Status indicator
-                if (!_isLoading && _pendingCount > 0) ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Pending User Registrations',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                    decoration: BoxDecoration(
-                      color: Colors.orangeAccent.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.warning_amber,
-                          size: 12,
-                          color: Colors.orangeAccent,
+                    const SizedBox(height: 12),
+                    if (count > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
                         ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Need admin verification',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.orangeAccent[700],
-                            fontWeight: FontWeight.w500,
-                          ),
+                        decoration: BoxDecoration(
+                          color: Colors.orangeAccent.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(6),
                         ),
-                      ],
-                    ),
-                  ),
-                ],
-              ],
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.warning_amber,
+                              size: 12,
+                              color: Colors.orangeAccent,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Need admin verification',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.orangeAccent[700],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -279,7 +265,18 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
 
     if (confirmed == true) {
       try {
-        await UserStore.updateUserStatus(user['id'], 'approved');
+        await UserStore.updateUserStatus(user['id'], 'active');
+
+        // Log activity
+        await FirebaseFirestore.instance.collection('activities').add({
+          'action': 'Accepted user',
+          'user': user['name'],
+          'type': 'accept',
+          'color': Colors.green.value,
+          'icon': Icons.person_add.codePoint,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+
         setState(() {
           _pendingUsers.removeWhere((u) => u['id'] == user['id']);
           _filteredUsers.removeWhere((u) => u['id'] == user['id']);
@@ -329,6 +326,17 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
     if (confirmed == true) {
       try {
         await UserStore.deleteUser(user['id']);
+
+        // Log activity
+        await FirebaseFirestore.instance.collection('activities').add({
+          'action': 'Rejected user registration',
+          'user': user['name'],
+          'type': 'delete',
+          'color': Colors.red.value,
+          'icon': Icons.block.codePoint,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+
         setState(() {
           _pendingUsers.removeWhere((u) => u['id'] == user['id']);
           _filteredUsers.removeWhere((u) => u['id'] == user['id']);
@@ -377,7 +385,17 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
     if (confirmed == true) {
       try {
         for (final user in _filteredUsers) {
-          await UserStore.updateUserStatus(user['id'], 'approved');
+          await UserStore.updateUserStatus(user['id'], 'active');
+
+          // Log activity for each user
+          await FirebaseFirestore.instance.collection('activities').add({
+            'action': 'Accepted user',
+            'user': user['name'],
+            'type': 'accept',
+            'color': Colors.green.value,
+            'icon': Icons.person_add.codePoint,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
         }
         setState(() {
           _pendingUsers.clear();
@@ -428,6 +446,16 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
       try {
         for (final user in _filteredUsers) {
           await UserStore.deleteUser(user['id']);
+
+          // Log activity for each user
+          await FirebaseFirestore.instance.collection('activities').add({
+            'action': 'Rejected user registration',
+            'user': user['name'],
+            'type': 'delete',
+            'color': Colors.red.value,
+            'icon': Icons.block.codePoint,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
         }
         setState(() {
           _pendingUsers.clear();

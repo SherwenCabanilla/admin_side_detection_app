@@ -125,7 +125,7 @@ class _UserManagementState extends State<UserManagement> {
                       border: OutlineInputBorder(),
                     ),
                     items:
-                        ['pending', 'active', 'suspended']
+                        ['pending', 'active']
                             .map(
                               (status) => DropdownMenuItem(
                                 value: status,

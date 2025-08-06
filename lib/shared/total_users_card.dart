@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../models/user_store.dart';
 import '../services/scan_requests_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:provider/provider.dart';
+import '../screens/admin_dashboard.dart';
 
 class TotalUsersCard extends StatefulWidget {
   final VoidCallback? onTap;
@@ -33,7 +36,7 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
   bool _isLoading = true;
   bool _showBoundingBoxes =
       false; // Toggle for bounding boxes visibility (default disabled)
-  bool _isHovered = false;
+  final ValueNotifier<bool> _isHovered = ValueNotifier(false);
 
   String _fixDiseaseName(String disease) {
     // Fix common spelling issues
@@ -346,121 +349,131 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
   @override
   Widget build(BuildContext context) {
     final isClickable = widget.onTap != null;
+    final ScanRequestsSnapshot? scanRequestsProvider =
+        Provider.of<ScanRequestsSnapshot?>(context);
+    final QuerySnapshot? scanRequestsSnapshot = scanRequestsProvider?.snapshot;
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
+      onEnter: (_) => _isHovered.value = true,
+      onExit: (_) => _isHovered.value = false,
       cursor: isClickable ? SystemMouseCursors.click : MouseCursor.defer,
-      child: Card(
-        elevation: _isHovered && isClickable ? 8 : 2,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: InkWell(
-          onTap: widget.onTap ?? () => _showReportsModal(context),
-          borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _isHovered,
+        builder: (context, isHovered, child) {
+          return Card(
+            elevation: isHovered && isClickable ? 8 : 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: InkWell(
+              onTap: widget.onTap ?? () => _showReportsModal(context),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: child, // Use the child below
+              ),
+            ),
+          );
+        },
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Header (no refresh button)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Header with refresh button
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                const SizedBox(width: 24), // Spacer to center the content
+                const Spacer(),
+              ],
+            ),
+            // Icon
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.assignment_turned_in,
+                size: 24,
+                color: Colors.green,
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Number (real-time count)
+            Builder(
+              builder: (context) {
+                if (scanRequestsSnapshot == null) {
+                  return const CircularProgressIndicator();
+                }
+                final docs = scanRequestsSnapshot.docs;
+                final completedReports =
+                    docs.where((doc) => doc['status'] == 'completed').length;
+                final pendingReports =
+                    docs.where((doc) => doc['status'] == 'pending').length;
+                return Column(
                   children: [
-                    const SizedBox(width: 24), // Spacer to center the content
-                    const Spacer(),
-                    IconButton(
-                      onPressed: _loadData,
-                      icon: const Icon(Icons.refresh, size: 16),
-                      tooltip: 'Refresh',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                  ],
-                ),
-
-                // Icon
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.assignment_turned_in,
-                    size: 24,
-                    color: Colors.green,
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Number
-                _isLoading
-                    ? const CircularProgressIndicator()
-                    : Text(
-                      '${widget.totalReports}',
+                    Text(
+                      '$completedReports',
                       style: const TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
                         color: Colors.black87,
                       ),
                     ),
-                const SizedBox(height: 8),
-
-                // Title
-                const Text(
-                  'Total Reports Reviewed',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // Breakdown
-                if (!_isLoading) ...[
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          color: Colors.green,
-                          shape: BoxShape.circle,
-                        ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Total Reports Reviewed',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey,
+                        fontWeight: FontWeight.w500,
                       ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '$_completedReports Completed',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.green,
+                            shape: BoxShape.circle,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          color: Colors.orange,
-                          shape: BoxShape.circle,
+                        const SizedBox(width: 6),
+                        Text(
+                          '$completedReports Completed',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '$_pendingReports Pending Review',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
+                        const SizedBox(width: 12),
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.orange,
+                            shape: BoxShape.circle,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
+                        const SizedBox(width: 6),
+                        Text(
+                          '$pendingReports Pending Review',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -2592,152 +2605,136 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
 }
 
 class _TotalUsersCardState extends State<TotalUsersCard> {
-  int _totalUsers = 0;
-  int _pendingUsers = 0;
-  bool _isLoading = true;
-  bool _isHovered = false;
+  final ValueNotifier<bool> _isHovered = ValueNotifier(false);
 
   @override
-  void initState() {
-    super.initState();
-    _loadData();
-  }
-
-  Future<void> _loadData() async {
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      final totalUsers = await UserStore.getTotalUsersCount();
-      final pendingUsers = await UserStore.getPendingUsersCount();
-
-      setState(() {
-        _totalUsers = totalUsers;
-        _pendingUsers = pendingUsers;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-    }
+  void dispose() {
+    _isHovered.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final isClickable = widget.onTap != null;
+    final UsersSnapshot? usersProvider = Provider.of<UsersSnapshot?>(context);
+    final QuerySnapshot? usersSnapshot = usersProvider?.snapshot;
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
+      onEnter: (_) => _isHovered.value = true,
+      onExit: (_) => _isHovered.value = false,
       cursor: isClickable ? SystemMouseCursors.click : MouseCursor.defer,
-      child: Card(
-        elevation: _isHovered && isClickable ? 8 : 2,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: InkWell(
-          onTap: widget.onTap,
-          borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _isHovered,
+        builder: (context, isHovered, child) {
+          return Card(
+            elevation: isHovered && isClickable ? 8 : 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: InkWell(
+              onTap: widget.onTap,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: child, // Use the child below
+              ),
+            ),
+          );
+        },
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Header (no refresh button)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Header with refresh button
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                const SizedBox(width: 24), // Spacer to center the content
+                const Spacer(),
+              ],
+            ),
+            // Icon
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.people, size: 24, color: Colors.blue),
+            ),
+            const SizedBox(height: 16),
+            // Number (real-time count)
+            Builder(
+              builder: (context) {
+                if (usersSnapshot == null) {
+                  return const CircularProgressIndicator();
+                }
+                final docs = usersSnapshot.docs;
+                final totalUsers = docs.length;
+                final pendingUsers =
+                    docs.where((doc) => doc['status'] == 'pending').length;
+                return Column(
                   children: [
-                    const SizedBox(width: 24), // Spacer to center the content
-                    const Spacer(),
-                    IconButton(
-                      onPressed: _loadData,
-                      icon: const Icon(Icons.refresh, size: 16),
-                      tooltip: 'Refresh',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                  ],
-                ),
-
-                // Icon
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.people, size: 24, color: Colors.blue),
-                ),
-                const SizedBox(height: 16),
-
-                // Number
-                _isLoading
-                    ? const CircularProgressIndicator()
-                    : Text(
-                      '$_totalUsers',
+                    Text(
+                      '$totalUsers',
                       style: const TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
                         color: Colors.black87,
                       ),
                     ),
-                const SizedBox(height: 8),
-
-                // Title
-                const Text(
-                  'Total Users',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // Breakdown
-                if (!_isLoading) ...[
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          color: Colors.green,
-                          shape: BoxShape.circle,
-                        ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Total Users',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey,
+                        fontWeight: FontWeight.w500,
                       ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '${_totalUsers - _pendingUsers} Active',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.green,
+                            shape: BoxShape.circle,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          color: Colors.orange,
-                          shape: BoxShape.circle,
+                        const SizedBox(width: 6),
+                        Text(
+                          '${totalUsers - pendingUsers} Active',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '$_pendingUsers Pending',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
+                        const SizedBox(width: 12),
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.orange,
+                            shape: BoxShape.circle,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
+                        const SizedBox(width: 6),
+                        Text(
+                          '$pendingUsers Pending',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
             ),
-          ),
+          ],
         ),
       ),
     );
