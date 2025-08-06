@@ -96,6 +96,34 @@ class _AdminDashboardState extends State<AdminDashboard>
     }
   }
 
+  // Helper function to get IconData from icon code
+  IconData _getIconFromCode(int iconCode) {
+    switch (iconCode) {
+      case 0xe3c9: // Icons.person_add.codePoint
+        return Icons.person_add;
+      case 0xe14b: // Icons.block.codePoint
+        return Icons.block;
+      case 0xe3c7: // Icons.verified_user.codePoint
+        return Icons.verified_user;
+      case 0xe3c8: // Icons.edit.codePoint
+        return Icons.edit;
+      case 0xe872: // Icons.delete.codePoint
+        return Icons.delete;
+      case 0xe3c6: // Icons.person.codePoint
+        return Icons.person;
+      case 0xe3c5: // Icons.pending_actions.codePoint
+        return Icons.pending_actions;
+      case 0xe3c4: // Icons.assignment_turned_in.codePoint
+        return Icons.assignment_turned_in;
+      case 0xe3c3: // Icons.timer.codePoint
+        return Icons.timer;
+      case 0xe3c2: // Icons.warning_amber.codePoint
+        return Icons.warning_amber;
+      default:
+        return Icons.info; // Default icon
+    }
+  }
+
   // Remove the hardcoded activities list
   // List<Map<String, dynamic>> activities = [
   //   {
@@ -385,10 +413,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                                 leading: CircleAvatar(
                                   backgroundColor: Color(data['color']),
                                   child: Icon(
-                                    IconData(
-                                      data['icon'],
-                                      fontFamily: 'MaterialIcons',
-                                    ),
+                                    _getIconFromCode(data['icon'] as int),
                                     color: Colors.white,
                                   ),
                                 ),

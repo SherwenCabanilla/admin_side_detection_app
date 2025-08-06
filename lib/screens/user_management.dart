@@ -72,7 +72,7 @@ class _UserManagementState extends State<UserManagement> {
     String selectedRole = user['role'];
 
     // Create a list of all possible roles, including the current user's role
-    final allRoles = ['user', 'expert', 'admin', 'farmer'];
+    final allRoles = ['expert', 'farmer'];
     if (!allRoles.contains(selectedRole)) {
       allRoles.add(selectedRole);
     }
