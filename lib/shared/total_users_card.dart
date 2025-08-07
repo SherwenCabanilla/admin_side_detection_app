@@ -569,9 +569,19 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
   Future<List<Map<String, dynamic>>> _getCompletedReports() async {
     try {
       final allReports = await ScanRequestsService.getScanRequests();
-      return allReports
-          .where((report) => report['status'] == 'completed')
-          .toList();
+      final completedReports =
+          allReports
+              .where((report) => report['status'] == 'completed')
+              .toList();
+
+      // Sort by createdAt date in descending order (most recent first)
+      completedReports.sort((a, b) {
+        final aDate = _parseDate(a['createdAt']);
+        final bDate = _parseDate(b['createdAt']);
+        return bDate.compareTo(aDate); // Descending order
+      });
+
+      return completedReports;
     } catch (e) {
       print('Error getting completed reports: $e');
       return [];
@@ -581,12 +591,30 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
   Future<List<Map<String, dynamic>>> _getPendingReports() async {
     try {
       final allReports = await ScanRequestsService.getScanRequests();
-      return allReports
-          .where((report) => report['status'] == 'pending')
-          .toList();
+      final pendingReports =
+          allReports.where((report) => report['status'] == 'pending').toList();
+
+      // Sort by createdAt date in descending order (most recent first)
+      pendingReports.sort((a, b) {
+        final aDate = _parseDate(a['createdAt']);
+        final bDate = _parseDate(b['createdAt']);
+        return bDate.compareTo(aDate); // Descending order
+      });
+
+      return pendingReports;
     } catch (e) {
       print('Error getting pending reports: $e');
       return [];
+    }
+  }
+
+  DateTime _parseDate(dynamic date) {
+    if (date is Timestamp) {
+      return date.toDate();
+    } else if (date is String) {
+      return DateTime.tryParse(date) ?? DateTime.now();
+    } else {
+      return DateTime.now();
     }
   }
 
@@ -1624,9 +1652,19 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
   Future<List<Map<String, dynamic>>> _getCompletedReports() async {
     try {
       final allReports = await ScanRequestsService.getScanRequests();
-      return allReports
-          .where((report) => report['status'] == 'completed')
-          .toList();
+      final completedReports =
+          allReports
+              .where((report) => report['status'] == 'completed')
+              .toList();
+
+      // Sort by createdAt date in descending order (most recent first)
+      completedReports.sort((a, b) {
+        final aDate = _parseDate(a['createdAt']);
+        final bDate = _parseDate(b['createdAt']);
+        return bDate.compareTo(aDate); // Descending order
+      });
+
+      return completedReports;
     } catch (e) {
       print('Error getting completed reports: $e');
       return [];
@@ -1636,12 +1674,30 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
   Future<List<Map<String, dynamic>>> _getPendingReports() async {
     try {
       final allReports = await ScanRequestsService.getScanRequests();
-      return allReports
-          .where((report) => report['status'] == 'pending')
-          .toList();
+      final pendingReports =
+          allReports.where((report) => report['status'] == 'pending').toList();
+
+      // Sort by createdAt date in descending order (most recent first)
+      pendingReports.sort((a, b) {
+        final aDate = _parseDate(a['createdAt']);
+        final bDate = _parseDate(b['createdAt']);
+        return bDate.compareTo(aDate); // Descending order
+      });
+
+      return pendingReports;
     } catch (e) {
       print('Error getting pending reports: $e');
       return [];
+    }
+  }
+
+  DateTime _parseDate(dynamic date) {
+    if (date is Timestamp) {
+      return date.toDate();
+    } else if (date is String) {
+      return DateTime.tryParse(date) ?? DateTime.now();
+    } else {
+      return DateTime.now();
     }
   }
 

@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'reports_list.dart';
 import '../shared/total_users_card.dart';
 import '../shared/pending_approvals_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/scan_requests_service.dart';
-import '../utils/sample_data_generator.dart';
+import 'admin_dashboard.dart' show ScanRequestsSnapshot;
+import 'package:provider/provider.dart';
+import '../models/user_store.dart';
 
 class Reports extends StatefulWidget {
   final VoidCallback? onGoToUsers;
@@ -31,27 +32,73 @@ class _ReportsState extends State<Reports> {
   List<Map<String, dynamic>> _reportsTrend = [];
   List<Map<String, dynamic>> _diseaseStats = [];
 
-  Color _getDiseaseColor(String disease) {
-    switch (disease.toLowerCase()) {
-      case 'anthracnose':
-        return Colors.orange;
-      case 'bacterial blackspot':
-        return Colors.purple;
-      case 'powdery mildew':
-        return const Color.fromARGB(255, 9, 46, 2);
-      case 'dieback':
-        return Colors.red;
-      case 'healthy':
-        return const Color.fromARGB(255, 2, 119, 252);
-      default:
-        return Colors.grey;
-    }
-  }
-
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _updateStatsFromSnapshot();
+  }
+
+  void _updateStatsFromSnapshot() async {
+    final scanRequestsProvider = Provider.of<ScanRequestsSnapshot?>(context);
+    final snapshot = scanRequestsProvider?.snapshot;
+    if (snapshot == null) return;
+    final scanRequests =
+        snapshot.docs.map((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          return {
+            'id': doc.id,
+            'userId': data['userId'] ?? '',
+            'userName': data['userName'] ?? '',
+            'status': data['status'] ?? 'pending',
+            'createdAt': data['submittedAt'] ?? data['createdAt'],
+            'reviewedAt': data['reviewedAt'],
+            'images': data['images'] ?? [],
+            'diseaseSummary': data['diseaseSummary'] ?? [],
+            'expertReview': data['expertReview'],
+          };
+        }).toList();
+    final filteredRequests = ScanRequestsService.filterByTimeRange(
+      scanRequests,
+      _selectedTimeRange,
+    );
+    int totalResponseTime = 0;
+    int completedRequests = 0;
+    for (final request in filteredRequests) {
+      if (request['status'] == 'completed' &&
+          request['createdAt'] != null &&
+          request['reviewedAt'] != null) {
+        DateTime createdAt, reviewedAt;
+        if (request['createdAt'] is Timestamp) {
+          createdAt = request['createdAt'].toDate();
+        } else if (request['createdAt'] is String) {
+          createdAt = DateTime.tryParse(request['createdAt']) ?? DateTime.now();
+        } else {
+          createdAt = DateTime.now();
+        }
+        if (request['reviewedAt'] is Timestamp) {
+          reviewedAt = request['reviewedAt'].toDate();
+        } else {
+          reviewedAt =
+              DateTime.tryParse(request['reviewedAt']) ?? DateTime.now();
+        }
+        final difference = reviewedAt.difference(createdAt);
+        totalResponseTime += difference.inHours;
+        completedRequests++;
+      }
+    }
+    final averageResponseTime =
+        completedRequests == 0
+            ? '0 hours'
+            : '${(totalResponseTime / completedRequests).toStringAsFixed(2)} hours';
+    setState(() {
+      _stats['averageResponseTime'] = averageResponseTime;
+    });
   }
 
   Future<void> _loadData() async {
@@ -61,7 +108,7 @@ class _ReportsState extends State<Reports> {
 
     try {
       // Load data in parallel
-      final futures = await Future.wait([
+      await Future.wait([
         _loadStats(),
         _loadReportsTrend(),
         _loadDiseaseStats(),
@@ -85,7 +132,7 @@ class _ReportsState extends State<Reports> {
       final pendingReports = await ScanRequestsService.getPendingReportsCount();
       final averageResponseTime =
           await ScanRequestsService.getAverageResponseTime(
-            timeRange: _selectedTimeRange,
+            timeRange: 'Last 7 Days', // Always use 'Last 7 Days' for the card
           );
 
       setState(() {
@@ -297,8 +344,6 @@ class _ReportsState extends State<Reports> {
     String value,
     IconData icon,
     Color color, {
-    double? percentChange,
-    bool? isUp,
     VoidCallback? onTap,
   }) {
     return Card(
@@ -351,19 +396,61 @@ class _ReportsState extends State<Reports> {
     );
   }
 
-  void _showReportsTrendDialog(BuildContext context) {
-    showDialog(context: context, builder: (context) => ReportsTrendDialog());
-  }
-
   void _showAvgResponseTimeModal(BuildContext context) {
+    final scanRequestsProvider = Provider.of<ScanRequestsSnapshot?>(
+      context,
+      listen: false,
+    );
+    final snapshot = scanRequestsProvider?.snapshot;
+    final scanRequests =
+        snapshot != null
+            ? snapshot.docs
+                .map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  return {
+                    'id': doc.id,
+                    'status': data['status'] ?? 'pending',
+                    'createdAt': data['submittedAt'] ?? data['createdAt'],
+                    'reviewedAt': data['reviewedAt'],
+                    'expertReview': data['expertReview'],
+                    'expertUid': data['expertUid'],
+                    'expertId': data['expertId'],
+                    'expertName': data['expertName'],
+                  };
+                })
+                .toList()
+                .cast<Map<String, dynamic>>()
+            : <Map<String, dynamic>>[];
     showDialog(
       context: context,
-      builder: (context) => const AvgResponseTimeModal(),
+      builder:
+          (context) => AvgResponseTimeModal(
+            scanRequests: scanRequests,
+            onTimeRangeChanged: (String newTimeRange) {
+              // Update the card's time range when modal dropdown changes
+              _updateAvgResponseTimeForRange(newTimeRange);
+            },
+          ),
     );
   }
 
-  void _showReportsModal(BuildContext context) {
-    // No longer used, or can be removed if not referenced elsewhere
+  void _updateAvgResponseTimeForRange(String timeRange) async {
+    print('=== CARD UPDATE DEBUG ===');
+    print('Updating card for time range: $timeRange');
+    try {
+      final averageResponseTime =
+          await ScanRequestsService.getAverageResponseTime(
+            timeRange: timeRange,
+          );
+      print('Card received average response time: $averageResponseTime');
+      setState(() {
+        _stats['averageResponseTime'] = averageResponseTime;
+      });
+      print('Card updated with new value: ${_stats['averageResponseTime']}');
+    } catch (e) {
+      print('Error updating avg response time: $e');
+    }
+    print('=== END CARD UPDATE DEBUG ===');
   }
 }
 
@@ -1792,7 +1879,13 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
 }
 
 class AvgResponseTimeModal extends StatefulWidget {
-  const AvgResponseTimeModal({Key? key}) : super(key: key);
+  final List<Map<String, dynamic>> scanRequests;
+  final Function(String)? onTimeRangeChanged;
+  const AvgResponseTimeModal({
+    Key? key,
+    required this.scanRequests,
+    this.onTimeRangeChanged,
+  }) : super(key: key);
 
   @override
   State<AvgResponseTimeModal> createState() => _AvgResponseTimeModalState();
@@ -1800,95 +1893,125 @@ class AvgResponseTimeModal extends StatefulWidget {
 
 class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
   String _selectedRange = 'Last 7 Days';
+  bool _loading = true;
+  List<_ExpertResponseStats> _expertStats = [];
 
-  // Hardcoded mock data for each range
-  final Map<String, List<String>> _labelsData = {
-    '1 Day': ['May 1'],
-    'Last 7 Days': [
-      'Apr 25',
-      'Apr 26',
-      'Apr 27',
-      'Apr 28',
-      'Apr 29',
-      'Apr 30',
-      'May 1',
-    ],
-    'Last 30 Days': [for (int i = 2; i <= 30; i++) 'Apr $i'] + ['May 1'],
-    'Last 60 Days':
-        [for (int i = 3; i <= 31; i++) 'Mar $i'] +
-        [for (int i = 1; i <= 29; i++) 'Apr $i'] +
-        ['Apr 30'],
-    'Last 90 Days':
-        [for (int i = 1; i <= 31; i++) 'Feb $i'] +
-        [for (int i = 1; i <= 31; i++) 'Mar $i'] +
-        [for (int i = 1; i <= 28; i++) 'Apr $i'],
-    'Last Year': [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ],
-  };
-  final Map<String, List<double>> _responseTimesData = {
-    '1 Day': [2.1],
-    'Last 7 Days': [2.5, 2.2, 2.8, 2.0, 2.7, 2.4, 2.1],
-    'Last 30 Days': List.generate(30, (i) => 1.5 + (i % 7) * 0.2),
-    'Last 60 Days': List.generate(60, (i) => 1.2 + (i % 10) * 0.15),
-    'Last 90 Days': List.generate(90, (i) => 1.0 + (i % 15) * 0.1),
-    'Last Year': [2.5, 2.3, 2.1, 2.0, 1.9, 1.8, 1.7, 1.8, 1.9, 2.0, 2.2, 2.4],
-  };
-  final Map<String, List<int>> _distributionData = {
-    // <1h, 1-4h, 4-24h, >24h
-    '1 Day': [2, 5, 1, 0],
-    'Last 7 Days': [10, 30, 8, 2],
-    'Last 30 Days': [40, 120, 30, 10],
-    'Last 60 Days': [80, 220, 60, 20],
-    'Last 90 Days': [120, 320, 90, 30],
-    'Last Year': [500, 1800, 400, 100],
-  };
+  @override
+  void initState() {
+    super.initState();
+    print('[DEBUG] AvgResponseTimeModal initState called');
+    _loadExpertStats();
+  }
+
+  Future<void> _loadExpertStats() async {
+    setState(() {
+      _loading = true;
+    });
+    final scanRequests = widget.scanRequests;
+    final filteredRequests = ScanRequestsService.filterByTimeRange(
+      scanRequests,
+      _selectedRange,
+    );
+    final Map<String, List<Map<String, dynamic>>> expertGroups = {};
+    for (final req in filteredRequests) {
+      if (req['status'] == 'completed') {
+        final expertId =
+            req['expertReview']?['expertId'] ??
+            req['expertUid'] ??
+            req['expertId'];
+        print(
+          '[DEBUG] For request \'${req['id']}\', found expertId: $expertId',
+        );
+        if (expertId != null &&
+            req['createdAt'] != null &&
+            req['reviewedAt'] != null) {
+          expertGroups.putIfAbsent(expertId, () => []).add(req);
+        } else {
+          print(
+            '[DEBUG] Skipped completed request (no expertId): ${req['id']} expertReview=${req['expertReview']} expertUid=${req['expertUid']}',
+          );
+        }
+      }
+    }
+    print('[DEBUG] expertGroups keys: \'${expertGroups.keys.toList()}\'');
+    final users = await UserStore.getUsers();
+    final experts = {
+      for (var u in users)
+        if (u['role'] == 'expert') u['userId']: u,
+    };
+    final List<_ExpertResponseStats> stats = [];
+    for (final entry in expertGroups.entries) {
+      final expertId = entry.key;
+      final requests = entry.value;
+      final times = <double>[];
+      int totalSeconds = 0;
+      for (final req in requests) {
+        DateTime createdAt, reviewedAt;
+        if (req['createdAt'] is Timestamp) {
+          createdAt = req['createdAt'].toDate();
+        } else if (req['createdAt'] is String) {
+          createdAt = DateTime.tryParse(req['createdAt']) ?? DateTime.now();
+        } else {
+          createdAt = DateTime.now();
+        }
+        if (req['reviewedAt'] is Timestamp) {
+          reviewedAt = req['reviewedAt'].toDate();
+        } else {
+          reviewedAt = DateTime.tryParse(req['reviewedAt']) ?? DateTime.now();
+        }
+        final diff = reviewedAt.difference(createdAt);
+        final seconds = diff.inSeconds;
+        totalSeconds += seconds;
+        times.add(seconds.toDouble());
+      }
+      final avgSeconds = requests.isEmpty ? 0 : totalSeconds ~/ requests.length;
+      final expert = experts[expertId];
+      final firstReq = requests.isNotEmpty ? requests.first : null;
+      stats.add(
+        _ExpertResponseStats(
+          expertId: expertId,
+          name:
+              expert?['fullName'] ??
+              (firstReq?['expertReview']?['expertName'] ??
+                  firstReq?['expertName'] ??
+                  'Unknown'),
+          avatar: expert?['imageProfile'] ?? '',
+          avgSeconds: avgSeconds,
+          trend: times,
+        ),
+      );
+    }
+    print('[DEBUG] _expertStats to display:');
+    for (final s in stats) {
+      print(
+        '  expertId: \'${s.expertId}\', name: \'${s.name}\', avgSeconds: ${s.avgSeconds}, trend: ${s.trend}',
+      );
+    }
+    stats.sort((a, b) => a.avgSeconds.compareTo(b.avgSeconds));
+    setState(() {
+      _expertStats = stats;
+      _loading = false;
+    });
+  }
+
+  String _formatDuration(int seconds) {
+    final hr = seconds ~/ 3600;
+    final min = (seconds % 3600) ~/ 60;
+    final sec = seconds % 60;
+    if (hr > 0) {
+      return '${hr} hr ${min.toString().padLeft(2, '0')} min ${sec.toString().padLeft(2, '0')} sec';
+    } else if (min > 0) {
+      return '${min} min ${sec.toString().padLeft(2, '0')} sec';
+    } else {
+      return '${sec} sec';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    List<String> labels = _labelsData[_selectedRange]!;
-    List<double> responseTimes = _responseTimesData[_selectedRange]!;
-    List<int> distribution = _distributionData[_selectedRange]!;
-
-    // Aggregate by week for long ranges
-    List<String> displayLabels = labels;
-    List<double> displayResponseTimes = responseTimes;
-    if (_selectedRange == 'Last 30 Days' ||
-        _selectedRange == 'Last 60 Days' ||
-        _selectedRange == 'Last 90 Days') {
-      // Aggregate every 7 days
-      List<double> weeklyAverages = [];
-      List<String> weekLabels = [];
-      for (int i = 0; i < responseTimes.length; i += 7) {
-        int end = (i + 7 < responseTimes.length) ? i + 7 : responseTimes.length;
-        double avg =
-            responseTimes.sublist(i, end).reduce((a, b) => a + b) / (end - i);
-        weeklyAverages.add(double.parse(avg.toStringAsFixed(2)));
-        weekLabels.add('Wk ${(i ~/ 7) + 1}');
-      }
-      displayLabels = weekLabels;
-      displayResponseTimes = weeklyAverages;
-    }
-
-    // Find best/worst days
-    double minVal = displayResponseTimes.reduce((a, b) => a < b ? a : b);
-    double maxVal = displayResponseTimes.reduce((a, b) => a > b ? a : b);
-    int minIdx = displayResponseTimes.indexOf(minVal);
-    int maxIdx = displayResponseTimes.indexOf(maxVal);
-    String bestDay = displayLabels[minIdx];
-    String worstDay = displayLabels[maxIdx];
-
+    print(
+      '[DEBUG] AvgResponseTimeModal build called with _selectedRange: $_selectedRange',
+    );
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       child: Container(
@@ -1905,36 +2028,9 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Average Response Time',
-                      style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Detailed breakdown of response times',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.blueGrey,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Average response time within $_selectedRange: '
-                      '${displayResponseTimes.isNotEmpty ? (displayResponseTimes.reduce((a, b) => a + b) / displayResponseTimes.length).toStringAsFixed(2) : '-'} hours',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.teal,
-                      ),
-                    ),
-                  ],
+                const Text(
+                  'Average Response Time (per Expert)',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                 ),
                 Row(
                   children: [
@@ -1957,10 +2053,19 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                               )
                               .toList(),
                       onChanged: (value) {
+                        print('=== DROPDOWN ONCHANGED CALLED ===');
+                        print('Dropdown onChanged called with value: $value');
                         if (value != null) {
+                          print('=== MODAL DROPDOWN DEBUG ===');
+                          print('Modal dropdown changed to: $value');
                           setState(() {
                             _selectedRange = value;
                           });
+                          print('Calling onTimeRangeChanged callback...');
+                          widget.onTimeRangeChanged?.call(value);
+                          print('Callback called, now loading expert stats...');
+                          _loadExpertStats();
+                          print('=== END MODAL DROPDOWN DEBUG ===');
                         }
                       },
                     ),
@@ -1973,324 +2078,136 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
               ],
             ),
             const SizedBox(height: 24),
-            // Trend Chart
-            Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 24, 24, 35),
-                child: SizedBox(
-                  height: 220,
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 12.0),
-                    child: LineChart(
-                      LineChartData(
-                        gridData: FlGridData(
-                          show: true,
-                          drawVerticalLine: true,
-                          horizontalInterval: 0.5,
-                          verticalInterval: 1,
-                          getDrawingHorizontalLine:
-                              (value) => FlLine(
-                                color: Colors.grey[200],
-                                strokeWidth: 1,
-                              ),
-                          getDrawingVerticalLine:
-                              (value) => FlLine(
-                                color: Colors.grey[200],
-                                strokeWidth: 1,
-                              ),
-                        ),
-                        titlesData: FlTitlesData(
-                          leftTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              reservedSize: 56,
-                              getTitlesWidget: (value, meta) {
-                                if (value % 1 == 0) {
-                                  return Text(
-                                    value.toStringAsFixed(1),
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.blueGrey,
-                                    ),
-                                  );
-                                }
-                                return const SizedBox.shrink();
-                              },
-                              interval: 0.5,
-                            ),
-                          ),
-                          bottomTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              reservedSize: 40,
-                              getTitlesWidget: (value, meta) {
-                                final idx = value.toInt();
-                                if (idx >= 0 && idx < displayLabels.length) {
-                                  return Padding(
-                                    padding: const EdgeInsets.only(top: 8.0),
-                                    child: Text(
-                                      displayLabels[idx],
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.blueGrey,
-                                      ),
-                                    ),
-                                  );
-                                }
-                                return const SizedBox.shrink();
-                              },
-                              interval: 1,
-                            ),
-                          ),
-                          rightTitles: AxisTitles(
-                            sideTitles: SideTitles(showTitles: false),
-                          ),
-                          topTitles: AxisTitles(
-                            sideTitles: SideTitles(showTitles: false),
-                          ),
-                        ),
-                        borderData: FlBorderData(
-                          show: true,
-                          border: Border.all(
-                            color: Colors.grey[300]!,
-                            width: 2,
-                          ),
-                        ),
-                        minX: 0,
-                        maxX: (displayLabels.length - 1).toDouble(),
-                        minY: 0,
-                        maxY:
-                            (displayResponseTimes.reduce(
-                                      (a, b) => a > b ? a : b,
-                                    ) *
-                                    1.2)
-                                .toDouble(),
-                        lineBarsData: [
-                          LineChartBarData(
-                            spots: [
-                              for (int i = 0; i < displayLabels.length; i++)
-                                FlSpot(i.toDouble(), displayResponseTimes[i]),
-                            ],
-                            isCurved: true,
-                            color: Colors.teal,
-                            barWidth: 6,
-                            belowBarData: BarAreaData(
-                              show: true,
-                              gradient: LinearGradient(
-                                colors: [
-                                  Colors.teal.withOpacity(0.3),
-                                  Colors.teal.withOpacity(0.05),
-                                ],
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                              ),
-                            ),
-                            dotData: FlDotData(
-                              show: true,
-                              getDotPainter:
-                                  (spot, percent, bar, index) =>
-                                      FlDotCirclePainter(
-                                        radius: 7,
-                                        color: Colors.white,
-                                        strokeWidth: 4,
-                                        strokeColor: Colors.teal,
-                                      ),
+            _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _expertStats.isEmpty
+                ? const Text('No data available for this range.')
+                : Row(
+                  children: [
+                    Expanded(
+                      child: DataTable(
+                        columnSpacing: 8, // minimal extra space
+                        columns: const [
+                          DataColumn(label: Text('Expert')),
+                          DataColumn(label: Text('Avg. Response Time')),
+                          DataColumn(
+                            label: Align(
+                              alignment: Alignment.center,
+                              child: Text('Trend'),
                             ),
                           ),
                         ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            // Distribution Histogram
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Response Time Distribution',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      height: 120,
-                      child: BarChart(
-                        BarChartData(
-                          alignment: BarChartAlignment.spaceAround,
-                          maxY:
-                              (distribution.reduce((a, b) => a > b ? a : b) *
-                                      1.2)
-                                  .toDouble(),
-                          barGroups: [
-                            for (int i = 0; i < 4; i++)
-                              BarChartGroupData(
-                                x: i,
-                                barRods: [
-                                  BarChartRodData(
-                                    toY: distribution[i].toDouble(),
-                                    color: Colors.teal,
-                                    width: 32,
-                                    borderRadius: const BorderRadius.vertical(
-                                      top: Radius.circular(8),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                          ],
-                          titlesData: FlTitlesData(
-                            leftTitles: AxisTitles(
-                              sideTitles: SideTitles(
-                                showTitles: true,
-                                reservedSize: 32,
-                                getTitlesWidget: (value, meta) {
-                                  if (value % 10 == 0) {
-                                    return Text(
-                                      value.toInt().toString(),
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.blueGrey,
+                        rows:
+                            _expertStats
+                                .map(
+                                  (e) => DataRow(
+                                    cells: [
+                                      DataCell(
+                                        Row(
+                                          children: [
+                                            CircleAvatar(
+                                              backgroundImage:
+                                                  (e.avatar.isNotEmpty)
+                                                      ? NetworkImage(e.avatar)
+                                                      : null,
+                                              child:
+                                                  (e.avatar.isEmpty)
+                                                      ? const Icon(Icons.person)
+                                                      : null,
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Text(e.name),
+                                          ],
+                                        ),
                                       ),
-                                    );
-                                  }
-                                  return const SizedBox.shrink();
-                                },
-                              ),
-                            ),
-                            bottomTitles: AxisTitles(
-                              sideTitles: SideTitles(
-                                showTitles: true,
-                                getTitlesWidget: (value, meta) {
-                                  switch (value.toInt()) {
-                                    case 0:
-                                      return const Text(
-                                        '<1h',
-                                        style: TextStyle(fontSize: 14),
-                                      );
-                                    case 1:
-                                      return const Text(
-                                        '1-4h',
-                                        style: TextStyle(fontSize: 14),
-                                      );
-                                    case 2:
-                                      return const Text(
-                                        '4-24h',
-                                        style: TextStyle(fontSize: 14),
-                                      );
-                                    case 3:
-                                      return const Text(
-                                        '>24h',
-                                        style: TextStyle(fontSize: 14),
-                                      );
-                                    default:
-                                      return const SizedBox.shrink();
-                                  }
-                                },
-                              ),
-                            ),
-                            rightTitles: AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                            topTitles: AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                          ),
-                          borderData: FlBorderData(show: false),
-                          gridData: FlGridData(
-                            show: true,
-                            drawVerticalLine: false,
-                          ),
-                        ),
+                                      DataCell(
+                                        Text(_formatDuration(e.avgSeconds)),
+                                      ),
+                                      DataCell(
+                                        Align(
+                                          alignment: Alignment.centerRight,
+                                          child: SizedBox(
+                                            width: double.infinity,
+                                            height: 32,
+                                            child:
+                                                e.trend.length > 1
+                                                    ? CustomPaint(
+                                                      painter:
+                                                          _MiniTrendLinePainter(
+                                                            e.trend,
+                                                          ),
+                                                    )
+                                                    : const Text('-'),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                                .toList(),
                       ),
                     ),
                   ],
                 ),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
               ),
-            ),
-            const SizedBox(height: 24),
-            // Best/Worst Days
-            Row(
-              children: [
-                Expanded(
-                  child: Card(
-                    color: Colors.green[50],
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          const Text(
-                            'Fastest Day',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            '$bestDay',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              color: Colors.green,
-                            ),
-                          ),
-                          Text(
-                            '${minVal.toStringAsFixed(2)} hours',
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Card(
-                    color: Colors.red[50],
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          const Text(
-                            'Slowest Day',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            '$worstDay',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              color: Colors.red,
-                            ),
-                          ),
-                          Text(
-                            '${maxVal.toStringAsFixed(2)} hours',
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
             ),
           ],
         ),
       ),
     );
   }
+}
+
+class _ExpertResponseStats {
+  final String expertId;
+  final String name;
+  final String avatar;
+  final int avgSeconds;
+  final List<double> trend;
+  _ExpertResponseStats({
+    required this.expertId,
+    required this.name,
+    required this.avatar,
+    required this.avgSeconds,
+    required this.trend,
+  });
+}
+
+class _MiniTrendLinePainter extends CustomPainter {
+  final List<double> data;
+  _MiniTrendLinePainter(this.data);
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.length < 2) return;
+    final paint =
+        Paint()
+          ..color = Colors.teal
+          ..strokeWidth = 2
+          ..style = PaintingStyle.stroke;
+    final min = data.reduce((a, b) => a < b ? a : b);
+    final max = data.reduce((a, b) => a > b ? a : b);
+    final range = (max - min).abs() < 1e-2 ? 1.0 : (max - min);
+    final points = <Offset>[];
+    for (int i = 0; i < data.length; i++) {
+      final x = i * size.width / (data.length - 1);
+      final y = size.height - ((data[i] - min) / range * size.height);
+      points.add(Offset(x, y));
+    }
+    final path = Path()..moveTo(points[0].dx, points[0].dy);
+    for (final pt in points.skip(1)) {
+      path.lineTo(pt.dx, pt.dy);
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
 class GenerateReportDialog extends StatefulWidget {

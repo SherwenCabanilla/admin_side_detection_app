@@ -498,8 +498,6 @@ class _UserManagementState extends State<UserManagement> {
         return Colors.green;
       case 'pending':
         return Colors.orange;
-      case 'suspended':
-        return Colors.red;
       default:
         return Colors.grey;
     }

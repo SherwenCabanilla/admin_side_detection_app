@@ -44,7 +44,7 @@ class ScanRequestsService {
       print('Total scan requests: ${scanRequests.length}');
 
       // Filter by time range
-      final filteredRequests = _filterByTimeRange(scanRequests, timeRange);
+      final filteredRequests = filterByTimeRange(scanRequests, timeRange);
       print('Filtered requests for $timeRange: ${filteredRequests.length}');
 
       // Debug: Print details of filtered requests
@@ -186,7 +186,7 @@ class ScanRequestsService {
       final scanRequests = await getScanRequests();
 
       // Filter by time range
-      final filteredRequests = _filterByTimeRange(scanRequests, timeRange);
+      final filteredRequests = filterByTimeRange(scanRequests, timeRange);
 
       // Group by date
       final Map<String, int> dailyCounts = {};
@@ -257,7 +257,7 @@ class ScanRequestsService {
   }
 
   // Helper method to filter requests by time range
-  static List<Map<String, dynamic>> _filterByTimeRange(
+  static List<Map<String, dynamic>> filterByTimeRange(
     List<Map<String, dynamic>> requests,
     String timeRange,
   ) {
@@ -451,15 +451,57 @@ class ScanRequestsService {
   }) async {
     try {
       final scanRequests = await getScanRequests();
-      final filteredRequests = _filterByTimeRange(scanRequests, timeRange);
+      final filteredRequests = filterByTimeRange(scanRequests, timeRange);
 
-      int totalResponseTime = 0;
-      int completedRequests = 0;
+      print('=== AVG RESPONSE TIME DEBUG ===');
+      print('Time Range: $timeRange');
+      print('Total scan requests: ${scanRequests.length}');
+      print('Filtered requests: ${filteredRequests.length}');
+
+      // Group requests by expert
+      final Map<String, List<Map<String, dynamic>>> expertGroups = {};
 
       for (final request in filteredRequests) {
         if (request['status'] == 'completed' &&
             request['createdAt'] != null &&
             request['reviewedAt'] != null) {
+          final expertId =
+              request['expertReview']?['expertUid'] ??
+              request['expertUid'] ??
+              request['expertId'];
+
+          print('Request ${request['id']}: expertId = $expertId');
+          print('  expertReview: ${request['expertReview']}');
+          print('  expertUid: ${request['expertUid']}');
+          print('  expertId: ${request['expertId']}');
+
+          if (expertId != null) {
+            expertGroups.putIfAbsent(expertId, () => []).add(request);
+          }
+        }
+      }
+
+      print('Expert groups: ${expertGroups.keys.toList()}');
+      print('Number of experts: ${expertGroups.length}');
+
+      if (expertGroups.isEmpty) {
+        print('No expert groups found, returning 0 hours');
+        return '0 hours';
+      }
+
+      // Calculate average response time for each expert
+      final List<double> expertAverages = [];
+
+      for (final entry in expertGroups.entries) {
+        final expertId = entry.key;
+        final expertRequests = entry.value;
+        int totalSeconds = 0;
+
+        print(
+          'Processing expert $expertId with ${expertRequests.length} requests',
+        );
+
+        for (final request in expertRequests) {
           DateTime createdAt, reviewedAt;
 
           if (request['createdAt'] is Timestamp) {
@@ -479,15 +521,39 @@ class ScanRequestsService {
           }
 
           final difference = reviewedAt.difference(createdAt);
-          totalResponseTime += difference.inHours;
-          completedRequests++;
+          final seconds = difference.inSeconds;
+          totalSeconds += seconds;
+
+          print('  Request ${request['id']}: ${seconds} seconds');
         }
+
+        // Calculate average for this expert
+        final expertAverageSeconds = totalSeconds / expertRequests.length;
+        expertAverages.add(expertAverageSeconds);
+
+        print(
+          '  Expert $expertId average: ${expertAverageSeconds} seconds (${expertAverageSeconds / 60} minutes)',
+        );
       }
 
-      if (completedRequests == 0) return '0 hours';
+      // Calculate average of per-expert averages
+      final averageSeconds =
+          expertAverages.reduce((a, b) => a + b) / expertAverages.length;
+      final averageHours = averageSeconds / 3600; // Convert seconds to hours
 
-      final averageHours = totalResponseTime / completedRequests;
-      return '${averageHours.toStringAsFixed(2)} hours';
+      print('Final average: ${averageSeconds} seconds (${averageHours} hours)');
+      print('Expert averages: $expertAverages');
+      print('================================');
+
+      // Format the result appropriately
+      if (averageHours < 1) {
+        // Less than 1 hour, show in minutes
+        final minutes = averageSeconds / 60;
+        return '${minutes.toStringAsFixed(1)} minutes';
+      } else {
+        // 1 hour or more, show in hours
+        return '${averageHours.toStringAsFixed(2)} hours';
+      }
     } catch (e) {
       print('Error getting average response time: $e');
       return '0 hours';

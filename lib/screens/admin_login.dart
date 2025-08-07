@@ -24,9 +24,8 @@ class _AdminLoginState extends State<AdminLogin> {
   @override
   void initState() {
     super.initState();
-    // _emailController.text =
-    //    'cabanilla.sherwen@dnsc.edu.ph'; // Removed hard-coded email placeholder
-    _passwordController.text = ''; // Premade for dev
+    //  _emailController.text = 'cabanilla.sherwen@dnsc.edu.ph'; // Premade for dev
+    //  _passwordController.text = 'admin2'; // Premade for dev
     _initializeFirebase();
   }
 
@@ -47,21 +46,18 @@ class _AdminLoginState extends State<AdminLogin> {
         _errorMessage = null;
       });
       try {
-        // 1. Sign in with Firebase Auth
         UserCredential userCredential = await FirebaseAuth.instance
             .signInWithEmailAndPassword(
               email: _emailController.text.trim(),
               password: _passwordController.text.trim(),
             );
         String uid = userCredential.user!.uid;
-        // 2. Check if UID exists in 'admins' collection
         DocumentSnapshot adminDoc =
             await FirebaseFirestore.instance
                 .collection('admins')
                 .doc(uid)
                 .get();
         if (adminDoc.exists) {
-          // Create admin user object
           final adminUser = AdminUser(
             id: adminDoc['adminID'] ?? uid,
             username: adminDoc['adminName'] ?? '',
@@ -69,7 +65,6 @@ class _AdminLoginState extends State<AdminLogin> {
             role: 'admin',
             lastLogin: DateTime.now(),
           );
-          // Navigate to dashboard
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
@@ -105,7 +100,6 @@ class _AdminLoginState extends State<AdminLogin> {
       return;
     }
     try {
-      // 1. Check if email exists in admins collection
       final query =
           await FirebaseFirestore.instance
               .collection('admins')
@@ -120,16 +114,13 @@ class _AdminLoginState extends State<AdminLogin> {
         return;
       }
 
-      // 2. Send password reset email
       await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
       showDialog(
         context: context,
         builder:
             (context) => AlertDialog(
               title: const Text('Password Reset'),
-              content: Text(
-                'A password reset link has been sent to ' + email + '.',
-              ),
+              content: Text('A password reset link has been sent to $email.'),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
@@ -147,232 +138,377 @@ class _AdminLoginState extends State<AdminLogin> {
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final screenWidth = screenSize.width;
+    final screenHeight = screenSize.height;
+
+    // Responsive sizing optimized for 1366x768
+    final isSmallScreen = screenWidth < 600;
+    final isMediumScreen = screenWidth >= 600 && screenWidth < 1200;
+    final isLargeScreen = screenWidth >= 1200;
+    final is1366x768 = screenWidth == 1366 && screenHeight == 768;
+
+    // Adjusted dimensions to fit 1366x768 without scrolling
+    final cardWidth =
+        is1366x768
+            ? screenWidth *
+                0.28 // Smaller card for 1366x768
+            : isSmallScreen
+            ? screenWidth * 0.85
+            : isMediumScreen
+            ? screenWidth * 0.55
+            : screenWidth * 0.35;
+
+    final cardMaxWidth =
+        is1366x768
+            ? 380.0
+            : isLargeScreen
+            ? 450.0
+            : cardWidth;
+    final cardMinWidth =
+        is1366x768
+            ? 340.0
+            : isSmallScreen
+            ? 300.0
+            : 360.0;
+
+    final padding =
+        is1366x768
+            ? 8.0
+            : isSmallScreen
+            ? 12.0
+            : isMediumScreen
+            ? 20.0
+            : 28.0;
+    final iconSize =
+        is1366x768
+            ? 30.0
+            : isSmallScreen
+            ? 40.0
+            : isMediumScreen
+            ? 50.0
+            : 60.0;
+    final titleFontSize =
+        is1366x768
+            ? 16.0
+            : isSmallScreen
+            ? 20.0
+            : isMediumScreen
+            ? 24.0
+            : 28.0;
+    final welcomeFontSize =
+        is1366x768
+            ? 18.0
+            : isSmallScreen
+            ? 24.0
+            : isMediumScreen
+            ? 28.0
+            : 32.0;
+    final subtitleFontSize =
+        is1366x768
+            ? 10.0
+            : isSmallScreen
+            ? 12.0
+            : isMediumScreen
+            ? 14.0
+            : 16.0;
+    final buttonHeight =
+        is1366x768
+            ? 32.0
+            : isSmallScreen
+            ? 45.0
+            : 50.0;
+    final inputHeight =
+        is1366x768
+            ? 32.0
+            : isSmallScreen
+            ? 45.0
+            : 50.0;
+
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color.fromARGB(255, 42, 157, 50), // Bright green
-              Color.fromARGB(255, 34, 139, 34), // Forest green
-              Color.fromARGB(255, 25, 111, 61), // Dark green
-            ],
-            stops: [0.0, 0.5, 1.0],
+          image: DecorationImage(
+            image: AssetImage('assets/login-bg.jpg'),
+            fit: BoxFit.cover,
           ),
         ),
-        child: SafeArea(
-          child: Center(
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 400),
-              padding: const EdgeInsets.all(24),
-              child: Card(
-                elevation: 8,
-                color: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Form(
-                    key: _formKey,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Admin Icon and Title
-                        Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: const Color.fromARGB(255, 42, 157, 50),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.1),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color.fromARGB(255, 42, 157, 50).withOpacity(0.7),
+                const Color.fromARGB(255, 34, 139, 34).withOpacity(0.7),
+                const Color.fromARGB(255, 25, 111, 61).withOpacity(0.7),
+              ],
+              stops: const [0.0, 0.5, 1.0],
+            ),
+          ),
+          child: SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                // Added to ensure content fits
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxWidth: cardMaxWidth,
+                    minWidth: cardMinWidth,
+                  ),
+                  child: Card(
+                    elevation: 10,
+                    color: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Padding(
+                      padding: EdgeInsets.all(
+                        is1366x768 ? padding * 0.4 : padding,
+                      ),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Admin Icon and Title
+                            Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: const Color.fromARGB(255, 42, 157, 50),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.1),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              padding: EdgeInsets.all(padding * 0.2),
+                              child: Icon(
+                                Icons.admin_panel_settings,
+                                size: iconSize,
+                                color: Colors.white,
+                              ),
+                            ),
+                            SizedBox(height: padding * 0.2),
+                            Text(
+                              'Admin Portal',
+                              style: TextStyle(
+                                color: const Color.fromARGB(255, 42, 157, 50),
+                                fontSize: titleFontSize,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            SizedBox(
+                              height:
+                                  is1366x768 ? padding * 0.1 : padding * 1.5,
+                            ),
+                            // Welcome Text
+                            Text(
+                              'Welcome Back!',
+                              style: TextStyle(
+                                color: const Color.fromARGB(255, 42, 157, 50),
+                                fontSize: welcomeFontSize,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'Log in to admin dashboard',
+                              style: TextStyle(
+                                color: Colors.grey,
+                                fontSize: subtitleFontSize,
+                              ),
+                            ),
+                            SizedBox(
+                              height:
+                                  is1366x768 ? padding * 0.2 : padding * 1.5,
+                            ),
+                            // Email Field
+                            SizedBox(
+                              height: inputHeight,
+                              child: TextFormField(
+                                controller: _emailController,
+                                decoration: InputDecoration(
+                                  labelText: 'Email',
+                                  labelStyle: const TextStyle(
+                                    color: Colors.grey,
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(5),
+                                    borderSide: const BorderSide(
+                                      color: Colors.grey,
+                                      width: 1.0,
+                                    ),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(5),
+                                    borderSide: const BorderSide(
+                                      color: Color.fromARGB(255, 42, 157, 50),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  prefixIcon: const Icon(
+                                    Icons.email,
+                                    color: Colors.grey,
+                                    size: 16,
+                                  ),
+                                ),
+                                validator: (value) {
+                                  if (value == null || value.isEmpty) {
+                                    return 'Please enter your email';
+                                  }
+                                  if (!value.contains('@')) {
+                                    return 'Please enter a valid email';
+                                  }
+                                  return null;
+                                },
+                              ),
+                            ),
+                            SizedBox(
+                              height:
+                                  is1366x768 ? padding * 0.2 : padding * 0.5,
+                            ),
+                            // Password Field
+                            SizedBox(
+                              height: inputHeight,
+                              child: TextFormField(
+                                controller: _passwordController,
+                                obscureText: _obscurePassword,
+                                decoration: InputDecoration(
+                                  labelText: 'Password',
+                                  labelStyle: const TextStyle(
+                                    color: Colors.grey,
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(5),
+                                    borderSide: const BorderSide(
+                                      color: Colors.grey,
+                                      width: 1.0,
+                                    ),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(5),
+                                    borderSide: const BorderSide(
+                                      color: Color.fromARGB(255, 42, 157, 50),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  prefixIcon: const Icon(
+                                    Icons.lock,
+                                    color: Colors.grey,
+                                    size: 16,
+                                  ),
+                                  suffixIcon: IconButton(
+                                    icon: Icon(
+                                      _obscurePassword
+                                          ? Icons.visibility_off
+                                          : Icons.visibility,
+                                      color: Colors.grey,
+                                      size: 16,
+                                    ),
+                                    onPressed: () {
+                                      setState(() {
+                                        _obscurePassword = !_obscurePassword;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                validator: (value) {
+                                  if (value == null || value.isEmpty) {
+                                    return 'Please enter your password';
+                                  }
+                                  return null;
+                                },
+                              ),
+                            ),
+                            // Forgot Password Link
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed:
+                                    _isLoading ? null : _sendPasswordResetEmail,
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 0,
+                                  ),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                child: Text(
+                                  'Forgot Password?',
+                                  style: TextStyle(
+                                    color: const Color.fromARGB(
+                                      255,
+                                      42,
+                                      157,
+                                      50,
+                                    ),
+                                    fontSize: subtitleFontSize * 0.85,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (_errorMessage != null) ...[
+                              SizedBox(height: padding * 0.1),
+                              Text(
+                                _errorMessage!,
+                                style: const TextStyle(
+                                  color: Color(0xFFFFAB91),
+                                  fontSize: 10,
+                                ),
                               ),
                             ],
-                          ),
-                          padding: const EdgeInsets.all(12),
-                          child: const Icon(
-                            Icons.admin_panel_settings,
-                            size: 60,
-                            color: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Admin Portal',
-                          style: TextStyle(
-                            color: Color.fromARGB(255, 42, 157, 50),
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 50),
-                        // Welcome Text
-                        const Text(
-                          'Welcome Back!',
-                          style: TextStyle(
-                            color: Color.fromARGB(255, 42, 157, 50),
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const Text(
-                          'Log in to admin dashboard',
-                          style: TextStyle(color: Colors.grey, fontSize: 16),
-                        ),
-                        const SizedBox(height: 40),
-                        // Email Field (replace Username Field)
-                        TextFormField(
-                          controller: _emailController,
-                          decoration: InputDecoration(
-                            labelText: 'Email',
-                            labelStyle: const TextStyle(color: Colors.grey),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: Colors.grey),
+                            SizedBox(
+                              height:
+                                  is1366x768 ? padding * 0.2 : padding * 1.0,
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(
-                                color: Color.fromARGB(255, 42, 157, 50),
+                            // Login Button
+                            SizedBox(
+                              width: double.infinity,
+                              height: buttonHeight,
+                              child: ElevatedButton(
+                                onPressed: _isLoading ? null : _login,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color.fromARGB(
+                                    255,
+                                    42,
+                                    157,
+                                    50,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(5),
+                                  ),
+                                  elevation: 5,
+                                ),
+                                child:
+                                    _isLoading
+                                        ? const SizedBox(
+                                          width: 12,
+                                          height: 12,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            valueColor:
+                                                AlwaysStoppedAnimation<Color>(
+                                                  Colors.white,
+                                                ),
+                                          ),
+                                        )
+                                        : Text(
+                                          'Log in',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: subtitleFontSize,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
                               ),
                             ),
-                            prefixIcon: const Icon(
-                              Icons.email,
-                              color: Colors.grey,
-                            ),
-                          ),
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Please enter your email';
-                            }
-                            if (!value.contains('@')) {
-                              return 'Please enter a valid email';
-                            }
-                            return null;
-                          },
+                          ],
                         ),
-                        const SizedBox(height: 20),
-                        // Password Field
-                        TextFormField(
-                          controller: _passwordController,
-                          obscureText: _obscurePassword,
-                          decoration: InputDecoration(
-                            labelText: 'Password',
-                            labelStyle: const TextStyle(color: Colors.grey),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: Colors.grey),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(
-                                color: Color.fromARGB(255, 42, 157, 50),
-                              ),
-                            ),
-                            prefixIcon: const Icon(
-                              Icons.lock,
-                              color: Colors.grey,
-                            ),
-                            suffixIcon: IconButton(
-                              icon: Icon(
-                                _obscurePassword
-                                    ? Icons.visibility_off
-                                    : Icons.visibility,
-                                color: Colors.grey,
-                              ),
-                              onPressed: () {
-                                setState(() {
-                                  _obscurePassword = !_obscurePassword;
-                                });
-                              },
-                            ),
-                          ),
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Please enter your password';
-                            }
-                            return null;
-                          },
-                        ),
-                        // Forgot Password Link
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: TextButton(
-                            onPressed:
-                                _isLoading ? null : _sendPasswordResetEmail,
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 0,
-                              ),
-                              minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                            child: const Text(
-                              'Forgot Password?',
-                              style: TextStyle(
-                                color: Color.fromARGB(255, 42, 157, 50),
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (_errorMessage != null) ...[
-                          const SizedBox(height: 16),
-                          Text(
-                            _errorMessage!,
-                            style: const TextStyle(
-                              color: Color(0xFFFFAB91),
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 30),
-                        // Login Button
-                        SizedBox(
-                          width: 300,
-                          height: 55,
-                          child: ElevatedButton(
-                            onPressed: _isLoading ? null : _login,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color.fromARGB(
-                                255,
-                                42,
-                                157,
-                                50,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              elevation: 4,
-                            ),
-                            child:
-                                _isLoading
-                                    ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor:
-                                            AlwaysStoppedAnimation<Color>(
-                                              Colors.white,
-                                            ),
-                                      ),
-                                    )
-                                    : const Text(
-                                      'Log in',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),

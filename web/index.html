@@ -31,8 +31,176 @@
 
     <title>admin_web</title>
     <link rel="manifest" href="manifest.json" />
+
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: Arial, sans-serif;
+        background: linear-gradient(
+          135deg,
+          #2a9d32 0%,
+          #228b22 50%,
+          #196f3d 100%
+        );
+        height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        overflow: hidden;
+      }
+
+      .loading-container {
+        text-align: center;
+        color: white;
+      }
+
+      .logo {
+        width: 120px;
+        height: 120px;
+        background: white;
+        border-radius: 50%;
+        margin: 0 auto 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      .logo img {
+        width: 80px;
+        height: 80px;
+        object-fit: cover;
+        border-radius: 50%;
+      }
+
+      .title {
+        font-size: 28px;
+        font-weight: bold;
+        margin-bottom: 20px;
+        animation: fadeIn 1s ease-in;
+      }
+
+      .loading-dots {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        margin-bottom: 40px;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        background: rgba(255, 255, 255, 0.6);
+        border-radius: 50%;
+        animation: dotPulse 1.5s ease-in-out infinite;
+      }
+
+      .dot:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+
+      .dot:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+
+      .loading-text {
+        font-size: 16px;
+        color: rgba(255, 255, 255, 0.8);
+        animation: fadeIn 1s ease-in 0.5s both;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          transform: scale(1);
+        }
+        50% {
+          transform: scale(1.1);
+        }
+      }
+
+      @keyframes dotPulse {
+        0%,
+        100% {
+          opacity: 0.3;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1.2);
+        }
+      }
+
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      /* Hide loading screen when Flutter is ready */
+      .flutter-ready {
+        display: none !important;
+      }
+    </style>
   </head>
   <body>
+    <div id="loading-screen" class="loading-container">
+      <div class="logo">
+        <img src="logo.png" alt="Logo" />
+      </div>
+      <div class="title">Admin Portal</div>
+      <div class="loading-dots">
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+      </div>
+      <div class="loading-text">Loading...</div>
+    </div>
+
+    <script>
+      // Hide loading screen when Flutter is ready
+      window.addEventListener("load", function () {
+        // Wait for Flutter to be ready
+        if (window.flutter_inappwebview) {
+          // For webview
+          document
+            .getElementById("loading-screen")
+            .classList.add("flutter-ready");
+        } else {
+          // For regular web
+          setTimeout(function () {
+            document
+              .getElementById("loading-screen")
+              .classList.add("flutter-ready");
+          }, 2000); // Hide after 2 seconds or when Flutter is ready
+        }
+      });
+
+      // Alternative method to hide loading screen
+      if (window.flutter_web_optimizer) {
+        window.flutter_web_optimizer.loadEntrypoint({
+          serviceWorker: {
+            serviceWorkerVersion: serviceWorkerVersion,
+          },
+          onEntrypointLoaded: function (engineInitializer) {
+            engineInitializer.initializeEngine().then(function (appRunner) {
+              document
+                .getElementById("loading-screen")
+                .classList.add("flutter-ready");
+              appRunner.runApp();
+            });
+          },
+        });
+      }
+    </script>
+
     <script src="flutter_bootstrap.js" async></script>
   </body>
 </html>
