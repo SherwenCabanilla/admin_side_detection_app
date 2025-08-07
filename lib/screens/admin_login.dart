@@ -229,7 +229,7 @@ class _AdminLoginState extends State<AdminLogin> {
       body: Container(
         decoration: const BoxDecoration(
           image: DecorationImage(
-            image: AssetImage('assets/login-bg.jpg'),
+            image: AssetImage('assets/bgg.jpg'),
             fit: BoxFit.cover,
           ),
         ),

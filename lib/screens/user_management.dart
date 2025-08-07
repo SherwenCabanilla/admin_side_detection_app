@@ -51,10 +51,24 @@ class _UserManagementState extends State<UserManagement> {
                 user['name'].toLowerCase().contains(query) ||
                 user['email'].toLowerCase().contains(query) ||
                 user['role'].toLowerCase().contains(query);
-            final matchesStatus =
-                _selectedFilter == 'All' ||
-                user['status'] == _selectedFilter.toLowerCase();
-            return matchesSearch && matchesStatus;
+
+            // Handle different filter types
+            bool matchesFilter = false;
+            if (_selectedFilter == 'All') {
+              matchesFilter = true;
+            } else if (_selectedFilter == 'Pending' ||
+                _selectedFilter == 'Active') {
+              // Filter by status
+              matchesFilter =
+                  user['status'].toLowerCase() == _selectedFilter.toLowerCase();
+            } else if (_selectedFilter == 'Expert' ||
+                _selectedFilter == 'Farmer') {
+              // Filter by role
+              matchesFilter =
+                  user['role'].toLowerCase() == _selectedFilter.toLowerCase();
+            }
+
+            return matchesSearch && matchesFilter;
           }).toList()
           ..sort((a, b) => a['name'].compareTo(b['name']));
 
@@ -288,7 +302,7 @@ class _UserManagementState extends State<UserManagement> {
               DropdownButton<String>(
                 value: _selectedFilter,
                 items:
-                    ['All', 'Pending', 'Active']
+                    ['All', 'Pending', 'Active', 'Expert', 'Farmer']
                         .map(
                           (status) => DropdownMenuItem(
                             value: status,
@@ -349,7 +363,15 @@ class _UserManagementState extends State<UserManagement> {
                                               ),
                                             ),
                                             DataCell(
-                                              Text(user['role'].toUpperCase()),
+                                              Text(
+                                                user['role'].toUpperCase(),
+                                                style: TextStyle(
+                                                  color: _getRoleColor(
+                                                    user['role'],
+                                                  ),
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
                                             ),
                                             DataCell(
                                               Text(user['registeredAt']),
@@ -498,6 +520,17 @@ class _UserManagementState extends State<UserManagement> {
         return Colors.green;
       case 'pending':
         return Colors.orange;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  Color _getRoleColor(String role) {
+    switch (role.toLowerCase()) {
+      case 'expert':
+        return const Color.fromARGB(255, 31, 3, 133); // violet
+      case 'farmer':
+        return const Color.fromARGB(255, 255, 0, 0);
       default:
         return Colors.grey;
     }
