@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../models/user_store.dart';
+// import '../models/user_store.dart';
 import '../services/scan_requests_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
@@ -39,13 +39,24 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
   final ValueNotifier<bool> _isHovered = ValueNotifier(false);
 
   String _fixDiseaseName(String disease) {
+    // Normalize separators and case for robust comparisons
+    final String raw = (disease).toString();
+    final String normalized =
+        raw.replaceAll(RegExp(r'[_\-]+'), ' ').trim().toLowerCase();
+
     // Fix common spelling issues
-    if (disease == 'backterial_b' || disease == 'backterial_blackspot') {
-      return 'bacterial_blackspot';
-    } else if (disease == 'bacterial_b') {
+    if (normalized == 'backterial b' ||
+        normalized == 'backterial blackspot' ||
+        normalized == 'bacterial b') {
       return 'bacterial_blackspot';
     }
-    return disease;
+
+    // Map all tip burn variants to Unknown
+    if (normalized == 'tip burn' || normalized == 'tipburn') {
+      return 'Unknown';
+    }
+
+    return raw;
   }
 
   List<Widget> _buildRecommendationsList(dynamic recommendations) {
@@ -867,7 +878,9 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                 runSpacing: 4,
                 children:
                     diseaseSummary.map<Widget>((disease) {
-                      final diseaseName = disease['name'] ?? 'Unknown';
+                      final diseaseName = _fixDiseaseName(
+                        (disease['name'] ?? 'Unknown').toString(),
+                      );
                       final count = disease['count'] ?? 0;
                       final confidence = disease['confidence'];
 
@@ -1228,7 +1241,7 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                     border: Border.all(color: Colors.white, width: 2),
                   ),
                   child: Text(
-                    '${disease.substring(0, disease.length > 20 ? 20 : disease.length)}\n${(confidence * 100).toStringAsFixed(0)}%',
+                    '${_fixDiseaseName(disease).substring(0, _fixDiseaseName(disease).length > 20 ? 20 : _fixDiseaseName(disease).length)}\n${(confidence * 100).toStringAsFixed(0)}%',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 12,
@@ -1383,23 +1396,60 @@ class ReportsModalContent extends StatefulWidget {
   _ReportsModalContentState createState() => _ReportsModalContentState();
 }
 
-class _ReportsModalContentState extends State<ReportsModalContent> {
+class _ReportsModalContentState extends State<ReportsModalContent>
+    with SingleTickerProviderStateMixin {
   final ValueNotifier<bool> _showBoundingBoxesNotifier = ValueNotifier(false);
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  String _selectedDisease = 'All';
+  // Expert is filtered via search only
+  String _selectedExpert = 'All';
+  DateTime? _fromDate;
+  DateTime? _toDate;
+  late Future<List<Map<String, dynamic>>> _completedReportsFuture;
+  late Future<List<Map<String, dynamic>>> _pendingReportsFuture;
+  late TabController _tabController;
+  final ScrollController _completedScrollController = ScrollController();
+  final ScrollController _pendingScrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Cache futures so typing in the search field doesn't re-fetch or refresh the modal
+    _completedReportsFuture = _getCompletedReports();
+    _pendingReportsFuture = _getPendingReports();
+    _tabController = TabController(length: 2, vsync: this);
+  }
 
   @override
   void dispose() {
     _showBoundingBoxesNotifier.dispose();
+    _searchController.dispose();
+    _tabController.dispose();
+    _completedScrollController.dispose();
+    _pendingScrollController.dispose();
     super.dispose();
   }
 
   String _fixDiseaseName(String disease) {
+    // Normalize separators and case for robust comparisons
+    final String raw = (disease).toString();
+    final String normalized =
+        raw.replaceAll(RegExp(r'[_\-]+'), ' ').trim().toLowerCase();
+
     // Fix common spelling issues
-    if (disease == 'backterial_b' || disease == 'backterial_blackspot') {
-      return 'bacterial_blackspot';
-    } else if (disease == 'bacterial_b') {
+    if (normalized == 'backterial b' ||
+        normalized == 'backterial blackspot' ||
+        normalized == 'bacterial b') {
       return 'bacterial_blackspot';
     }
-    return disease;
+
+    // Map all tip burn variants to Unknown
+    if (normalized == 'tip burn' || normalized == 'tipburn') {
+      return 'Unknown';
+    }
+
+    return raw;
   }
 
   List<Widget> _buildRecommendationsList(dynamic recommendations) {
@@ -1483,6 +1533,168 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
     }
   }
 
+  List<String> _computeDiseaseOptions(List<Map<String, dynamic>> reports) {
+    final Set<String> diseaseSet = {};
+    for (final report in reports) {
+      final List<dynamic> diseaseSummary =
+          (report['diseaseSummary'] as List<dynamic>?) ?? const [];
+      for (final dynamic disease in diseaseSummary) {
+        if (disease is Map<String, dynamic>) {
+          final String name = _fixDiseaseName(
+            (disease['name'] ?? '').toString().trim(),
+          );
+          if (name.isNotEmpty) {
+            diseaseSet.add(name);
+          }
+        }
+      }
+    }
+    final List<String> options = ['All', ...diseaseSet.toList()..sort()];
+    // Ensure currently selected option is valid
+    if (!options.contains(_selectedDisease)) {
+      _selectedDisease = 'All';
+    }
+    return options;
+  }
+
+  // Expert options dropdown removed; filter by expert through search only
+
+  Future<void> _pickFromDate() async {
+    final DateTime now = DateTime.now();
+    final DateTime initial = _fromDate ?? (_toDate != null ? _toDate! : now);
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 2),
+    );
+    if (picked != null) {
+      setState(() {
+        _fromDate = DateTime(picked.year, picked.month, picked.day);
+        if (_toDate != null && _fromDate!.isAfter(_toDate!)) {
+          _toDate = _fromDate;
+        }
+      });
+    }
+  }
+
+  Future<void> _pickToDate() async {
+    final DateTime now = DateTime.now();
+    final DateTime initial = _toDate ?? (_fromDate != null ? _fromDate! : now);
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 2),
+    );
+    if (picked != null) {
+      setState(() {
+        _toDate = DateTime(picked.year, picked.month, picked.day);
+        if (_fromDate != null && _toDate!.isBefore(_fromDate!)) {
+          _fromDate = _toDate;
+        }
+      });
+    }
+  }
+
+  String _formatDateOnly(DateTime? date) {
+    if (date == null) return 'Select';
+    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  }
+
+  List<Map<String, dynamic>> _applyFilters(List<Map<String, dynamic>> reports) {
+    final String query = _searchQuery.trim().toLowerCase();
+    final String selectedDiseaseLower = _selectedDisease.toLowerCase();
+    final String selectedExpertLower = _selectedExpert.toLowerCase();
+
+    final List<Map<String, dynamic>> filtered =
+        reports.where((report) {
+          final String userName =
+              (report['userName'] ?? '').toString().toLowerCase();
+          final List<dynamic> diseaseSummary =
+              (report['diseaseSummary'] as List<dynamic>?) ?? const [];
+          final dynamic expertReview = report['expertReview'];
+          String expertName = '';
+          if (expertReview is Map<String, dynamic>) {
+            expertName = (expertReview['expertName'] ?? '').toString();
+          } else if (expertReview is String) {
+            expertName = expertReview;
+          }
+          final String expertNameLower = expertName.toLowerCase();
+          final DateTime createdDate = _parseDate(report['createdAt']);
+
+          bool matchesSearch = true;
+          if (query.isNotEmpty) {
+            final bool userMatches = userName.contains(query);
+            final bool diseaseMatches = diseaseSummary.any((d) {
+              if (d is Map<String, dynamic>) {
+                final String name =
+                    _fixDiseaseName((d['name'] ?? '').toString()).toLowerCase();
+                return name.contains(query) ||
+                    (name == 'unknown' && 'unknown'.contains(query));
+              }
+              return false;
+            });
+            final bool expertMatches = expertNameLower.contains(query);
+            final String createdDateText =
+                _formatDateOnly(createdDate).toLowerCase();
+            final bool dateTextMatches = createdDateText.contains(query);
+
+            matchesSearch =
+                userMatches ||
+                diseaseMatches ||
+                expertMatches ||
+                dateTextMatches;
+          }
+
+          bool matchesDisease = true;
+          if (_selectedDisease != 'All') {
+            matchesDisease = diseaseSummary.any((d) {
+              if (d is Map<String, dynamic>) {
+                final String name =
+                    _fixDiseaseName((d['name'] ?? '').toString()).toLowerCase();
+                return name == selectedDiseaseLower;
+              }
+              return false;
+            });
+          }
+
+          bool matchesExpert = true;
+          if (_selectedExpert != 'All') {
+            matchesExpert = expertNameLower == selectedExpertLower;
+          }
+
+          bool matchesDate = true;
+          if (_fromDate != null) {
+            final DateTime from = DateTime(
+              _fromDate!.year,
+              _fromDate!.month,
+              _fromDate!.day,
+            );
+            if (createdDate.isBefore(from)) matchesDate = false;
+          }
+          if (matchesDate && _toDate != null) {
+            final DateTime to = DateTime(
+              _toDate!.year,
+              _toDate!.month,
+              _toDate!.day,
+              23,
+              59,
+              59,
+              999,
+            );
+            if (createdDate.isAfter(to)) matchesDate = false;
+          }
+
+          return matchesSearch &&
+              matchesDisease &&
+              matchesExpert &&
+              matchesDate;
+        }).toList();
+
+    return filtered;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -1536,45 +1748,44 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
 
         // Tab Bar
         Expanded(
-          child: DefaultTabController(
-            length: 2,
-            child: Column(
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.grey[200],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: TabBar(
-                    labelColor: Colors.white,
-                    unselectedLabelColor: Colors.black87,
-                    indicator: const BoxDecoration(
-                      color: Colors.blue,
-                      borderRadius: BorderRadius.all(Radius.circular(8)),
-                    ),
-                    tabs: const [
-                      Tab(text: 'Completed Reports'),
-                      Tab(text: 'Pending Reports'),
-                    ],
-                  ),
+          child: Column(
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.grey[200],
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                const SizedBox(height: 16),
+                child: TabBar(
+                  controller: _tabController,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: Colors.black87,
+                  indicator: const BoxDecoration(
+                    color: Colors.blue,
+                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                  ),
+                  tabs: const [
+                    Tab(text: 'Completed Reports'),
+                    Tab(text: 'Pending Reports'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
 
-                // Tab Content
-                Expanded(
-                  child: ValueListenableBuilder<bool>(
-                    valueListenable: _showBoundingBoxesNotifier,
-                    builder:
-                        (context, value, _) => TabBarView(
-                          children: [
-                            _buildCompletedReportsTab(value),
-                            _buildPendingReportsTab(value),
-                          ],
-                        ),
-                  ),
+              // Tab Content
+              Expanded(
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: _showBoundingBoxesNotifier,
+                  builder:
+                      (context, value, _) => TabBarView(
+                        controller: _tabController,
+                        children: [
+                          _buildCompletedReportsTab(value),
+                          _buildPendingReportsTab(value),
+                        ],
+                      ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ],
@@ -1583,7 +1794,7 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
 
   Widget _buildCompletedReportsTab(bool showBoundingBoxes) {
     return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _getCompletedReports(),
+      future: _completedReportsFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -1593,7 +1804,7 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
-        final reports = snapshot.data ?? [];
+        final List<Map<String, dynamic>> reports = snapshot.data ?? [];
 
         if (reports.isEmpty) {
           return const Center(
@@ -1604,12 +1815,88 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
           );
         }
 
-        return ListView.builder(
-          itemCount: reports.length,
-          itemBuilder: (context, index) {
-            final report = reports[index];
-            return _buildReportCard(report, true, showBoundingBoxes);
-          },
+        final List<String> diseaseOptions = _computeDiseaseOptions(reports);
+        final List<Map<String, dynamic>> filteredReports = _applyFilters(
+          reports,
+        );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText:
+                          'Search by user, disease, expert, or date (dd/mm/yyyy)...',
+                      prefixIcon: const Icon(Icons.search),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      isDense: true,
+                    ),
+                    onChanged: (value) => setState(() => _searchQuery = value),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                DropdownButton<String>(
+                  value: _selectedDisease,
+                  items:
+                      diseaseOptions
+                          .map(
+                            (d) => DropdownMenuItem<String>(
+                              value: d,
+                              child: Text(d),
+                            ),
+                          )
+                          .toList(),
+                  onChanged:
+                      (value) =>
+                          setState(() => _selectedDisease = value ?? 'All'),
+                ),
+                // Expert can be filtered via search; no extra dropdown
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _pickFromDate,
+                  icon: const Icon(Icons.date_range),
+                  label: Text('From: ${_formatDateOnly(_fromDate)}'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _pickToDate,
+                  icon: const Icon(Icons.event),
+                  label: Text('To: ${_formatDateOnly(_toDate)}'),
+                ),
+                const SizedBox(width: 8),
+                if (_fromDate != null || _toDate != null)
+                  TextButton(
+                    onPressed:
+                        () => setState(() {
+                          _fromDate = null;
+                          _toDate = null;
+                        }),
+                    child: const Text('Clear dates'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.builder(
+                controller: _completedScrollController,
+                itemCount: filteredReports.length,
+                itemBuilder: (context, index) {
+                  final report = filteredReports[index];
+                  return _buildReportCard(report, true, showBoundingBoxes);
+                },
+              ),
+            ),
+          ],
         );
       },
     );
@@ -1617,7 +1904,7 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
 
   Widget _buildPendingReportsTab(bool showBoundingBoxes) {
     return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _getPendingReports(),
+      future: _pendingReportsFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -1627,7 +1914,7 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
-        final reports = snapshot.data ?? [];
+        final List<Map<String, dynamic>> reports = snapshot.data ?? [];
 
         if (reports.isEmpty) {
           return const Center(
@@ -1638,12 +1925,88 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
           );
         }
 
-        return ListView.builder(
-          itemCount: reports.length,
-          itemBuilder: (context, index) {
-            final report = reports[index];
-            return _buildReportCard(report, false, showBoundingBoxes);
-          },
+        final List<String> diseaseOptions = _computeDiseaseOptions(reports);
+        final List<Map<String, dynamic>> filteredReports = _applyFilters(
+          reports,
+        );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText:
+                          'Search by user, disease, expert, or date (dd/mm/yyyy)...',
+                      prefixIcon: const Icon(Icons.search),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      isDense: true,
+                    ),
+                    onChanged: (value) => setState(() => _searchQuery = value),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                DropdownButton<String>(
+                  value: _selectedDisease,
+                  items:
+                      diseaseOptions
+                          .map(
+                            (d) => DropdownMenuItem<String>(
+                              value: d,
+                              child: Text(d),
+                            ),
+                          )
+                          .toList(),
+                  onChanged:
+                      (value) =>
+                          setState(() => _selectedDisease = value ?? 'All'),
+                ),
+                // Expert can be filtered via search; no extra dropdown
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _pickFromDate,
+                  icon: const Icon(Icons.date_range),
+                  label: Text('From: ${_formatDateOnly(_fromDate)}'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _pickToDate,
+                  icon: const Icon(Icons.event),
+                  label: Text('To: ${_formatDateOnly(_toDate)}'),
+                ),
+                const SizedBox(width: 8),
+                if (_fromDate != null || _toDate != null)
+                  TextButton(
+                    onPressed:
+                        () => setState(() {
+                          _fromDate = null;
+                          _toDate = null;
+                        }),
+                    child: const Text('Clear dates'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.builder(
+                controller: _pendingScrollController,
+                itemCount: filteredReports.length,
+                itemBuilder: (context, index) {
+                  final report = filteredReports[index];
+                  return _buildReportCard(report, false, showBoundingBoxes);
+                },
+              ),
+            ),
+          ],
         );
       },
     );
@@ -1949,7 +2312,9 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
                 runSpacing: 4,
                 children:
                     diseaseSummary.map<Widget>((disease) {
-                      final diseaseName = disease['name'] ?? 'Unknown';
+                      final diseaseName = _fixDiseaseName(
+                        (disease['name'] ?? 'Unknown').toString(),
+                      );
                       final count = disease['count'] ?? 0;
                       final confidence = disease['confidence'];
 
@@ -2510,7 +2875,7 @@ class _ReportsModalContentState extends State<ReportsModalContent> {
                     border: Border.all(color: Colors.white, width: 2),
                   ),
                   child: Text(
-                    '${disease.substring(0, disease.length > 20 ? 20 : disease.length)}\n${(confidence * 100).toStringAsFixed(0)}%',
+                    '${_fixDiseaseName(disease).substring(0, _fixDiseaseName(disease).length > 20 ? 20 : _fixDiseaseName(disease).length)}\n${(confidence * 100).toStringAsFixed(0)}%',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 12,

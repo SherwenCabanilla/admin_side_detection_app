@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import '../services/report_pdf_service.dart';
+import '../services/settings_service.dart';
 import '../shared/total_users_card.dart';
 import '../shared/pending_approvals_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/scan_requests_service.dart';
 import 'admin_dashboard.dart' show ScanRequestsSnapshot;
 import 'package:provider/provider.dart';
+import 'dart:async';
 import '../models/user_store.dart';
 
 class Reports extends StatefulWidget {
@@ -237,6 +240,25 @@ class _ReportsState extends State<Reports> {
                 ),
                 Row(
                   children: [
+                    StreamBuilder<String>(
+                      stream: SettingsService.utilityNameStream(),
+                      builder: (context, snapshot) {
+                        final name = snapshot.data ?? 'Utility';
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 12),
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.settings),
+                            label: Text(name, overflow: TextOverflow.ellipsis),
+                            onPressed: () async {
+                              await showDialog(
+                                context: context,
+                                builder: (context) => const EditUtilityDialog(),
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    ),
                     ElevatedButton.icon(
                       icon: const Icon(Icons.picture_as_pdf),
                       label: const Text('Generate Report'),
@@ -245,21 +267,28 @@ class _ReportsState extends State<Reports> {
                         foregroundColor: Colors.white,
                       ),
                       onPressed: () async {
-                        final selectedRange = await showDialog<String>(
+                        final result = await showDialog<Map<String, String>>(
                           context: context,
                           builder: (context) => const GenerateReportDialog(),
                         );
-                        if (selectedRange != null) {
-                          // TODO: Implement PDF generation logic for selectedRange
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Generate PDF for: '
-                                ' [1m$selectedRange [0m',
+                        if (result != null) {
+                          final selectedRange =
+                              result['range'] ?? 'Last 7 Days';
+                          final pageSize = result['pageSize'] ?? 'A4';
+                          try {
+                            await ReportPdfService.generateAndShareReport(
+                              context: context,
+                              timeRange: selectedRange,
+                              pageSize: pageSize,
+                            );
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Failed to generate PDF: $e'),
+                                backgroundColor: Colors.red,
                               ),
-                              backgroundColor: Colors.green,
-                            ),
-                          );
+                            );
+                          }
                         }
                       },
                     ),
@@ -322,11 +351,14 @@ class _ReportsState extends State<Reports> {
                     diseaseStats: _diseaseStats,
                     selectedTimeRange: _selectedTimeRange,
                     onTimeRangeChanged: (String newTimeRange) async {
+                      // Only update the selected range; avoid full page reload
                       setState(() {
                         _selectedTimeRange = newTimeRange;
-                        _isLoading = true;
                       });
-                      await _loadData();
+                      // Optionally refresh only the disease stats (non-blocking)
+                      // This is a no-op when real-time snapshot is available
+                      // because the chart aggregates live data.
+                      _loadDiseaseStats();
                     },
                   ),
                 ),
@@ -357,7 +389,6 @@ class _ReportsState extends State<Reports> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Icon
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -367,8 +398,6 @@ class _ReportsState extends State<Reports> {
                 child: Icon(icon, size: 24, color: color),
               ),
               const SizedBox(height: 16),
-
-              // Number
               Text(
                 value,
                 style: const TextStyle(
@@ -378,8 +407,6 @@ class _ReportsState extends State<Reports> {
                 ),
               ),
               const SizedBox(height: 8),
-
-              // Title
               Text(
                 title,
                 style: const TextStyle(
@@ -427,7 +454,6 @@ class _ReportsState extends State<Reports> {
           (context) => AvgResponseTimeModal(
             scanRequests: scanRequests,
             onTimeRangeChanged: (String newTimeRange) {
-              // Update the card's time range when modal dropdown changes
               _updateAvgResponseTimeForRange(newTimeRange);
             },
           ),
@@ -435,23 +461,95 @@ class _ReportsState extends State<Reports> {
   }
 
   void _updateAvgResponseTimeForRange(String timeRange) async {
-    print('=== CARD UPDATE DEBUG ===');
-    print('Updating card for time range: $timeRange');
     try {
       final averageResponseTime =
           await ScanRequestsService.getAverageResponseTime(
             timeRange: timeRange,
           );
-      print('Card received average response time: $averageResponseTime');
       setState(() {
         _stats['averageResponseTime'] = averageResponseTime;
       });
-      print('Card updated with new value: ${_stats['averageResponseTime']}');
-    } catch (e) {
-      print('Error updating avg response time: $e');
-    }
-    print('=== END CARD UPDATE DEBUG ===');
+    } catch (_) {}
   }
+}
+
+class EditUtilityDialog extends StatefulWidget {
+  const EditUtilityDialog({Key? key}) : super(key: key);
+
+  @override
+  State<EditUtilityDialog> createState() => _EditUtilityDialogState();
+}
+
+class _EditUtilityDialogState extends State<EditUtilityDialog> {
+  final TextEditingController _controller = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    SettingsService.getUtilityName().then((value) {
+      if (mounted) _controller.text = value;
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit Utility Name'),
+      content: SizedBox(
+        width: 400,
+        child: TextField(
+          controller: _controller,
+          decoration: const InputDecoration(
+            labelText: 'Utility name',
+            hintText: 'Enter name to show on PDF',
+            border: OutlineInputBorder(),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed:
+              _saving
+                  ? null
+                  : () async {
+                    setState(() => _saving = true);
+                    try {
+                      await SettingsService.setUtilityName(_controller.text);
+                      if (mounted) Navigator.of(context).pop();
+                    } catch (e) {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to save: $e')),
+                      );
+                    } finally {
+                      if (mounted) setState(() => _saving = false);
+                    }
+                  },
+          child:
+              _saving
+                  ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                  : const Text('Save'),
+        ),
+      ],
+    );
+  }
+
+  // (No helpers inside dialog state)
 }
 
 class TotalReportsCard extends StatelessWidget {
@@ -468,6 +566,11 @@ class TotalReportsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Freeze a snapshot of the current data for this build to avoid
+    // inconsistent reads across multiple getters during hover/rebuilds.
+    // Note: _currentData is not in scope here; this card does not need it.
+    // Remove unused snapshot logic to fix errors.
+
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -775,16 +878,182 @@ class DiseaseDistributionChart extends StatefulWidget {
 }
 
 class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
-  List<Map<String, dynamic>> get _currentData => widget.diseaseStats;
+  StreamSubscription<QuerySnapshot>? _streamSub;
+  QuerySnapshot? _lastSnapshot;
+  List<Map<String, dynamic>> _liveAggregated = const [];
+  // Removed: we aggregate in build() with a safe fallback to pre-fetched data
 
-  List<Map<String, dynamic>> get _diseaseData =>
-      _currentData.where((item) => item['type'] == 'disease').toList();
+  DateTimeRange _resolveDateRange(String range) {
+    final now = DateTime.now();
+    if (range.startsWith('Custom (')) {
+      try {
+        final inner = range.substring('Custom ('.length, range.length - 1);
+        final parts = inner.split(' to ');
+        if (parts.length == 2) {
+          final start = DateTime.parse(parts[0]);
+          final end = DateTime.parse(parts[1]);
+          // Include the whole end day
+          return DateTimeRange(
+            start: start,
+            end: end.add(const Duration(days: 1)),
+          );
+        }
+      } catch (_) {}
+    }
+    switch (range) {
+      case '1 Day':
+        return DateTimeRange(
+          start: now.subtract(const Duration(days: 1)),
+          end: now,
+        );
+      case 'Last 7 Days':
+        return DateTimeRange(
+          start: now.subtract(const Duration(days: 7)),
+          end: now,
+        );
+      case 'Last 30 Days':
+        return DateTimeRange(
+          start: now.subtract(const Duration(days: 30)),
+          end: now,
+        );
+      case 'Last 60 Days':
+        return DateTimeRange(
+          start: now.subtract(const Duration(days: 60)),
+          end: now,
+        );
+      case 'Last 90 Days':
+        return DateTimeRange(
+          start: now.subtract(const Duration(days: 90)),
+          end: now,
+        );
+      case 'Last Year':
+        return DateTimeRange(
+          start: DateTime(now.year - 1, now.month, now.day),
+          end: now,
+        );
+      default:
+        return DateTimeRange(
+          start: now.subtract(const Duration(days: 7)),
+          end: now,
+        );
+    }
+  }
 
-  List<Map<String, dynamic>> get _healthyData =>
-      _currentData.where((item) => item['type'] == 'healthy').toList();
+  @override
+  void initState() {
+    super.initState();
+    _streamSub = FirebaseFirestore.instance
+        .collection('scan_requests')
+        .snapshots()
+        .listen((snap) {
+          _lastSnapshot = snap;
+          final agg = _aggregateFromSnapshot(snap, widget.selectedTimeRange);
+          if (mounted) {
+            setState(() {
+              _liveAggregated = agg;
+            });
+          }
+        });
+  }
+
+  @override
+  void didUpdateWidget(covariant DiseaseDistributionChart oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedTimeRange != widget.selectedTimeRange &&
+        _lastSnapshot != null) {
+      final agg = _aggregateFromSnapshot(
+        _lastSnapshot,
+        widget.selectedTimeRange,
+      );
+      setState(() {
+        _liveAggregated = agg;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _streamSub?.cancel();
+    super.dispose();
+  }
+
+  List<Map<String, dynamic>> _aggregateFromSnapshot(
+    QuerySnapshot? snapshot,
+    String selectedRange,
+  ) {
+    if (snapshot == null) return const [];
+    final range = _resolveDateRange(selectedRange);
+    final DateTime start = range.start;
+    final DateTime end = range.end;
+
+    final Map<String, int> diseaseToCount = {};
+    int healthyCount = 0;
+
+    for (final doc in snapshot.docs) {
+      final Map<String, dynamic>? data = doc.data() as Map<String, dynamic>?;
+      if (data == null) continue;
+
+      final dynamic createdAt = data['createdAt'];
+      DateTime created;
+      if (createdAt is Timestamp) {
+        created = createdAt.toDate();
+      } else if (createdAt is String) {
+        created =
+            DateTime.tryParse(createdAt) ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+      } else {
+        continue;
+      }
+      if (created.isBefore(start) || created.isAfter(end)) continue;
+
+      final List<dynamic> diseaseSummary =
+          (data['diseaseSummary'] as List<dynamic>?) ?? const [];
+      if (diseaseSummary.isEmpty) {
+        healthyCount += 1;
+        continue;
+      }
+
+      for (final d in diseaseSummary) {
+        if (d is Map<String, dynamic>) {
+          final String rawName = (d['name'] ?? 'Unknown').toString();
+          final String normalized =
+              rawName.replaceAll(RegExp(r'[_\-]+'), ' ').trim().toLowerCase();
+          final String key =
+              (normalized == 'tip burn' || normalized == 'tipburn')
+                  ? 'Unknown'
+                  : rawName;
+          diseaseToCount[key] = (diseaseToCount[key] ?? 0) + 1;
+        }
+      }
+    }
+
+    final int total = diseaseToCount.values.fold(healthyCount, (a, b) => a + b);
+    final List<Map<String, dynamic>> result = [];
+
+    diseaseToCount.forEach((name, count) {
+      result.add({
+        'name': name,
+        'count': count,
+        'percentage': total == 0 ? 0.0 : count / total,
+        'type': 'disease',
+      });
+    });
+    if (healthyCount > 0) {
+      result.add({
+        'name': 'Healthy',
+        'count': healthyCount,
+        'percentage': total == 0 ? 0.0 : healthyCount / total,
+        'type': 'healthy',
+      });
+    }
+    return result;
+  }
+
+  // Removed old getters; we snapshot build-scoped lists instead to avoid hover flicker
 
   Color _getDiseaseColor(String disease) {
-    switch (disease.toLowerCase()) {
+    final normalized = disease.replaceAll('_', ' ').toLowerCase();
+    switch (normalized) {
       case 'anthracnose':
         return Colors.orange;
       case 'bacterial blackspot':
@@ -794,6 +1063,8 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
       case 'dieback':
         return Colors.red;
       case 'tip burn':
+      case 'tip_burn':
+      case 'unknown':
         return Colors.amber;
       case 'healthy':
         return const Color.fromARGB(255, 2, 119, 252);
@@ -804,6 +1075,13 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
 
   @override
   Widget build(BuildContext context) {
+    // Build-scoped immutable lists using live data when available
+    final List<Map<String, dynamic>> dataSnapshot =
+        _liveAggregated.isNotEmpty ? _liveAggregated : widget.diseaseStats;
+    final List<Map<String, dynamic>> diseaseData =
+        dataSnapshot.where((item) => item['type'] == 'disease').toList();
+    final List<Map<String, dynamic>> healthyData =
+        dataSnapshot.where((item) => item['type'] == 'healthy').toList();
     return Card(
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -991,7 +1269,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                               ),
                               const Spacer(),
                               Text(
-                                'Total: ${_diseaseData.isEmpty ? 0 : _diseaseData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
+                                'Total: ${diseaseData.isEmpty ? 0 : diseaseData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: Colors.grey[600],
@@ -1003,7 +1281,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                           const SizedBox(height: 24),
                           Expanded(
                             child:
-                                _diseaseData.isEmpty
+                                diseaseData.isEmpty
                                     ? const Center(
                                       child: Text(
                                         'No disease data available',
@@ -1018,9 +1296,9 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                         alignment:
                                             BarChartAlignment.spaceAround,
                                         maxY:
-                                            _diseaseData.isEmpty
+                                            diseaseData.isEmpty
                                                 ? 100.0
-                                                : _diseaseData
+                                                : diseaseData
                                                         .map(
                                                           (d) =>
                                                               d['count']
@@ -1043,12 +1321,12 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                             ) {
                                               if (groupIndex < 0 ||
                                                   groupIndex >=
-                                                      _diseaseData.length ||
-                                                  _diseaseData.isEmpty) {
+                                                      diseaseData.length ||
+                                                  diseaseData.isEmpty) {
                                                 return null;
                                               }
                                               final disease =
-                                                  _diseaseData[groupIndex];
+                                                  diseaseData[groupIndex];
                                               return BarTooltipItem(
                                                 '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
                                                 const TextStyle(
@@ -1066,12 +1344,12 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                               getTitlesWidget: (value, meta) {
                                                 if (value < 0 ||
                                                     value >=
-                                                        _diseaseData.length ||
-                                                    _diseaseData.isEmpty) {
+                                                        diseaseData.length ||
+                                                    diseaseData.isEmpty) {
                                                   return const SizedBox.shrink();
                                                 }
                                                 final disease =
-                                                    _diseaseData[value.toInt()];
+                                                    diseaseData[value.toInt()];
                                                 return Padding(
                                                   padding:
                                                       const EdgeInsets.only(
@@ -1178,9 +1456,9 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                           },
                                         ),
                                         barGroups:
-                                            _diseaseData.isEmpty
+                                            diseaseData.isEmpty
                                                 ? []
-                                                : _diseaseData.asMap().entries.map((
+                                                : diseaseData.asMap().entries.map((
                                                   entry,
                                                 ) {
                                                   final index = entry.key;
@@ -1208,6 +1486,10 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                   );
                                                 }).toList(),
                                       ),
+                                      swapAnimationDuration: Duration(
+                                        milliseconds: 0,
+                                      ),
+                                      swapAnimationCurve: Curves.linear,
                                     ),
                           ),
                         ],
@@ -1261,7 +1543,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                               ),
                               const Spacer(),
                               Text(
-                                'Total: ${_healthyData.isEmpty ? 0 : _healthyData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
+                                'Total: ${healthyData.isEmpty ? 0 : healthyData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: Colors.grey[600],
@@ -1273,7 +1555,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                           const SizedBox(height: 24),
                           Expanded(
                             child:
-                                _healthyData.isEmpty
+                                healthyData.isEmpty
                                     ? const Center(
                                       child: Text(
                                         'No healthy data available',
@@ -1288,9 +1570,9 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                         alignment:
                                             BarChartAlignment.spaceAround,
                                         maxY:
-                                            _healthyData.isEmpty
+                                            healthyData.isEmpty
                                                 ? 100.0
-                                                : _healthyData
+                                                : healthyData
                                                         .map(
                                                           (d) =>
                                                               d['count']
@@ -1313,12 +1595,12 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                             ) {
                                               if (groupIndex < 0 ||
                                                   groupIndex >=
-                                                      _healthyData.length ||
-                                                  _healthyData.isEmpty) {
+                                                      healthyData.length ||
+                                                  healthyData.isEmpty) {
                                                 return null;
                                               }
                                               final disease =
-                                                  _healthyData[groupIndex];
+                                                  healthyData[groupIndex];
                                               return BarTooltipItem(
                                                 '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
                                                 const TextStyle(
@@ -1336,12 +1618,12 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                               getTitlesWidget: (value, meta) {
                                                 if (value < 0 ||
                                                     value >=
-                                                        _healthyData.length ||
-                                                    _healthyData.isEmpty) {
+                                                        healthyData.length ||
+                                                    healthyData.isEmpty) {
                                                   return const SizedBox.shrink();
                                                 }
                                                 final disease =
-                                                    _healthyData[value.toInt()];
+                                                    healthyData[value.toInt()];
                                                 return Padding(
                                                   padding:
                                                       const EdgeInsets.only(
@@ -1448,9 +1730,9 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                           },
                                         ),
                                         barGroups:
-                                            _healthyData.isEmpty
+                                            healthyData.isEmpty
                                                 ? []
-                                                : _healthyData.asMap().entries.map((
+                                                : healthyData.asMap().entries.map((
                                                   entry,
                                                 ) {
                                                   final index = entry.key;
@@ -1478,6 +1760,10 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                   );
                                                 }).toList(),
                                       ),
+                                      swapAnimationDuration: Duration(
+                                        milliseconds: 0,
+                                      ),
+                                      swapAnimationCurve: Curves.linear,
                                     ),
                           ),
                         ],
@@ -2219,6 +2505,7 @@ class GenerateReportDialog extends StatefulWidget {
 
 class _GenerateReportDialogState extends State<GenerateReportDialog> {
   String _selectedRange = 'Last 7 Days';
+  String _selectedPageSize = 'A4';
   final List<Map<String, dynamic>> _ranges = [
     {
       'label': '1 Day',
@@ -2316,6 +2603,38 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
               },
             ),
           ),
+          const SizedBox(height: 16),
+          const Text(
+            'Select page size',
+            style: TextStyle(fontSize: 15, color: Colors.black87),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.grey[100],
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey[200]!),
+            ),
+            child: DropdownButton<String>(
+              value: _selectedPageSize,
+              isExpanded: true,
+              underline: const SizedBox(),
+              icon: const Icon(Icons.arrow_drop_down),
+              items:
+                  const ['A3', 'A4', 'A5', 'Letter', 'Legal']
+                      .map(
+                        (s) =>
+                            DropdownMenuItem<String>(value: s, child: Text(s)),
+                      )
+                      .toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _selectedPageSize = value);
+                }
+              },
+            ),
+          ),
           const SizedBox(height: 18),
           Divider(),
           const SizedBox(height: 10),
@@ -2383,7 +2702,10 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
             foregroundColor: Colors.white,
           ),
           onPressed: () {
-            Navigator.pop(context, _selectedRange);
+            Navigator.pop(context, {
+              'range': _selectedRange,
+              'pageSize': _selectedPageSize,
+            });
           },
         ),
       ],

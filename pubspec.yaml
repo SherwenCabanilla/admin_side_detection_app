@@ -18,6 +18,8 @@ dependencies:
   firebase_storage: ^11.6.5
   fl_chart: ^0.66.2
   provider: ^6.1.2
+  pdf: ^3.11.0
+  printing: ^5.13.1
 
 dev_dependencies:
   flutter_test:

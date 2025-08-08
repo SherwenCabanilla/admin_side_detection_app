@@ -24,8 +24,8 @@ class _AdminLoginState extends State<AdminLogin> {
   @override
   void initState() {
     super.initState();
-    //  _emailController.text = 'cabanilla.sherwen@dnsc.edu.ph'; // Premade for dev
-    //  _passwordController.text = 'admin2'; // Premade for dev
+    _emailController.text = 'cabanilla.sherwen@dnsc.edu.ph'; // Premade for dev
+    _passwordController.text = 'admin2'; // Premade for dev
     _initializeFirebase();
   }
 
