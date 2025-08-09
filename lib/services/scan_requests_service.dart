@@ -44,7 +44,11 @@ class ScanRequestsService {
       print('Total scan requests: ${scanRequests.length}');
 
       // Filter by time range
-      final filteredRequests = filterByTimeRange(scanRequests, timeRange);
+      final filteredRequests =
+          filterByTimeRange(
+            scanRequests,
+            timeRange,
+          ).where((r) => (r['status'] ?? 'pending') == 'completed').toList();
       print('Filtered requests for $timeRange: ${filteredRequests.length}');
 
       // Debug: Print details of filtered requests

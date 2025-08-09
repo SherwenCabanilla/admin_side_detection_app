@@ -668,12 +668,49 @@ class _ReportsState extends State<Reports> {
                                 result['range'] ?? _selectedTimeRange;
                             final pageSize = result['pageSize'] ?? 'A4';
                             try {
+                              // Show progress dialog during PDF generation
+                              showDialog(
+                                context: context,
+                                barrierDismissible: false,
+                                builder:
+                                    (_) => const AlertDialog(
+                                      content: SizedBox(
+                                        height: 56,
+                                        child: Row(
+                                          children: [
+                                            SizedBox(
+                                              height: 24,
+                                              width: 24,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            ),
+                                            SizedBox(width: 16),
+                                            Expanded(
+                                              child: Text(
+                                                'Generating PDF report...',
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                              );
+
                               await ReportPdfService.generateAndShareReport(
                                 context: context,
                                 timeRange: selectedRange,
                                 pageSize: pageSize,
+                                backgroundAsset:
+                                    'assets/report_template_bg.png',
                               );
+
+                              Navigator.of(context, rootNavigator: true).pop();
                             } catch (e) {
+                              Navigator.of(
+                                context,
+                                rootNavigator: true,
+                              ).maybePop();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text('Failed to generate PDF: $e'),
@@ -2373,19 +2410,41 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                             sideTitles: SideTitles(
                                               showTitles: true,
                                               reservedSize: 40,
+                                              interval:
+                                                  (() {
+                                                    final double maxVal =
+                                                        diseaseData.isEmpty
+                                                            ? 100
+                                                            : diseaseData
+                                                                .map(
+                                                                  (d) =>
+                                                                      (d['count']
+                                                                              as num)
+                                                                          .toDouble(),
+                                                                )
+                                                                .reduce(
+                                                                  (a, b) =>
+                                                                      a > b
+                                                                          ? a
+                                                                          : b,
+                                                                );
+                                                    if (maxVal <= 10)
+                                                      return 2.0;
+                                                    if (maxVal <= 20)
+                                                      return 5.0;
+                                                    if (maxVal <= 50)
+                                                      return 10.0;
+                                                    return 20.0;
+                                                  })(),
                                               getTitlesWidget: (value, meta) {
-                                                if (value % 50 == 0) {
-                                                  return Text(
-                                                    value.toInt().toString(),
-                                                    style: TextStyle(
-                                                      color: Colors.grey[600],
-                                                      fontWeight:
-                                                          FontWeight.w500,
-                                                      fontSize: 12,
-                                                    ),
-                                                  );
-                                                }
-                                                return const SizedBox.shrink();
+                                                return Text(
+                                                  value.toInt().toString(),
+                                                  style: TextStyle(
+                                                    color: Colors.grey[600],
+                                                    fontWeight: FontWeight.w500,
+                                                    fontSize: 12,
+                                                  ),
+                                                );
                                               },
                                             ),
                                           ),
@@ -2404,7 +2463,27 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                         gridData: FlGridData(
                                           show: true,
                                           drawVerticalLine: false,
-                                          horizontalInterval: 50,
+                                          horizontalInterval:
+                                              (() {
+                                                final double maxVal =
+                                                    diseaseData.isEmpty
+                                                        ? 100
+                                                        : diseaseData
+                                                            .map(
+                                                              (d) =>
+                                                                  (d['count']
+                                                                          as num)
+                                                                      .toDouble(),
+                                                            )
+                                                            .reduce(
+                                                              (a, b) =>
+                                                                  a > b ? a : b,
+                                                            );
+                                                if (maxVal <= 10) return 2.0;
+                                                if (maxVal <= 20) return 5.0;
+                                                if (maxVal <= 50) return 10.0;
+                                                return 20.0;
+                                              })(),
                                           getDrawingHorizontalLine: (value) {
                                             return FlLine(
                                               color: Colors.grey[200],
@@ -2647,19 +2726,41 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                             sideTitles: SideTitles(
                                               showTitles: true,
                                               reservedSize: 40,
+                                              interval:
+                                                  (() {
+                                                    final double maxVal =
+                                                        healthyData.isEmpty
+                                                            ? 100
+                                                            : healthyData
+                                                                .map(
+                                                                  (d) =>
+                                                                      (d['count']
+                                                                              as num)
+                                                                          .toDouble(),
+                                                                )
+                                                                .reduce(
+                                                                  (a, b) =>
+                                                                      a > b
+                                                                          ? a
+                                                                          : b,
+                                                                );
+                                                    if (maxVal <= 10)
+                                                      return 2.0;
+                                                    if (maxVal <= 20)
+                                                      return 5.0;
+                                                    if (maxVal <= 50)
+                                                      return 10.0;
+                                                    return 20.0;
+                                                  })(),
                                               getTitlesWidget: (value, meta) {
-                                                if (value % 50 == 0) {
-                                                  return Text(
-                                                    value.toInt().toString(),
-                                                    style: TextStyle(
-                                                      color: Colors.grey[600],
-                                                      fontWeight:
-                                                          FontWeight.w500,
-                                                      fontSize: 12,
-                                                    ),
-                                                  );
-                                                }
-                                                return const SizedBox.shrink();
+                                                return Text(
+                                                  value.toInt().toString(),
+                                                  style: TextStyle(
+                                                    color: Colors.grey[600],
+                                                    fontWeight: FontWeight.w500,
+                                                    fontSize: 12,
+                                                  ),
+                                                );
                                               },
                                             ),
                                           ),
@@ -2678,7 +2779,27 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                         gridData: FlGridData(
                                           show: true,
                                           drawVerticalLine: false,
-                                          horizontalInterval: 50,
+                                          horizontalInterval:
+                                              (() {
+                                                final double maxVal =
+                                                    healthyData.isEmpty
+                                                        ? 100
+                                                        : healthyData
+                                                            .map(
+                                                              (d) =>
+                                                                  (d['count']
+                                                                          as num)
+                                                                      .toDouble(),
+                                                            )
+                                                            .reduce(
+                                                              (a, b) =>
+                                                                  a > b ? a : b,
+                                                            );
+                                                if (maxVal <= 10) return 2.0;
+                                                if (maxVal <= 20) return 5.0;
+                                                if (maxVal <= 50) return 10.0;
+                                                return 20.0;
+                                              })(),
                                           getDrawingHorizontalLine: (value) {
                                             return FlLine(
                                               color: Colors.grey[200],
@@ -3444,7 +3565,7 @@ class GenerateReportDialog extends StatefulWidget {
 
 class _GenerateReportDialogState extends State<GenerateReportDialog> {
   String _selectedRange = 'Last 7 Days';
-  String _selectedPageSize = 'A4';
+  // Page size fixed to A4
   final List<Map<String, dynamic>> _ranges = [
     {
       'label': '1 Day',
@@ -3543,37 +3664,6 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
             ),
           ),
           const SizedBox(height: 16),
-          const Text(
-            'Select page size',
-            style: TextStyle(fontSize: 15, color: Colors.black87),
-          ),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.grey[100],
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey[200]!),
-            ),
-            child: DropdownButton<String>(
-              value: _selectedPageSize,
-              isExpanded: true,
-              underline: const SizedBox(),
-              icon: const Icon(Icons.arrow_drop_down),
-              items:
-                  const ['A3', 'A4', 'A5', 'Letter', 'Legal']
-                      .map(
-                        (s) =>
-                            DropdownMenuItem<String>(value: s, child: Text(s)),
-                      )
-                      .toList(),
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() => _selectedPageSize = value);
-                }
-              },
-            ),
-          ),
           const SizedBox(height: 18),
           Divider(),
           const SizedBox(height: 10),
@@ -3641,10 +3731,7 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
             foregroundColor: Colors.white,
           ),
           onPressed: () {
-            Navigator.pop(context, {
-              'range': _selectedRange,
-              'pageSize': _selectedPageSize,
-            });
+            Navigator.pop(context, {'range': _selectedRange, 'pageSize': 'A4'});
           },
         ),
       ],

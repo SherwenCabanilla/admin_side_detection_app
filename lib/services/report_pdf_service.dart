@@ -1,25 +1,133 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart' as pdf;
 import 'package:printing/printing.dart';
 import 'scan_requests_service.dart';
 import 'settings_service.dart';
+import 'weather_service.dart';
 
 class ReportPdfService {
   static Future<void> generateAndShareReport({
     required BuildContext context,
     required String timeRange,
     String pageSize = 'A4',
+    String? backgroundAsset,
   }) async {
     // Fetch data needed for the report
-    final List<Map<String, dynamic>> diseaseStats =
-        await ScanRequestsService.getDiseaseStats(timeRange: timeRange);
-    // Build a simple trend series: reports per day in range
+    // Get all requests, then filter for timeframe and completed only
     final List<Map<String, dynamic>> allRequests =
         await ScanRequestsService.getScanRequests();
     final List<Map<String, dynamic>> filtered =
-        ScanRequestsService.filterByTimeRange(allRequests, timeRange);
-    final Map<String, int> perDay = {};
+        ScanRequestsService.filterByTimeRange(
+          allRequests,
+          timeRange,
+        ).where((r) => (r['status'] ?? 'pending') == 'completed').toList();
+    // Build disease stats from validated data
+    final Map<String, int> diseaseCounts = {};
+    int totalDetections = 0;
+    for (final r in filtered) {
+      List<dynamic> diseaseSummary = [];
+      if (r['diseaseSummary'] != null) {
+        diseaseSummary = r['diseaseSummary'] as List<dynamic>? ?? [];
+      } else if (r['diseases'] != null) {
+        diseaseSummary = r['diseases'] as List<dynamic>? ?? [];
+      } else if (r['detections'] != null) {
+        diseaseSummary = r['detections'] as List<dynamic>? ?? [];
+      } else if (r['results'] != null) {
+        diseaseSummary = r['results'] as List<dynamic>? ?? [];
+      }
+      for (final d in diseaseSummary) {
+        String name = 'Unknown';
+        int count = 1;
+        if (d is Map<String, dynamic>) {
+          name = d['name'] ?? d['label'] ?? d['disease'] ?? 'Unknown';
+          count = d['count'] ?? d['confidence'] ?? 1;
+        } else if (d is String) {
+          name = d;
+        }
+        final lower = name.toLowerCase();
+        if (lower.contains('tip burn') || lower.contains('unknown')) continue;
+        diseaseCounts[name] = (diseaseCounts[name] ?? 0) + count;
+        totalDetections += count;
+      }
+    }
+    final List<Map<String, dynamic>> diseaseStats = [];
+    // Application frequency column removed per request; focus on trend only
+
+    // We'll fill these soon; declare placeholders for closure
+    List<String> labels = const [];
+    Map<String, int> diseaseByDay = const {};
+    Map<String, int> healthyByDay = const {};
+    Map<String, Map<String, int>> diseaseDayCounts = const {};
+
+    String classifyTrend(String diseaseName) {
+      // Build series for this disease from daily counts
+      final lower = diseaseName.toLowerCase();
+      final entries =
+          labels.map((k) {
+            final val =
+                lower == 'healthy'
+                    ? (healthyByDay[k] ?? 0)
+                    : ((diseaseDayCounts[lower] ?? const <String, int>{})[k] ??
+                        0);
+            return val.toDouble();
+          }).toList();
+      if (entries.isEmpty) return 'N/A';
+      final first = entries.first;
+      final last = entries.last;
+      final delta = last - first;
+      const double eps = 1.0; // threshold to ignore noise
+      if (delta > eps) return 'Increasing';
+      if (delta < -eps) return 'Decreasing';
+      return 'Stable';
+    }
+
+    diseaseCounts.forEach((name, count) {
+      final pct = totalDetections > 0 ? count / totalDetections : 0.0;
+      diseaseStats.add({
+        'name': name,
+        'count': count,
+        'percentage': pct,
+        'type': name.toLowerCase() == 'healthy' ? 'healthy' : 'disease',
+        'trend': 'N/A',
+      });
+    });
+    diseaseStats.sort(
+      (a, b) => (b['count'] as int).compareTo(a['count'] as int),
+    );
+
+    // Determine date range for weather
+    DateTime startDate;
+    DateTime endDate;
+    if (filtered.isNotEmpty) {
+      final dates =
+          filtered.map<DateTime>((r) {
+              final c = r['createdAt'];
+              if (c is String) return DateTime.tryParse(c) ?? DateTime.now();
+              return c.toDate() as DateTime;
+            }).toList()
+            ..sort();
+      startDate = dates.first;
+      endDate = dates.last;
+    } else {
+      // fallback: last 7 days
+      endDate = DateTime.now();
+      startDate = endDate.subtract(const Duration(days: 7));
+    }
+
+    // Fetch weather summary (avg/min/max temp) for range
+    final weather = await WeatherService.getAverageTemperature(
+      start: DateTime(startDate.year, startDate.month, startDate.day),
+      end: DateTime(endDate.year, endDate.month, endDate.day),
+    );
+    // If weather summary is entirely empty (e.g., API no data for a single day),
+    // use a safe label to avoid NaN formatting downstream
+    final String weatherLabel = weather.toLabel();
+    // Daily series for chart: separate disease vs healthy counts
+    diseaseByDay = {};
+    healthyByDay = {};
+    diseaseDayCounts = {};
     // For response-time trend (avg hours per day)
     final Map<String, List<double>> responseHoursByDay = {};
     for (final r in filtered) {
@@ -32,7 +140,43 @@ class ReportPdfService {
       }
       final key =
           '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
-      perDay[key] = (perDay[key] ?? 0) + 1;
+
+      // Split detections into healthy vs disease for this day
+      List<dynamic> diseaseSummary = [];
+      if (r['diseaseSummary'] != null) {
+        diseaseSummary = r['diseaseSummary'] as List<dynamic>? ?? [];
+      } else if (r['diseases'] != null) {
+        diseaseSummary = r['diseases'] as List<dynamic>? ?? [];
+      } else if (r['detections'] != null) {
+        diseaseSummary = r['detections'] as List<dynamic>? ?? [];
+      } else if (r['results'] != null) {
+        diseaseSummary = r['results'] as List<dynamic>? ?? [];
+      }
+
+      if (diseaseSummary.isNotEmpty) {
+        for (final d in diseaseSummary) {
+          String name = 'Unknown';
+          int count = 1;
+          if (d is Map<String, dynamic>) {
+            name = d['name'] ?? d['label'] ?? d['disease'] ?? 'Unknown';
+            count = d['count'] ?? d['confidence'] ?? 1;
+          } else if (d is String) {
+            name = d;
+          }
+          final lower = name.toLowerCase();
+          if (lower.contains('tip burn') || lower.contains('unknown')) {
+            continue;
+          }
+          if (lower == 'healthy') {
+            healthyByDay[key] = (healthyByDay[key] ?? 0) + count;
+          } else {
+            diseaseByDay[key] = (diseaseByDay[key] ?? 0) + count;
+            final perDay = diseaseDayCounts[lower] ?? <String, int>{};
+            perDay[key] = (perDay[key] ?? 0) + count;
+            diseaseDayCounts[lower] = perDay;
+          }
+        }
+      }
 
       // Compute expert response time in hours when reviewedAt present
       final reviewedAt = r['reviewedAt'];
@@ -49,32 +193,54 @@ class ReportPdfService {
         (responseHoursByDay[key] ??= <double>[]).add(hours);
       }
     }
-    final List<MapEntry<String, int>> trend =
-        perDay.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
-    final List<MapEntry<String, double>> responseTrend =
-        responseHoursByDay
-            .map(
-              (k, v) => MapEntry(
-                k,
-                v.isEmpty ? 0.0 : (v.reduce((a, b) => a + b) / v.length),
-              ),
-            )
-            .entries
-            .toList()
-          ..sort((a, b) => a.key.compareTo(b.key));
+    // Build aligned label set (dates) and ordered series arrays
+    final allKeys =
+        <String>{}
+          ..addAll(diseaseByDay.keys)
+          ..addAll(healthyByDay.keys);
+    labels = allKeys.toList()..sort();
+    final diseaseSeries = labels
+        .map((k) => (diseaseByDay[k] ?? 0).toDouble())
+        .map((v) => v.isFinite ? v : 0.0)
+        .toList(growable: false);
+    final healthySeries = labels
+        .map((k) => (healthyByDay[k] ?? 0).toDouble())
+        .map((v) => v.isFinite ? v : 0.0)
+        .toList(growable: false);
+
+    // Now that labels and daily series are ready, fill trend per disease
+    for (final item in diseaseStats) {
+      final name = (item['name'] ?? '').toString();
+      item['trend'] = classifyTrend(name);
+    }
+    // Keep available if needed later; not used in simplified layout
+    // final List<MapEntry<String, double>> responseTrend =
+    //     responseHoursByDay
+    //         .map(
+    //           (k, v) => MapEntry(
+    //             k,
+    //             v.isEmpty ? 0.0 : (v.reduce((a, b) => a + b) / v.length),
+    //           ),
+    //         )
+    //         .entries
+    //         .toList()
+    //       ..sort((a, b) => a.key.compareTo(b.key));
     final int completed = await ScanRequestsService.getCompletedReportsCount();
     final int pending = await ScanRequestsService.getPendingReportsCount();
     final String avgResponse = await ScanRequestsService.getAverageResponseTime(
       timeRange: timeRange,
     );
 
+    // Use built-in font with Unicode fallback to avoid missing glyph issues
+    final baseFont = await PdfGoogleFonts.nunitoRegular();
+    final boldFont = await PdfGoogleFonts.nunitoBold();
     final doc = pw.Document();
 
     // Load utility name
     final String utilityName = await SettingsService.getUtilityName();
 
     final now = DateTime.now();
-    final String title = 'Reports Summary ($timeRange)';
+    final String title = 'Mango Disease Summary ($timeRange)';
 
     // Adaptive sizing for compact single-page layout
     final isSmall = pageSize.toLowerCase() == 'a5';
@@ -82,135 +248,183 @@ class ReportPdfService {
     final double headerFont = isSmall ? 12 : 16;
     final double chipLabelFont = isSmall ? 7.5 : 9;
     final double chipValueFont = isSmall ? 10 : 12;
-    final double chartHeight = isSmall ? 90 : 110;
+    // Make charts more compact to ensure the disease table fits on the page
+    final double chartHeight = isSmall ? 70 : 90;
     final int tableRows = isSmall ? 4 : 6;
     final double tableFont = isSmall ? 8 : 9.5;
+
+    // If using a background template with embedded logos, we won't draw logos here
+    final bool useBackground = backgroundAsset != null;
+    final pw.ImageProvider? bgImage =
+        useBackground ? await _tryLoadLogo(backgroundAsset) : null;
 
     doc.addPage(
       pw.Page(
         pageFormat: _resolvePageFormat(pageSize),
-        margin: pw.EdgeInsets.all(margin),
+        margin:
+            bgImage == null ? pw.EdgeInsets.all(margin) : pw.EdgeInsets.zero,
         build: (context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              // Header
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text(
-                        utilityName,
-                        style: pw.TextStyle(
-                          fontSize: headerFont,
-                          fontWeight: pw.FontWeight.bold,
-                        ),
-                      ),
-                      pw.SizedBox(height: 2),
-                      pw.Text(
-                        title,
-                        style: pw.TextStyle(
-                          fontSize: chipLabelFont + 1,
-                          color: pdf.PdfColors.grey700,
-                        ),
-                      ),
-                    ],
-                  ),
-                  pw.Text(
-                    '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}',
-                    style: pw.TextStyle(fontSize: chipLabelFont + 1),
-                  ),
-                ],
-              ),
-              pw.SizedBox(height: isSmall ? 4 : 6),
-              // Overview chips
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  _statChip(
-                    'Reviewed',
-                    completed.toString(),
-                    chipLabelFont,
-                    chipValueFont,
-                  ),
-                  _statChip(
-                    'Pending',
-                    pending.toString(),
-                    chipLabelFont,
-                    chipValueFont,
-                  ),
-                  _statChip(
-                    'Avg Resp.',
-                    avgResponse,
-                    chipLabelFont,
-                    chipValueFont,
-                  ),
-                ],
-              ),
-              pw.SizedBox(height: isSmall ? 6 : 8),
-              // Charts grid (2 columns)
-              pw.Row(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Expanded(
-                    child: pw.Column(
-                      crossAxisAlignment: pw.CrossAxisAlignment.start,
-                      children: [
-                        pw.Text(
-                          'Reports / Day',
-                          style: pw.TextStyle(
-                            fontSize: chipValueFont,
-                            fontWeight: pw.FontWeight.bold,
-                          ),
-                        ),
-                        pw.SizedBox(height: 3),
-                        _buildTrendChart(trend, height: chartHeight),
-                      ],
+          final content = pw.Padding(
+            padding:
+                bgImage == null
+                    ? pw.EdgeInsets.zero
+                    : pw.EdgeInsets.fromLTRB(
+                      isSmall ? 14 : 28, // left
+                      isSmall ? 80 : 120, // top to clear header graphics
+                      isSmall ? 14 : 28, // right
+                      isSmall ? 18 : 28, // bottom
                     ),
-                  ),
-                  pw.SizedBox(width: 8),
-                  pw.Expanded(
-                    child: pw.Column(
-                      crossAxisAlignment: pw.CrossAxisAlignment.start,
-                      children: [
-                        pw.Text(
-                          'Avg Expert Response (hrs)',
-                          style: pw.TextStyle(
-                            fontSize: chipValueFont,
-                            fontWeight: pw.FontWeight.bold,
-                          ),
-                        ),
-                        pw.SizedBox(height: 3),
-                        _buildResponseTrendChart(
-                          responseTrend,
-                          height: chartHeight,
-                        ),
-                      ],
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                // No logos here; template image contains them
+                // Title + date
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text(
+                      title,
+                      style: pw.TextStyle(
+                        fontSize: headerFont,
+                        fontWeight: pw.FontWeight.bold,
+                        font: boldFont,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              pw.SizedBox(height: isSmall ? 6 : 8),
-              pw.Text(
-                'Disease Distribution',
-                style: pw.TextStyle(
-                  fontSize: chipValueFont,
-                  fontWeight: pw.FontWeight.bold,
+                    pw.Text(
+                      _fmtYmd(now),
+                      style: pw.TextStyle(
+                        fontSize: chipLabelFont + 1,
+                        font: baseFont,
+                      ),
+                    ),
+                  ],
                 ),
+                pw.SizedBox(height: 2),
+                // Reporting period line
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text(
+                      'Reporting Period: ' + _fmtHumanRange(startDate, endDate),
+                      style: pw.TextStyle(fontSize: chipLabelFont + 1),
+                    ),
+                    pw.SizedBox(),
+                  ],
+                ),
+                pw.Divider(thickness: 0.7),
+                // Info rows with bold labels
+                _labeledRow(
+                  'Location:',
+                  'Carmen, Davao del Norte',
+                  chipLabelFont,
+                  font: baseFont,
+                  boldFont: boldFont,
+                ),
+                _labeledRow(
+                  'Weather Summary:',
+                  weatherLabel,
+                  chipLabelFont,
+                  font: baseFont,
+                  boldFont: boldFont,
+                ),
+                _labeledRow(
+                  'Prepared By:',
+                  utilityName.isEmpty
+                      ? 'AgriScan Monitoring System'
+                      : utilityName,
+                  chipLabelFont,
+                  font: baseFont,
+                  boldFont: boldFont,
+                ),
+                pw.Divider(thickness: 0.7),
+                pw.SizedBox(height: isSmall ? 4 : 6),
+                // Overview bullets (more readable)
+                pw.Text(
+                  'Overview',
+                  style: pw.TextStyle(
+                    fontSize: chipValueFont,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 2),
+                pw.Bullet(
+                  text: 'Total Reports Reviewed: ' + completed.toString(),
+                ),
+                pw.Bullet(text: 'Pending Requests: ' + pending.toString()),
+                pw.Bullet(text: 'Average Response Time: ' + avgResponse),
+                pw.SizedBox(height: isSmall ? 6 : 8),
+                // Stacked large charts
+                pw.Text(
+                  'Avg Expert Response (hrs)',
+                  style: pw.TextStyle(
+                    fontSize: chipValueFont,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 3),
+                _buildResponseTrendChart(
+                  _buildResponseTrend(responseHoursByDay),
+                  height: chartHeight + 10,
+                ),
+                pw.SizedBox(height: isSmall ? 4 : 8),
+                pw.Text(
+                  'Disease Distribution',
+                  style: pw.TextStyle(
+                    fontSize: chipValueFont,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 3),
+                _buildTrendChart(
+                  labels,
+                  diseaseSeries,
+                  healthySeries,
+                  height: chartHeight,
+                ),
+                pw.SizedBox(height: 3),
+                // Legend for disease vs healthy
+                pw.Row(
+                  children: [
+                    _legendSwatch(pdf.PdfColors.red, 'Disease'),
+                    pw.SizedBox(width: 10),
+                    _legendSwatch(pdf.PdfColors.green, 'Healthy'),
+                  ],
+                ),
+                pw.SizedBox(height: isSmall ? 6 : 8),
+                // Disease Distribution table - ensure it fits by allowing page break
+                pw.Text(
+                  'Disease Distribution',
+                  style: pw.TextStyle(
+                    fontSize: chipValueFont,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 3),
+                pw.Flexible(
+                  child: _buildDiseaseTable(
+                    diseaseStats,
+                    maxRows: tableRows,
+                    fontSize: tableFont,
+                  ),
+                ),
+                pw.SizedBox(height: isSmall ? 4 : 6),
+                // Removed recommendations section per request
+                pw.SizedBox(height: isSmall ? 4 : 6),
+                pw.Text(
+                  'This report summarizes detections within the selected time range. Tip burn/Unknown are excluded from disease counts.',
+                  style: pw.TextStyle(fontSize: chipLabelFont),
+                ),
+              ],
+            ),
+          );
+
+          if (bgImage == null) return content;
+          return pw.Stack(
+            children: [
+              pw.Positioned.fill(
+                child: pw.Image(bgImage, fit: pw.BoxFit.cover),
               ),
-              pw.SizedBox(height: 3),
-              _buildDiseaseTable(
-                diseaseStats,
-                maxRows: tableRows,
-                fontSize: tableFont,
-              ),
-              pw.SizedBox(height: isSmall ? 4 : 6),
-              pw.Text(
-                'Tip burn/Unknown are excluded from disease counts.',
-                style: pw.TextStyle(fontSize: chipLabelFont),
-              ),
+              content,
             ],
           );
         },
@@ -269,6 +483,11 @@ class ReportPdfService {
             padding: const pw.EdgeInsets.all(4),
             child: pw.Text('Percentage', style: headerStyle),
           ),
+          pw.Padding(
+            padding: const pw.EdgeInsets.all(4),
+            child: pw.Text('Trend', style: headerStyle),
+          ),
+          // Frequency column removed
         ],
       ),
     ];
@@ -277,6 +496,7 @@ class ReportPdfService {
       final name = (d['name'] ?? 'Unknown').toString();
       final count = (d['count'] ?? 0).toString();
       final pct = ((d['percentage'] ?? 0.0) * 100).toStringAsFixed(1) + '%';
+      final trend = (d['trend'] ?? 'N/A').toString();
       rows.add(
         pw.TableRow(
           children: [
@@ -292,6 +512,11 @@ class ReportPdfService {
               padding: const pw.EdgeInsets.all(4),
               child: pw.Text(pct, style: cellStyle),
             ),
+            pw.Padding(
+              padding: const pw.EdgeInsets.all(4),
+              child: pw.Text(trend, style: cellStyle),
+            ),
+            // Frequency cell removed
           ],
         ),
       );
@@ -315,55 +540,22 @@ class ReportPdfService {
     return pw.Table(border: pw.TableBorder.all(width: 0.5), children: rows);
   }
 
-  static pw.Widget _statChip(
-    String label,
-    String value,
-    double labelFont,
-    double valueFont,
-  ) {
-    return pw.Container(
-      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: pdf.PdfColors.grey300, width: 0.5),
-        borderRadius: pw.BorderRadius.circular(6),
-      ),
-      child: pw.Row(
-        mainAxisSize: pw.MainAxisSize.min,
-        children: [
-          pw.Text(
-            label,
-            style: pw.TextStyle(
-              fontSize: labelFont,
-              color: pdf.PdfColors.grey700,
-            ),
-          ),
-          pw.SizedBox(width: 6),
-          pw.Text(
-            value,
-            style: pw.TextStyle(
-              fontSize: valueFont,
-              fontWeight: pw.FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  // Removed statChip helper (not used in simplified layout)
 
   static pw.Widget _buildTrendChart(
-    List<MapEntry<String, int>> trend, {
+    List<String> labels,
+    List<double> diseaseCounts,
+    List<double> healthyCounts, {
     double height = 180,
   }) {
-    if (trend.isEmpty) {
+    if (labels.isEmpty || labels.length < 2) {
       return pw.Text('No trend data');
     }
 
-    final points = <pw.PointChartValue>[];
     int maxY = 1;
-    for (int i = 0; i < trend.length; i++) {
-      final y = trend[i].value;
-      if (y > maxY) maxY = y;
-      points.add(pw.PointChartValue(i.toDouble(), y.toDouble()));
+    for (final v in [...diseaseCounts, ...healthyCounts]) {
+      final vv = v.isFinite ? v : 0.0;
+      if (vv.toInt() > maxY) maxY = vv.toInt();
     }
 
     // Simple Cartesian chart using pw.Chart
@@ -372,41 +564,96 @@ class ReportPdfService {
       child: pw.Chart(
         grid: pw.CartesianGrid(
           xAxis: pw.FixedAxis.fromStrings(
-            List<String>.from(trend.map((e) => e.key.substring(5))),
+            labels.map((e) => e.substring(5)).toList(),
             marginStart: 10,
             marginEnd: 10,
           ),
           yAxis: pw.FixedAxis([
-            for (int i = 0; i <= maxY; i++) i.toDouble(),
-          ], format: (v) => v.toInt().toString()),
+            for (
+              int i = 0;
+              i <= maxY + _niceStepInt(maxY);
+              i += _niceStepInt(maxY)
+            )
+              i.toDouble(),
+          ], format: (v) => (v.isFinite ? v.toInt() : 0).toString()),
         ),
         datasets: [
           pw.LineDataSet(
             drawSurface: true,
             isCurved: true,
-            color: pdf.PdfColors.blue,
-            data: points,
+            color: pdf.PdfColors.red,
+            data: [
+              for (int i = 0; i < diseaseCounts.length; i++)
+                pw.PointChartValue(i.toDouble(), diseaseCounts[i]),
+            ],
+          ),
+          pw.LineDataSet(
+            drawSurface: false,
+            isCurved: true,
+            color: pdf.PdfColors.green,
+            data: [
+              for (int i = 0; i < healthyCounts.length; i++)
+                pw.PointChartValue(i.toDouble(), healthyCounts[i]),
+            ],
           ),
         ],
       ),
     );
   }
 
+  // Removed response trend chart (not used in simplified layout)
+  static List<MapEntry<String, double>> _buildResponseTrend(
+    Map<String, List<double>> responseHoursByDay,
+  ) {
+    final entries =
+        responseHoursByDay.entries
+            .map(
+              (e) => MapEntry(
+                e.key,
+                e.value.isEmpty
+                    ? 0.0
+                    : (e.value.reduce((a, b) => a + b) / e.value.length),
+              ),
+            )
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+    return entries;
+  }
+
+  static int _niceStepInt(int maxY) {
+    if (maxY <= 5) return 1;
+    if (maxY <= 10) return 2;
+    if (maxY <= 20) return 5;
+    if (maxY <= 50) return 10;
+    return 20;
+  }
+
+  static double _niceStepDouble(double maxY) {
+    if (maxY <= 5) return 1;
+    if (maxY <= 10) return 2;
+    if (maxY <= 20) return 5;
+    if (maxY <= 50) return 10;
+    return 20;
+  }
+
   static pw.Widget _buildResponseTrendChart(
     List<MapEntry<String, double>> trend, {
     double height = 180,
   }) {
-    if (trend.isEmpty) {
+    if (trend.isEmpty || trend.length < 2) {
       return pw.Text('No response-time data');
     }
 
     final points = <pw.PointChartValue>[];
     double maxY = 1.0;
     for (int i = 0; i < trend.length; i++) {
-      final y = trend[i].value;
+      final raw = trend[i].value;
+      final y = raw.isFinite ? raw : 0.0;
       if (y > maxY) maxY = y;
       points.add(pw.PointChartValue(i.toDouble(), y));
     }
+
+    final step = _niceStepDouble(maxY);
 
     return pw.Container(
       height: height,
@@ -418,14 +665,14 @@ class ReportPdfService {
             marginEnd: 10,
           ),
           yAxis: pw.FixedAxis([
-            for (double i = 0; i <= maxY; i += _safeStep(maxY)) i,
-          ], format: (v) => v.toStringAsFixed(1)),
+            for (double i = 0; i <= maxY + step; i += step) i.isFinite ? i : 0,
+          ], format: (v) => (v.isFinite ? v : 0).toStringAsFixed(1)),
         ),
         datasets: [
           pw.LineDataSet(
             drawSurface: false,
             isCurved: true,
-            color: pdf.PdfColors.deepOrange,
+            color: pdf.PdfColors.blue,
             data: points,
           ),
         ],
@@ -449,9 +696,92 @@ class ReportPdfService {
     }
   }
 
-  static double _safeStep(double maxY) {
-    final step = maxY / 4.0;
-    if (step.isNaN || step.isInfinite || step <= 0.0) return 1.0;
-    return step.clamp(0.5, 24.0);
+  // _safeStep no longer used in simplified layout
+
+  static String _fmtYmd(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}'
+          .toString();
+
+  static String _fmtHumanRange(DateTime start, DateTime end) {
+    String m(int m) => _monthName(m);
+    final sameMonth = start.month == end.month && start.year == end.year;
+    if (sameMonth) {
+      // Use ASCII hyphen to avoid missing glyphs in embedded PDF font
+      return '${m(start.month)} ${start.day}-${end.day}, ${end.year}';
+    }
+    return '${m(start.month)} ${start.day}, ${start.year} - ${m(end.month)} ${end.day}, ${end.year}';
   }
+
+  static String _monthName(int m) {
+    const names = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    if (m < 1 || m > 12) return '';
+    return names[m - 1];
+  }
+
+  static Future<pw.ImageProvider?> _tryLoadLogo(String assetPath) async {
+    try {
+      final bytes = await rootBundle.load(assetPath);
+      return pw.MemoryImage(bytes.buffer.asUint8List());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static pw.Widget _labeledRow(
+    String label,
+    String value,
+    double fontSize, {
+    pw.Font? font,
+    pw.Font? boldFont,
+  }) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(top: 2, bottom: 2),
+      child: pw.RichText(
+        text: pw.TextSpan(
+          children: [
+            pw.TextSpan(
+              text: '$label ',
+              style: pw.TextStyle(
+                fontWeight: pw.FontWeight.bold,
+                fontSize: fontSize,
+                font: boldFont,
+              ),
+            ),
+            pw.TextSpan(
+              text: value,
+              style: pw.TextStyle(fontSize: fontSize, font: font),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static pw.Widget _legendSwatch(pdf.PdfColor color, String label) {
+    return pw.Row(
+      mainAxisSize: pw.MainAxisSize.min,
+      children: [
+        pw.Container(width: 10, height: 10, color: color),
+        pw.SizedBox(width: 4),
+        pw.Text(label, style: const pw.TextStyle(fontSize: 9)),
+      ],
+    );
+  }
+
+  // Frequency extraction removed (not used)
+
+  // Recommendations section removed as per request
 }
