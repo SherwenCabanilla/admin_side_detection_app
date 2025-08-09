@@ -128,42 +128,7 @@ class ScanRequestsService {
         });
       });
 
-      // If no disease data found, create some dummy data for testing
-      if (diseaseStats.isEmpty && filteredRequests.isNotEmpty) {
-        print('No disease data found, creating dummy data for testing');
-        diseaseStats.addAll([
-          {
-            'name': 'Anthracnose',
-            'count': 5,
-            'percentage': 0.4,
-            'type': 'disease',
-          },
-          {
-            'name': 'Powdery Mildew',
-            'count': 3,
-            'percentage': 0.24,
-            'type': 'disease',
-          },
-          {
-            'name': 'Bacterial Blackspot',
-            'count': 2,
-            'percentage': 0.16,
-            'type': 'disease',
-          },
-          {
-            'name': 'Dieback',
-            'count': 1,
-            'percentage': 0.08,
-            'type': 'disease',
-          },
-          {
-            'name': 'Healthy',
-            'count': 2,
-            'percentage': 0.12,
-            'type': 'healthy',
-          },
-        ]);
-      }
+      // Do not inject dummy data; return only real disease stats
 
       // Sort by count (descending)
       diseaseStats.sort(

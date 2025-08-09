@@ -6,10 +6,11 @@ import '../shared/total_users_card.dart';
 import '../shared/pending_approvals_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/scan_requests_service.dart';
+import '../services/csv_export_service.dart';
+// duplicate import removed
 import 'admin_dashboard.dart' show ScanRequestsSnapshot;
 import 'package:provider/provider.dart';
 import 'dart:async';
-import '../models/user_store.dart';
 
 class Reports extends StatefulWidget {
   final VoidCallback? onGoToUsers;
@@ -34,6 +35,13 @@ class _ReportsState extends State<Reports> {
 
   List<Map<String, dynamic>> _reportsTrend = [];
   List<Map<String, dynamic>> _diseaseStats = [];
+  List<Map<String, dynamic>> _avgResponseTrend = [];
+
+  // SLA summary cached for display in KPI card (string like "85%")
+  String? _slaWithin24h;
+  String? _slaWithin48h;
+  String? _completionRate;
+  int? _overduePendingCount;
 
   @override
   void initState() {
@@ -70,37 +78,91 @@ class _ReportsState extends State<Reports> {
       scanRequests,
       _selectedTimeRange,
     );
-    int totalResponseTime = 0;
+    // Real-time aggregates
+    int totalResponseTimeHours = 0;
     int completedRequests = 0;
+    int completed = 0;
+    int pending = 0;
+    int within24 = 0;
+    int within48 = 0;
+    int overduePending = 0;
+    final Map<String, List<double>> hoursByDay = {};
+
     for (final request in filteredRequests) {
-      if (request['status'] == 'completed' &&
-          request['createdAt'] != null &&
-          request['reviewedAt'] != null) {
-        DateTime createdAt, reviewedAt;
-        if (request['createdAt'] is Timestamp) {
-          createdAt = request['createdAt'].toDate();
-        } else if (request['createdAt'] is String) {
-          createdAt = DateTime.tryParse(request['createdAt']) ?? DateTime.now();
-        } else {
-          createdAt = DateTime.now();
+      final status = (request['status'] ?? '').toString();
+      final createdAtRaw = request['createdAt'];
+      DateTime? createdAt;
+      if (createdAtRaw is Timestamp) createdAt = createdAtRaw.toDate();
+      if (createdAtRaw is String) createdAt = DateTime.tryParse(createdAtRaw);
+
+      if (status == 'completed') {
+        completed++;
+        final reviewedAtRaw = request['reviewedAt'];
+        DateTime? reviewedAt;
+        if (reviewedAtRaw is Timestamp) reviewedAt = reviewedAtRaw.toDate();
+        if (reviewedAtRaw is String)
+          reviewedAt = DateTime.tryParse(reviewedAtRaw);
+        if (createdAt != null && reviewedAt != null) {
+          final hours = reviewedAt.difference(createdAt).inMinutes / 60.0;
+          totalResponseTimeHours += (hours).floor();
+          completedRequests++;
+          if (hours <= 24.0) within24++;
+          if (hours <= 48.0) within48++;
+          final key =
+              '${createdAt.year}-${createdAt.month.toString().padLeft(2, '0')}-${createdAt.day.toString().padLeft(2, '0')}';
+          (hoursByDay[key] ??= <double>[]).add(hours);
         }
-        if (request['reviewedAt'] is Timestamp) {
-          reviewedAt = request['reviewedAt'].toDate();
-        } else {
-          reviewedAt =
-              DateTime.tryParse(request['reviewedAt']) ?? DateTime.now();
+      } else if (status == 'pending') {
+        pending++;
+        if (createdAt != null) {
+          final ageHrs = DateTime.now().difference(createdAt).inMinutes / 60.0;
+          if (ageHrs > 24.0) overduePending++;
         }
-        final difference = reviewedAt.difference(createdAt);
-        totalResponseTime += difference.inHours;
-        completedRequests++;
       }
     }
+
     final averageResponseTime =
         completedRequests == 0
             ? '0 hours'
-            : '${(totalResponseTime / completedRequests).toStringAsFixed(2)} hours';
+            : '${(totalResponseTimeHours / completedRequests).toStringAsFixed(2)} hours';
+
+    // Build daily average response series
+    final List<Map<String, dynamic>> series =
+        hoursByDay.entries.map((e) {
+            final avg =
+                e.value.isEmpty
+                    ? 0.0
+                    : e.value.reduce((a, b) => a + b) / e.value.length;
+            return {'date': e.key, 'avgHours': avg};
+          }).toList()
+          ..sort(
+            (a, b) => (a['date'] as String).compareTo(b['date'] as String),
+          );
+
+    // Compute SLA and completion rate
+    final sla24 =
+        completed == 0
+            ? '—'
+            : '${((within24 / completed) * 100).toStringAsFixed(0)}%';
+    final sla48 =
+        completed == 0
+            ? '—'
+            : '${((within48 / completed) * 100).toStringAsFixed(0)}%';
+    final totalForRate = completed + pending;
+    final completionRate =
+        totalForRate == 0
+            ? '—'
+            : '${((completed / totalForRate) * 100).toStringAsFixed(0)}%';
+
     setState(() {
       _stats['averageResponseTime'] = averageResponseTime;
+      _stats['totalReportsReviewed'] = completed;
+      _stats['pendingRequests'] = pending;
+      _avgResponseTrend = series;
+      _slaWithin24h = sla24;
+      _slaWithin48h = sla48;
+      _completionRate = completionRate;
+      _overduePendingCount = overduePending;
     });
   }
 
@@ -115,6 +177,8 @@ class _ReportsState extends State<Reports> {
         _loadStats(),
         _loadReportsTrend(),
         _loadDiseaseStats(),
+        _loadAvgResponseTrend(),
+        _loadSla(),
       ]);
 
       setState(() {
@@ -130,12 +194,19 @@ class _ReportsState extends State<Reports> {
 
   Future<void> _loadStats() async {
     try {
+      // Compute counts based on the selected time range for accuracy
+      final all = await ScanRequestsService.getScanRequests();
+      final filtered = ScanRequestsService.filterByTimeRange(
+        all,
+        _selectedTimeRange,
+      );
       final completedReports =
-          await ScanRequestsService.getCompletedReportsCount();
-      final pendingReports = await ScanRequestsService.getPendingReportsCount();
+          filtered.where((r) => (r['status'] ?? '') == 'completed').length;
+      final pendingReports =
+          filtered.where((r) => (r['status'] ?? '') == 'pending').length;
       final averageResponseTime =
           await ScanRequestsService.getAverageResponseTime(
-            timeRange: 'Last 7 Days', // Always use 'Last 7 Days' for the card
+            timeRange: _selectedTimeRange,
           );
 
       setState(() {
@@ -218,6 +289,277 @@ class _ReportsState extends State<Reports> {
     }
   }
 
+  Future<void> _loadAvgResponseTrend() async {
+    try {
+      final all = await ScanRequestsService.getScanRequests();
+      final filtered = ScanRequestsService.filterByTimeRange(
+        all,
+        _selectedTimeRange,
+      );
+      final Map<String, List<double>> hoursByDay = {};
+      for (final r in filtered) {
+        if ((r['status'] ?? '') != 'completed') continue;
+        final createdAt = r['createdAt'];
+        final reviewedAt = r['reviewedAt'];
+        if (createdAt == null || reviewedAt == null) continue;
+        DateTime? c;
+        DateTime? v;
+        if (createdAt is Timestamp) c = createdAt.toDate();
+        if (createdAt is String) c = DateTime.tryParse(createdAt);
+        if (reviewedAt is Timestamp) v = reviewedAt.toDate();
+        if (reviewedAt is String) v = DateTime.tryParse(reviewedAt);
+        if (c == null || v == null) continue;
+        final key =
+            '${c.year}-${c.month.toString().padLeft(2, '0')}-${c.day.toString().padLeft(2, '0')}';
+        final hours = v.difference(c).inMinutes / 60.0;
+        (hoursByDay[key] ??= <double>[]).add(hours);
+      }
+      final List<Map<String, dynamic>> series =
+          hoursByDay.entries.map((e) {
+              final avg =
+                  e.value.isEmpty
+                      ? 0.0
+                      : e.value.reduce((a, b) => a + b) / e.value.length;
+              return {'date': e.key, 'avgHours': avg};
+            }).toList()
+            ..sort(
+              (a, b) => (a['date'] as String).compareTo(b['date'] as String),
+            );
+      setState(() {
+        _avgResponseTrend = series;
+      });
+    } catch (e) {
+      print('Error loading avg response trend: $e');
+      setState(() {
+        _avgResponseTrend = [];
+      });
+    }
+  }
+
+  Future<void> _loadSla() async {
+    try {
+      final all = await ScanRequestsService.getScanRequests();
+      final filtered = ScanRequestsService.filterByTimeRange(
+        all,
+        _selectedTimeRange,
+      );
+      int completed = 0;
+      int within24 = 0;
+      int within48 = 0;
+      int pending = 0;
+      int overduePending = 0;
+      for (final r in filtered) {
+        final status = (r['status'] ?? '').toString();
+        final createdAt = r['createdAt'];
+        DateTime? created;
+        if (createdAt is Timestamp) {
+          created = createdAt.toDate();
+        } else if (createdAt is String) {
+          created = DateTime.tryParse(createdAt);
+        }
+        if (status == 'completed') {
+          final reviewedAt = r['reviewedAt'];
+          if (created == null || reviewedAt == null) continue;
+          DateTime reviewed;
+          if (reviewedAt is Timestamp) {
+            reviewed = reviewedAt.toDate();
+          } else if (reviewedAt is String) {
+            reviewed = DateTime.tryParse(reviewedAt) ?? created;
+          } else {
+            continue;
+          }
+          completed++;
+          final hours = reviewed.difference(created).inMinutes / 60.0;
+          if (hours <= 24.0) within24++;
+          if (hours <= 48.0) within48++;
+        } else if (status == 'pending') {
+          pending++;
+          if (created != null) {
+            final ageHrs = DateTime.now().difference(created).inMinutes / 60.0;
+            if (ageHrs > 24.0) overduePending++;
+          }
+        }
+      }
+      final slaStr =
+          completed == 0
+              ? '—'
+              : '${((within24 / completed) * 100).toStringAsFixed(0)}%';
+      final sla48Str =
+          completed == 0
+              ? '—'
+              : '${((within48 / completed) * 100).toStringAsFixed(0)}%';
+      final totalForRate = completed + pending;
+      final completionRateStr =
+          totalForRate == 0
+              ? '—'
+              : '${((completed / totalForRate) * 100).toStringAsFixed(0)}%';
+      setState(() {
+        _slaWithin24h = slaStr;
+        _slaWithin48h = sla48Str;
+        _completionRate = completionRateStr;
+        _overduePendingCount = overduePending;
+      });
+    } catch (e) {
+      print('Error loading SLA: $e');
+      setState(() {
+        _slaWithin24h = '—';
+        _slaWithin48h = '—';
+        _completionRate = '—';
+        _overduePendingCount = 0;
+      });
+    }
+  }
+
+  Future<void> _onTimeRangeChanged(String newTimeRange) async {
+    setState(() {
+      _selectedTimeRange = newTimeRange;
+    });
+    // Refresh all dependent data
+    await Future.wait([
+      _loadStats(),
+      _loadReportsTrend(),
+      _loadDiseaseStats(),
+      _loadAvgResponseTrend(),
+      _loadSla(),
+    ]);
+    _updateStatsFromSnapshot();
+  }
+
+  Future<void> _exportGlobalCsv(BuildContext context) async {
+    try {
+      final all = await ScanRequestsService.getScanRequests();
+      final filtered = ScanRequestsService.filterByTimeRange(
+        all,
+        _selectedTimeRange,
+      );
+      int completed = 0;
+      int pending = 0;
+      int within24 = 0;
+      int within48 = 0;
+      int overduePending = 0;
+      double sumHours = 0;
+      int withResponse = 0;
+
+      final completedDetailRows = <List<String>>[
+        [
+          'Report ID',
+          'User',
+          'Status',
+          'Created At',
+          'Reviewed At',
+          'Response Hours',
+        ],
+      ];
+      final pendingDetailRows = <List<String>>[
+        [
+          'Report ID',
+          'User',
+          'Status',
+          'Created At',
+          'Age (hours)',
+          'Overdue >24h',
+        ],
+      ];
+
+      for (final r in filtered) {
+        final status = (r['status'] ?? '').toString();
+        final id = (r['id'] ?? '').toString();
+        final user = (r['userName'] ?? r['userId'] ?? '').toString();
+        final cRaw = r['createdAt'];
+        DateTime? c;
+        if (cRaw is Timestamp) c = cRaw.toDate();
+        if (cRaw is String) c = DateTime.tryParse(cRaw);
+
+        if (status == 'completed') {
+          completed++;
+          final vRaw = r['reviewedAt'];
+          DateTime? v;
+          if (vRaw is Timestamp) v = vRaw.toDate();
+          if (vRaw is String) v = DateTime.tryParse(vRaw);
+          final createdStr = c != null ? c.toIso8601String() : '';
+          final reviewedStr = v != null ? v.toIso8601String() : '';
+          String hoursStr = '';
+          if (c != null && v != null) {
+            final hours = v.difference(c).inMinutes / 60.0;
+            hoursStr = hours.toStringAsFixed(2);
+            sumHours += hours;
+            withResponse++;
+            if (hours <= 24.0) within24++;
+            if (hours <= 48.0) within48++;
+          }
+          completedDetailRows.add([
+            id,
+            user,
+            status,
+            createdStr,
+            reviewedStr,
+            hoursStr,
+          ]);
+        } else if (status == 'pending') {
+          pending++;
+          double? ageHrs;
+          if (c != null) {
+            ageHrs = DateTime.now().difference(c).inMinutes / 60.0;
+            if (ageHrs > 24.0) overduePending++;
+          }
+          pendingDetailRows.add([
+            id,
+            user,
+            status,
+            c != null ? c.toIso8601String() : '',
+            ageHrs != null ? ageHrs.toStringAsFixed(2) : '',
+            (ageHrs != null && ageHrs > 24.0) ? 'YES' : 'NO',
+          ]);
+        }
+      }
+
+      final avgHours =
+          withResponse == 0
+              ? '0'
+              : (sumHours / withResponse).toStringAsFixed(2);
+      final completionRate =
+          (completed + pending) == 0
+              ? '0'
+              : ((completed / (completed + pending)) * 100).toStringAsFixed(0);
+      final sla24 =
+          completed == 0
+              ? '0'
+              : ((within24 / completed) * 100).toStringAsFixed(0);
+      final sla48 =
+          completed == 0
+              ? '0'
+              : ((within48 / completed) * 100).toStringAsFixed(0);
+
+      final rows = <List<String>>[
+        ['Metric', 'Value', 'Range'],
+        ['Completed', completed.toString(), _selectedTimeRange],
+        ['Pending', pending.toString(), _selectedTimeRange],
+        ['Avg Response (hrs)', avgHours, _selectedTimeRange],
+        ['SLA <=24h %', sla24, _selectedTimeRange],
+        ['SLA <=48h %', sla48, _selectedTimeRange],
+        ['Completion Rate %', completionRate, _selectedTimeRange],
+        ['Overdue Pending >24h', overduePending.toString(), _selectedTimeRange],
+        [],
+        ['Completed Reports'],
+        ...completedDetailRows,
+        [],
+        ['Pending Reports'],
+        ...pendingDetailRows,
+      ];
+      await CsvExportService.copyToClipboard(
+        context,
+        'reports_summary_${_selectedTimeRange.replaceAll(' ', '_').toLowerCase()}.csv',
+        rows,
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to export CSV: $e')));
+    }
+  }
+
+  // Users CSV export removed per product decision
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -240,6 +582,61 @@ class _ReportsState extends State<Reports> {
                 ),
                 Row(
                   children: [
+                    // Global time filter
+                    Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: DropdownButton<String>(
+                        value: _selectedTimeRange,
+                        items:
+                            (<String>[
+                                  '1 Day',
+                                  'Last 7 Days',
+                                  'Last 30 Days',
+                                  'Last 60 Days',
+                                  'Last 90 Days',
+                                  'Last Year',
+                                  'Custom…',
+                                ]..addAll(
+                                  _selectedTimeRange.startsWith('Custom (')
+                                      ? <String>[_selectedTimeRange]
+                                      : const <String>[],
+                                ))
+                                .map(
+                                  (range) => DropdownMenuItem(
+                                    value: range,
+                                    child: Text(range),
+                                  ),
+                                )
+                                .toList(),
+                        onChanged: (value) async {
+                          if (value == null) return;
+                          if (value == 'Custom…') {
+                            final picked = await showDateRangePicker(
+                              context: context,
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime.now(),
+                              initialDateRange: DateTimeRange(
+                                start: DateTime.now().subtract(
+                                  const Duration(days: 7),
+                                ),
+                                end: DateTime.now(),
+                              ),
+                            );
+                            if (picked != null) {
+                              final start =
+                                  '${picked.start.year}-${picked.start.month.toString().padLeft(2, '0')}-${picked.start.day.toString().padLeft(2, '0')}';
+                              final end =
+                                  '${picked.end.year}-${picked.end.month.toString().padLeft(2, '0')}-${picked.end.day.toString().padLeft(2, '0')}';
+                              await _onTimeRangeChanged(
+                                'Custom ($start to $end)',
+                              );
+                            }
+                          } else {
+                            _onTimeRangeChanged(value);
+                          }
+                        },
+                      ),
+                    ),
                     StreamBuilder<String>(
                       stream: SettingsService.utilityNameStream(),
                       builder: (context, snapshot) {
@@ -259,38 +656,77 @@ class _ReportsState extends State<Reports> {
                         );
                       },
                     ),
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.picture_as_pdf),
-                      label: const Text('Generate Report'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Color(0xFF2D7204),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () async {
-                        final result = await showDialog<Map<String, String>>(
-                          context: context,
-                          builder: (context) => const GenerateReportDialog(),
-                        );
-                        if (result != null) {
-                          final selectedRange =
-                              result['range'] ?? 'Last 7 Days';
-                          final pageSize = result['pageSize'] ?? 'A4';
-                          try {
-                            await ReportPdfService.generateAndShareReport(
-                              context: context,
-                              timeRange: selectedRange,
-                              pageSize: pageSize,
-                            );
-                          } catch (e) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Failed to generate PDF: $e'),
-                                backgroundColor: Colors.red,
-                              ),
-                            );
+                    PopupMenuButton<String>(
+                      onSelected: (value) async {
+                        if (value == 'pdf') {
+                          final result = await showDialog<Map<String, String>>(
+                            context: context,
+                            builder: (context) => const GenerateReportDialog(),
+                          );
+                          if (result != null) {
+                            final selectedRange =
+                                result['range'] ?? _selectedTimeRange;
+                            final pageSize = result['pageSize'] ?? 'A4';
+                            try {
+                              await ReportPdfService.generateAndShareReport(
+                                context: context,
+                                timeRange: selectedRange,
+                                pageSize: pageSize,
+                              );
+                            } catch (e) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Failed to generate PDF: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
                           }
+                        } else if (value == 'csv') {
+                          await _exportGlobalCsv(context);
                         }
                       },
+                      itemBuilder:
+                          (context) => [
+                            PopupMenuItem(
+                              value: 'pdf',
+                              child: Row(
+                                children: const [
+                                  Icon(Icons.picture_as_pdf, size: 18),
+                                  SizedBox(width: 8),
+                                  Text('Generate PDF'),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'csv',
+                              child: Row(
+                                children: const [
+                                  Icon(Icons.download, size: 18),
+                                  SizedBox(width: 8),
+                                  Text('Export CSV'),
+                                ],
+                              ),
+                            ),
+                          ],
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.file_download),
+                        label: const Text('Export'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2D7204),
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: const Color(0xFF2D7204),
+                          disabledForegroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                        ),
+                        onPressed: null,
+                      ),
                     ),
                   ],
                 ),
@@ -337,6 +773,34 @@ class _ReportsState extends State<Reports> {
                   Colors.teal,
                   onTap: () => _showAvgResponseTimeModal(context),
                 ),
+                _buildStatCard(
+                  'SLA ≤ 24h',
+                  _slaWithin24h ?? '—',
+                  Icons.speed,
+                  Colors.indigo,
+                  onTap: () => _showSlaModal(context),
+                ),
+                _buildStatCard(
+                  'SLA ≤ 48h',
+                  _slaWithin48h ?? '—',
+                  Icons.speed_outlined,
+                  Colors.deepPurple,
+                  onTap: () => _showSla48Modal(context),
+                ),
+                _buildStatCard(
+                  'Completion Rate',
+                  _completionRate ?? '—',
+                  Icons.task_alt,
+                  Colors.blueGrey,
+                  onTap: () => _showCompletionRateModal(context),
+                ),
+                _buildStatCard(
+                  'Overdue Pending >24h',
+                  (_overduePendingCount ?? 0).toString(),
+                  Icons.warning_amber,
+                  Colors.orange,
+                  onTap: () => _showOverduePendingModal(context),
+                ),
               ],
             ),
             const SizedBox(height: 24),
@@ -363,6 +827,11 @@ class _ReportsState extends State<Reports> {
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 16),
+            AvgResponseTrendChart(
+              trend: _avgResponseTrend,
+              selectedTimeRange: _selectedTimeRange,
             ),
             const SizedBox(height: 32),
           ],
@@ -423,6 +892,383 @@ class _ReportsState extends State<Reports> {
     );
   }
 
+  void _showSlaModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 40,
+            vertical: 40,
+          ),
+          child: Container(
+            width: 700,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'SLA Details',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text('Selected range: $_selectedTimeRange'),
+                const SizedBox(height: 12),
+                const SizedBox(height: 12),
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: ScanRequestsService.getScanRequests(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final all = snapshot.data ?? [];
+                    final filtered = ScanRequestsService.filterByTimeRange(
+                      all,
+                      _selectedTimeRange,
+                    );
+                    int completed = 0;
+                    int within24 = 0;
+                    final buckets = <String, int>{
+                      '0-6h': 0,
+                      '6-12h': 0,
+                      '12-24h': 0,
+                      '24-48h': 0,
+                      '>48h': 0,
+                    };
+                    for (final r in filtered) {
+                      if ((r['status'] ?? '') != 'completed') continue;
+                      final createdAt = r['createdAt'];
+                      final reviewedAt = r['reviewedAt'];
+                      if (createdAt == null || reviewedAt == null) continue;
+                      DateTime created;
+                      DateTime reviewed;
+                      if (createdAt is Timestamp) {
+                        created = createdAt.toDate();
+                      } else if (createdAt is String) {
+                        created =
+                            DateTime.tryParse(createdAt) ?? DateTime.now();
+                      } else {
+                        continue;
+                      }
+                      if (reviewedAt is Timestamp) {
+                        reviewed = reviewedAt.toDate();
+                      } else if (reviewedAt is String) {
+                        reviewed = DateTime.tryParse(reviewedAt) ?? created;
+                      } else {
+                        continue;
+                      }
+                      completed++;
+                      final hours =
+                          reviewed.difference(created).inMinutes / 60.0;
+                      if (hours <= 24) within24++;
+                      if (hours <= 6)
+                        buckets['0-6h'] = buckets['0-6h']! + 1;
+                      else if (hours <= 12)
+                        buckets['6-12h'] = buckets['6-12h']! + 1;
+                      else if (hours <= 24)
+                        buckets['12-24h'] = buckets['12-24h']! + 1;
+                      else if (hours <= 48)
+                        buckets['24-48h'] = buckets['24-48h']! + 1;
+                      else
+                        buckets['>48h'] = buckets['>48h']! + 1;
+                    }
+                    final slaText =
+                        completed == 0
+                            ? '—'
+                            : '${((within24 / completed) * 100).toStringAsFixed(0)}% within 24h';
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Completed: $completed, $slaText',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children:
+                              buckets.entries.map((e) {
+                                return Chip(
+                                  label: Text('${e.key}: ${e.value}'),
+                                );
+                              }).toList(),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showSla48Modal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 40,
+            vertical: 40,
+          ),
+          child: Container(
+            width: 700,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'SLA ≤ 48h',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const SizedBox(height: 12),
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: ScanRequestsService.getScanRequests(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final all = snapshot.data ?? [];
+                    final filtered = ScanRequestsService.filterByTimeRange(
+                      all,
+                      _selectedTimeRange,
+                    );
+                    int completed = 0;
+                    int within48 = 0;
+                    for (final r in filtered) {
+                      if ((r['status'] ?? '') != 'completed') continue;
+                      final createdAt = r['createdAt'];
+                      final reviewedAt = r['reviewedAt'];
+                      if (createdAt == null || reviewedAt == null) continue;
+                      DateTime created;
+                      DateTime reviewed;
+                      if (createdAt is Timestamp) {
+                        created = createdAt.toDate();
+                      } else if (createdAt is String) {
+                        created =
+                            DateTime.tryParse(createdAt) ?? DateTime.now();
+                      } else {
+                        continue;
+                      }
+                      if (reviewedAt is Timestamp) {
+                        reviewed = reviewedAt.toDate();
+                      } else if (reviewedAt is String) {
+                        reviewed = DateTime.tryParse(reviewedAt) ?? created;
+                      } else {
+                        continue;
+                      }
+                      completed++;
+                      final hours =
+                          reviewed.difference(created).inMinutes / 60.0;
+                      if (hours <= 48) within48++;
+                    }
+                    final text =
+                        completed == 0
+                            ? '—'
+                            : '${((within48 / completed) * 100).toStringAsFixed(0)}% within 48h';
+                    return Text(
+                      text,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showCompletionRateModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 40,
+            vertical: 40,
+          ),
+          child: Container(
+            width: 700,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Completion Rate',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: ScanRequestsService.getScanRequests(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final all = snapshot.data ?? [];
+                    final filtered = ScanRequestsService.filterByTimeRange(
+                      all,
+                      _selectedTimeRange,
+                    );
+                    int completed = 0;
+                    int pending = 0;
+                    for (final r in filtered) {
+                      final status = (r['status'] ?? '').toString();
+                      if (status == 'completed') completed++;
+                      if (status == 'pending') pending++;
+                    }
+                    final total = completed + pending;
+                    final text =
+                        total == 0
+                            ? '—'
+                            : '${((completed / total) * 100).toStringAsFixed(0)}% completed';
+                    return Text(
+                      text,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showOverduePendingModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 40,
+            vertical: 40,
+          ),
+          child: Container(
+            width: 700,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Overdue Pending (>24h)',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: ScanRequestsService.getScanRequests(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final all = snapshot.data ?? [];
+                    final filtered = ScanRequestsService.filterByTimeRange(
+                      all,
+                      _selectedTimeRange,
+                    );
+                    int overdue = 0;
+                    for (final r in filtered) {
+                      if ((r['status'] ?? '') == 'pending') {
+                        final createdAt = r['createdAt'];
+                        DateTime? created;
+                        if (createdAt is Timestamp) {
+                          created = createdAt.toDate();
+                        } else if (createdAt is String) {
+                          created = DateTime.tryParse(createdAt);
+                        }
+                        if (created != null) {
+                          final hrs =
+                              DateTime.now().difference(created).inMinutes /
+                              60.0;
+                          if (hrs > 24.0) overdue++;
+                        }
+                      }
+                    }
+                    return Text(
+                      'Overdue pending: $overdue',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   void _showAvgResponseTimeModal(BuildContext context) {
     final scanRequestsProvider = Provider.of<ScanRequestsSnapshot?>(
       context,
@@ -470,6 +1316,131 @@ class _ReportsState extends State<Reports> {
         _stats['averageResponseTime'] = averageResponseTime;
       });
     } catch (_) {}
+  }
+}
+
+class AvgResponseTrendChart extends StatelessWidget {
+  final List<Map<String, dynamic>> trend;
+  final String selectedTimeRange;
+
+  const AvgResponseTrendChart({
+    Key? key,
+    required this.trend,
+    required this.selectedTimeRange,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final isEmpty = trend.isEmpty;
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Avg Expert Response (hrs)',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  selectedTimeRange,
+                  style: const TextStyle(color: Colors.grey),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (isEmpty)
+              const SizedBox(
+                height: 120,
+                child: Center(child: Text('No data for this range.')),
+              )
+            else
+              SizedBox(
+                height: 220,
+                child: LineChart(
+                  LineChartData(
+                    gridData: FlGridData(show: true, drawVerticalLine: false),
+                    titlesData: FlTitlesData(
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 40,
+                          interval: _computeYInterval(trend),
+                        ),
+                      ),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 32,
+                          interval: _computeXInterval(trend),
+                          getTitlesWidget: (value, meta) {
+                            final i = value.toInt();
+                            if (i < 0 || i >= trend.length)
+                              return const SizedBox.shrink();
+                            final label = (trend[i]['date'] as String)
+                                .split('-')
+                                .sublist(1)
+                                .join('-');
+                            return Text(
+                              label,
+                              style: const TextStyle(fontSize: 10),
+                            );
+                          },
+                        ),
+                      ),
+                      rightTitles: AxisTitles(
+                        sideTitles: SideTitles(showTitles: false),
+                      ),
+                      topTitles: AxisTitles(
+                        sideTitles: SideTitles(showTitles: false),
+                      ),
+                    ),
+                    borderData: FlBorderData(show: false),
+                    minY: 0,
+                    lineBarsData: [
+                      LineChartBarData(
+                        isCurved: true,
+                        color: Colors.teal,
+                        barWidth: 3,
+                        dotData: FlDotData(show: false),
+                        spots: [
+                          for (int i = 0; i < trend.length; i++)
+                            FlSpot(
+                              i.toDouble(),
+                              (trend[i]['avgHours'] as double).toDouble(),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  double _computeYInterval(List<Map<String, dynamic>> data) {
+    if (data.isEmpty) return 1;
+    final maxVal = data
+        .map((e) => (e['avgHours'] as double))
+        .reduce((a, b) => a > b ? a : b);
+    if (maxVal <= 4) return 1;
+    if (maxVal <= 8) return 2;
+    return (maxVal / 4).ceilToDouble();
+  }
+
+  double _computeXInterval(List<Map<String, dynamic>> data) {
+    final n = data.length;
+    if (n <= 1) return 1;
+    if (n <= 8) return 1;
+    return (n / 8).ceilToDouble();
   }
 }
 
@@ -677,51 +1648,61 @@ class ReportsListTable extends StatefulWidget {
 }
 
 class _ReportsListTableState extends State<ReportsListTable> {
-  final List<Map<String, dynamic>> _dummyReports = [
-    {
-      'id': 'RPT-001',
-      'user': 'John Doe',
-      'date': '2025-05-01',
-      'disease': 'Anthracnose',
-      'status': 'Reviewed',
-      'image': null,
-      'details': 'Leaf spots and necrosis detected.',
-      'expert': 'Dr. Smith',
-      'feedback': 'Confirmed Anthracnose. Apply fungicide.',
-    },
-    {
-      'id': 'RPT-002',
-      'user': 'Jane Smith',
-      'date': '2025-05-02',
-      'disease': 'Healthy',
-      'status': 'Reviewed',
-      'image': null,
-      'details': 'No disease detected.',
-      'expert': 'Dr. Lee',
-      'feedback': 'No action needed.',
-    },
-    {
-      'id': 'RPT-003',
-      'user': 'Mike Johnson',
-      'date': '2025-05-03',
-      'disease': 'Powdery Mildew',
-      'status': 'Pending',
-      'image': null,
-      'details': 'White powdery spots on leaves.',
-      'expert': '',
-      'feedback': '',
-    },
-  ];
-
   String _searchQuery = '';
+  List<Map<String, dynamic>> _reports = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadReports();
+  }
+
+  Future<void> _loadReports() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final data = await ScanRequestsService.getScanRequests();
+      setState(() {
+        _reports = data;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
 
   List<Map<String, dynamic>> get _filteredReports {
-    if (_searchQuery.isEmpty) return _dummyReports;
-    return _dummyReports.where((report) {
-      final query = _searchQuery.toLowerCase();
-      return report['user'].toString().toLowerCase().contains(query) ||
-          report['disease'].toString().toLowerCase().contains(query) ||
-          report['status'].toString().toLowerCase().contains(query);
+    if (_searchQuery.isEmpty) return _reports;
+    final query = _searchQuery.toLowerCase();
+    return _reports.where((report) {
+      final user =
+          (report['userName'] ?? report['userId'] ?? '')
+              .toString()
+              .toLowerCase();
+      final status = (report['status'] ?? '').toString().toLowerCase();
+      String disease = '';
+      final ds = report['diseaseSummary'];
+      if (ds is List && ds.isNotEmpty) {
+        final first = ds.first;
+        if (first is Map<String, dynamic>) {
+          disease =
+              (first['name'] ?? first['label'] ?? first['disease'] ?? '')
+                  .toString()
+                  .toLowerCase();
+        } else {
+          disease = first.toString().toLowerCase();
+        }
+      }
+      return user.contains(query) ||
+          status.contains(query) ||
+          disease.contains(query);
     }).toList();
   }
 
@@ -754,108 +1735,173 @@ class _ReportsListTableState extends State<ReportsListTable> {
           height: 300,
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            child: DataTable(
-              columns: const [
-                DataColumn(label: Text('Report ID')),
-                DataColumn(label: Text('User')),
-                DataColumn(label: Text('Date')),
-                DataColumn(label: Text('Disease')),
-                DataColumn(label: Text('Status')),
-                DataColumn(label: Text('Actions')),
-              ],
-              rows:
-                  _filteredReports.map((report) {
-                    return DataRow(
-                      cells: [
-                        DataCell(Text(report['id'])),
-                        DataCell(Text(report['user'])),
-                        DataCell(Text(report['date'])),
-                        DataCell(Text(report['disease'])),
-                        DataCell(Text(report['status'])),
-                        DataCell(
-                          ElevatedButton(
-                            child: const Text('View'),
-                            onPressed: () {
-                              showDialog(
-                                context: context,
-                                builder:
-                                    (context) => AlertDialog(
-                                      title: Text(
-                                        'Report Details: ${report['id']}',
-                                      ),
-                                      content: SingleChildScrollView(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              'Report ID: ${report['id']}',
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text('User: ${report['user']}'),
-                                            Text('Date: ${report['date']}'),
-                                            Text(
-                                              'Disease: ${report['disease']}',
-                                            ),
-                                            Text('Status: ${report['status']}'),
-                                            const SizedBox(height: 16),
-                                            if (report['image'] != null)
-                                              Container(
-                                                height: 180,
-                                                width: 180,
-                                                color: Colors.grey[200],
-                                                child: Image.network(
-                                                  report['image'],
-                                                  fit: BoxFit.cover,
-                                                ),
-                                              )
-                                            else
-                                              Container(
-                                                height: 180,
-                                                width: 180,
-                                                color: Colors.grey[200],
-                                                child: const Center(
-                                                  child: Text('No Image'),
-                                                ),
-                                              ),
-                                            const SizedBox(height: 16),
-                                            Text(
-                                              'Details: ${report['details']}',
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              'Expert: ${report['expert'] ?? "-"}',
-                                            ),
-                                            Text(
-                                              'Feedback: ${report['feedback'] ?? "-"}',
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          onPressed:
-                                              () => Navigator.pop(context),
-                                          child: const Text('Close'),
-                                        ),
-                                      ],
-                                    ),
-                              );
-                            },
-                          ),
-                        ),
+            child:
+                _loading
+                    ? const SizedBox(
+                      width: 400,
+                      height: 200,
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                    : _error != null
+                    ? SizedBox(
+                      width: 400,
+                      height: 200,
+                      child: Center(child: Text('Failed to load: $_error')),
+                    )
+                    : DataTable(
+                      columns: const [
+                        DataColumn(label: Text('Report ID')),
+                        DataColumn(label: Text('User')),
+                        DataColumn(label: Text('Date')),
+                        DataColumn(label: Text('Disease')),
+                        DataColumn(label: Text('Status')),
+                        DataColumn(label: Text('Actions')),
                       ],
-                    );
-                  }).toList(),
-            ),
+                      rows:
+                          _filteredReports.map((report) {
+                            return DataRow(
+                              cells: [
+                                DataCell(Text((report['id'] ?? '').toString())),
+                                DataCell(
+                                  Text(
+                                    (report['userName'] ??
+                                            report['userId'] ??
+                                            '')
+                                        .toString(),
+                                  ),
+                                ),
+                                DataCell(
+                                  Text(_formatDate(report['createdAt'])),
+                                ),
+                                DataCell(Text(_extractDisease(report))),
+                                DataCell(
+                                  Text((report['status'] ?? '').toString()),
+                                ),
+                                DataCell(
+                                  ElevatedButton(
+                                    child: const Text('View'),
+                                    onPressed: () {
+                                      showDialog(
+                                        context: context,
+                                        builder:
+                                            (context) => AlertDialog(
+                                              title: Text(
+                                                'Report Details: ${(report['id'] ?? '').toString()}',
+                                              ),
+                                              content: SingleChildScrollView(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Text(
+                                                      'Report ID: ${(report['id'] ?? '').toString()}',
+                                                      style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    Text(
+                                                      'User: ${(report['userName'] ?? report['userId'] ?? '').toString()}',
+                                                    ),
+                                                    Text(
+                                                      'Date: ${_formatDate(report['createdAt'])}',
+                                                    ),
+                                                    Text(
+                                                      'Disease: ${_extractDisease(report)}',
+                                                    ),
+                                                    Text(
+                                                      'Status: ${(report['status'] ?? '').toString()}',
+                                                    ),
+                                                    const SizedBox(height: 16),
+                                                    if (report['image'] != null)
+                                                      Container(
+                                                        height: 180,
+                                                        width: 180,
+                                                        color: Colors.grey[200],
+                                                        child: Image.network(
+                                                          report['image']
+                                                              .toString(),
+                                                          fit: BoxFit.cover,
+                                                        ),
+                                                      )
+                                                    else
+                                                      Container(
+                                                        height: 180,
+                                                        width: 180,
+                                                        color: Colors.grey[200],
+                                                        child: const Center(
+                                                          child: Text(
+                                                            'No Image',
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    const SizedBox(height: 16),
+                                                    Text(
+                                                      'Details: ${(report['details'] ?? '-').toString()}',
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    Text(
+                                                      'Expert: ${(report['expert'] ?? "-").toString()}',
+                                                    ),
+                                                    Text(
+                                                      'Feedback: ${(report['feedback'] ?? "-").toString()}',
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed:
+                                                      () => Navigator.pop(
+                                                        context,
+                                                      ),
+                                                  child: const Text('Close'),
+                                                ),
+                                              ],
+                                            ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
+                            );
+                          }).toList(),
+                    ),
           ),
         ),
       ],
     );
+  }
+
+  String _formatDate(dynamic createdAt) {
+    if (createdAt is Timestamp) {
+      final dt = createdAt.toDate();
+      return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+    }
+    if (createdAt is String) {
+      final dt = DateTime.tryParse(createdAt);
+      if (dt != null) {
+        return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+      }
+      return createdAt;
+    }
+    return '';
+  }
+
+  String _extractDisease(Map<String, dynamic> report) {
+    final ds = report['diseaseSummary'];
+    if (ds is List && ds.isNotEmpty) {
+      final first = ds.first;
+      if (first is Map<String, dynamic>) {
+        return (first['name'] ?? first['label'] ?? first['disease'] ?? '')
+            .toString();
+      }
+      return first.toString();
+    }
+    return '-';
   }
 }
 
@@ -1052,11 +2098,18 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   // Removed old getters; we snapshot build-scoped lists instead to avoid hover flicker
 
   Color _getDiseaseColor(String disease) {
-    final normalized = disease.replaceAll('_', ' ').toLowerCase();
+    // Normalize common separators and whitespace
+    final normalized =
+        disease
+            .toLowerCase()
+            .replaceAll(RegExp(r'[_\-]+'), ' ')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
     switch (normalized) {
       case 'anthracnose':
         return Colors.orange;
       case 'bacterial blackspot':
+      case 'bacterial black spot':
         return Colors.purple;
       case 'powdery mildew':
         return const Color.fromARGB(255, 9, 46, 2);
@@ -1103,114 +2156,18 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
+                    horizontal: 10,
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
                     color: Colors.grey[100],
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: DropdownButton<String>(
-                    value: widget.selectedTimeRange,
-                    items: [
-                      ...[
-                        '1 Day',
-                        'Last 7 Days',
-                        'Last 30 Days',
-                        'Last 60 Days',
-                        'Last 90 Days',
-                        'Last Year',
-                        'Custom',
-                      ].map((String value) {
-                        return DropdownMenuItem<String>(
-                          value: value,
-                          child: Text(
-                            value,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        );
-                      }),
-                      // Add dynamic custom range if it exists and doesn't match 'Custom'
-                      if (widget.selectedTimeRange.startsWith('Custom (') &&
-                          widget.selectedTimeRange != 'Custom')
-                        DropdownMenuItem<String>(
-                          value: widget.selectedTimeRange,
-                          child: Text(
-                            widget.selectedTimeRange,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                    ],
-                    onChanged: (String? newValue) async {
-                      if (newValue != null) {
-                        if (newValue == 'Custom') {
-                          try {
-                            // Show date range picker for custom dates
-                            final DateTimeRange? pickedRange =
-                                await showDateRangePicker(
-                                  context: context,
-                                  firstDate: DateTime(2020),
-                                  lastDate: DateTime.now(),
-                                  initialDateRange: DateTimeRange(
-                                    start: DateTime.now().subtract(
-                                      const Duration(days: 7),
-                                    ),
-                                    end: DateTime.now(),
-                                  ),
-                                  builder: (context, child) {
-                                    return Theme(
-                                      data: Theme.of(context).copyWith(
-                                        colorScheme: Theme.of(context)
-                                            .colorScheme
-                                            .copyWith(primary: Colors.blue),
-                                      ),
-                                      child: child!,
-                                    );
-                                  },
-                                );
-
-                            if (pickedRange != null) {
-                              // Format the custom range for display
-                              final startDate =
-                                  '${pickedRange.start.year}-${pickedRange.start.month.toString().padLeft(2, '0')}-${pickedRange.start.day.toString().padLeft(2, '0')}';
-                              final endDate =
-                                  '${pickedRange.end.year}-${pickedRange.end.month.toString().padLeft(2, '0')}-${pickedRange.end.day.toString().padLeft(2, '0')}';
-                              final customRange =
-                                  'Custom ($startDate to $endDate)';
-
-                              // Call the callback with custom range info
-                              widget.onTimeRangeChanged?.call(customRange);
-                            }
-                          } catch (e) {
-                            print('Error showing date picker: $e');
-                            // Show error message to user
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Error selecting date range. Using default range.',
-                                ),
-                                backgroundColor: Colors.orange,
-                              ),
-                            );
-                            // Fallback to default range if picker fails
-                            widget.onTimeRangeChanged?.call('Last 7 Days');
-                          }
-                        } else {
-                          // Call the callback to notify parent
-                          widget.onTimeRangeChanged?.call(newValue);
-                        }
-                      }
-                    },
-                    underline: const SizedBox(),
-                    icon: const Icon(
-                      Icons.arrow_drop_down,
-                      color: Colors.black87,
+                  child: Text(
+                    widget.selectedTimeRange,
+                    style: TextStyle(
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ),
@@ -1787,62 +2744,43 @@ class ReportsTrendDialog extends StatefulWidget {
 
 class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
   String _selectedTimeRange = 'Last 7 Days';
+  List<Map<String, dynamic>> _trendData = [];
+  bool _loading = true;
+  String? _error;
 
-  // Dummy data for different time ranges
-  final Map<String, List<Map<String, dynamic>>> _timeRangeData = {
-    '1 Day': [
-      {'date': '2024-03-07', 'count': 68},
-    ],
-    'Last 7 Days': [
-      {'date': '2024-03-01', 'count': 45},
-      {'date': '2024-03-02', 'count': 52},
-      {'date': '2024-03-03', 'count': 48},
-      {'date': '2024-03-04', 'count': 65},
-      {'date': '2024-03-05', 'count': 58},
-      {'date': '2024-03-06', 'count': 72},
-      {'date': '2024-03-07', 'count': 68},
-    ],
-    'Last 30 Days': List.generate(
-      30,
-      (i) => {
-        'date': '2024-03-${(i + 1).toString().padLeft(2, '0')}',
-        'count': 40 + (i % 10) * 2,
-      },
-    ),
-    'Last 60 Days': List.generate(
-      60,
-      (i) => {
-        'date':
-            '2024-02-${(i < 29 ? (i + 1) : (i - 28)).toString().padLeft(2, '0')}',
-        'count': 35 + (i % 15),
-      },
-    ),
-    'Last 90 Days': List.generate(
-      90,
-      (i) => {
-        'date':
-            '2024-01-${(i < 31 ? (i + 1) : (i - 30)).toString().padLeft(2, '0')}',
-        'count': 30 + (i % 20),
-      },
-    ),
-    'Last Year': List.generate(
-      12,
-      (i) => {
-        'date': '2023-${(i + 1).toString().padLeft(2, '0')}',
-        'count': 100 + i * 10,
-      },
-    ),
-  };
+  @override
+  void initState() {
+    super.initState();
+    _loadTrend();
+  }
 
-  List<Map<String, dynamic>> get _currentData =>
-      _timeRangeData[_selectedTimeRange] ?? _timeRangeData['Last 7 Days']!;
+  Future<void> _loadTrend() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final data = await ScanRequestsService.getReportsTrend(
+        timeRange: _selectedTimeRange,
+      );
+      setState(() {
+        _trendData = data;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
 
   List<Map<String, dynamic>> get _aggregatedData {
     // For large ranges, aggregate by week
     if (_selectedTimeRange == 'Last 30 Days' ||
         _selectedTimeRange == 'Last 60 Days' ||
         _selectedTimeRange == 'Last 90 Days') {
-      final data = _currentData;
+      final data = _trendData;
       final int daysPerBar = 7;
       List<Map<String, dynamic>> result = [];
       for (int i = 0; i < data.length; i += daysPerBar) {
@@ -1854,7 +2792,7 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
       }
       return result;
     }
-    return _currentData;
+    return _trendData;
   }
 
   @override
@@ -1963,6 +2901,7 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
                         if (value != null) {
                           setState(() {
                             _selectedTimeRange = value;
+                            _loadTrend();
                           });
                         }
                       },
@@ -1985,7 +2924,11 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
               ),
             ),
             const SizedBox(height: 12),
-            if (_aggregatedData.isEmpty)
+            if (_loading)
+              const Center(child: CircularProgressIndicator())
+            else if (_error != null)
+              Center(child: Text('Failed to load: $_error'))
+            else if (_aggregatedData.isEmpty)
               const Center(child: Text('No data available for this range.'))
             else
               SizedBox(
@@ -2220,11 +3163,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       }
     }
     print('[DEBUG] expertGroups keys: \'${expertGroups.keys.toList()}\'');
-    final users = await UserStore.getUsers();
-    final experts = {
-      for (var u in users)
-        if (u['role'] == 'expert') u['userId']: u,
-    };
+    final Map<String, Map<String, dynamic>> experts = {};
     final List<_ExpertResponseStats> stats = [];
     for (final entry in expertGroups.entries) {
       final expertId = entry.key;
