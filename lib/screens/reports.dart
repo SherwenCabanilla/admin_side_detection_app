@@ -6,7 +6,7 @@ import '../shared/total_users_card.dart';
 import '../shared/pending_approvals_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/scan_requests_service.dart';
-import '../services/csv_export_service.dart';
+// CSV export removed
 // duplicate import removed
 import 'admin_dashboard.dart' show ScanRequestsSnapshot;
 import 'package:provider/provider.dart';
@@ -292,42 +292,148 @@ class _ReportsState extends State<Reports> {
   Future<void> _loadAvgResponseTrend() async {
     try {
       final all = await ScanRequestsService.getScanRequests();
-      final filtered = ScanRequestsService.filterByTimeRange(
-        all,
-        _selectedTimeRange,
-      );
-      final Map<String, List<double>> hoursByDay = {};
-      for (final r in filtered) {
-        if ((r['status'] ?? '') != 'completed') continue;
-        final createdAt = r['createdAt'];
-        final reviewedAt = r['reviewedAt'];
-        if (createdAt == null || reviewedAt == null) continue;
-        DateTime? c;
-        DateTime? v;
-        if (createdAt is Timestamp) c = createdAt.toDate();
-        if (createdAt is String) c = DateTime.tryParse(createdAt);
-        if (reviewedAt is Timestamp) v = reviewedAt.toDate();
-        if (reviewedAt is String) v = DateTime.tryParse(reviewedAt);
-        if (c == null || v == null) continue;
-        final key =
-            '${c.year}-${c.month.toString().padLeft(2, '0')}-${c.day.toString().padLeft(2, '0')}';
-        final hours = v.difference(c).inMinutes / 60.0;
-        (hoursByDay[key] ??= <double>[]).add(hours);
+      // Determine date window based on selected range
+      final DateTime now = DateTime.now();
+      DateTime start;
+      switch (_selectedTimeRange) {
+        case '1 Day':
+          start = now.subtract(const Duration(days: 1));
+          break;
+        case 'Last 7 Days':
+          start = now.subtract(const Duration(days: 7));
+          break;
+        case 'Last 30 Days':
+          start = now.subtract(const Duration(days: 30));
+          break;
+        case 'Last 60 Days':
+          start = now.subtract(const Duration(days: 60));
+          break;
+        case 'Last 90 Days':
+          start = now.subtract(const Duration(days: 90));
+          break;
+        case 'Last Year':
+          start = now.subtract(const Duration(days: 365));
+          break;
+        default:
+          start = now.subtract(const Duration(days: 7));
       }
-      final List<Map<String, dynamic>> series =
-          hoursByDay.entries.map((e) {
-              final avg =
-                  e.value.isEmpty
+      final DateTime end = now;
+      if (_selectedTimeRange == '1 Day') {
+        // Build hourly buckets for the last 24 hours (inclusive of current hour)
+        final DateTime endHour = DateTime(
+          end.year,
+          end.month,
+          end.day,
+          end.hour,
+        );
+        final DateTime startHour = endHour.subtract(const Duration(hours: 23));
+
+        // Initialize map for each hour bucket to ensure continuity even with no data
+        final Map<DateTime, List<double>> hoursMap = {
+          for (int i = 0; i < 24; i++)
+            startHour.add(Duration(hours: i)): <double>[],
+        };
+
+        // Fill buckets with response durations
+        for (final r in all) {
+          if ((r['status'] ?? '') != 'completed') continue;
+          final createdAt = r['createdAt'];
+          final reviewedAt = r['reviewedAt'];
+          if (createdAt == null || reviewedAt == null) continue;
+          DateTime? created;
+          DateTime? reviewed;
+          if (createdAt is Timestamp) created = createdAt.toDate();
+          if (createdAt is String) created = DateTime.tryParse(createdAt);
+          if (reviewedAt is Timestamp) reviewed = reviewedAt.toDate();
+          if (reviewedAt is String) reviewed = DateTime.tryParse(reviewedAt);
+          if (created == null || reviewed == null) continue;
+
+          // Filter by REVIEW time within the window
+          if (reviewed.isBefore(start) || reviewed.isAfter(end)) continue;
+
+          // Determine the hour bucket of review time
+          final DateTime hourKey = DateTime(
+            reviewed.year,
+            reviewed.month,
+            reviewed.day,
+            reviewed.hour,
+          );
+          if (!hoursMap.containsKey(hourKey))
+            continue; // outside 24-hour window
+
+          final double hours = reviewed.difference(created).inMinutes / 60.0;
+          hoursMap[hourKey]!.add(hours);
+        }
+
+        // Convert to ordered series with HH:00 labels
+        final List<Map<String, dynamic>> seriesAll = [
+          for (final entry
+              in hoursMap.entries.toList()
+                ..sort((a, b) => a.key.compareTo(b.key)))
+            {
+              'date': '${entry.key.hour.toString().padLeft(2, '0')}:00',
+              'avgHours':
+                  entry.value.isEmpty
                       ? 0.0
-                      : e.value.reduce((a, b) => a + b) / e.value.length;
-              return {'date': e.key, 'avgHours': avg};
-            }).toList()
-            ..sort(
-              (a, b) => (a['date'] as String).compareTo(b['date'] as String),
-            );
-      setState(() {
-        _avgResponseTrend = series;
-      });
+                      : entry.value.reduce((a, b) => a + b) /
+                          entry.value.length,
+            },
+        ];
+
+        // Trim leading and trailing empty hours so the domain starts at the
+        // first completed review and ends at the most recent completed review.
+        int firstIdx = seriesAll.indexWhere(
+          (e) => ((e['avgHours'] as double?) ?? 0) > 0,
+        );
+        int lastIdx = seriesAll.lastIndexWhere(
+          (e) => ((e['avgHours'] as double?) ?? 0) > 0,
+        );
+
+        final List<Map<String, dynamic>> series =
+            (firstIdx != -1 && lastIdx >= firstIdx)
+                ? seriesAll.sublist(firstIdx, lastIdx + 1)
+                : <Map<String, dynamic>>[];
+
+        setState(() {
+          _avgResponseTrend = series;
+        });
+      } else {
+        // Default behavior: daily buckets for multi-day ranges
+        final Map<String, List<double>> hoursByDay = {};
+        for (final r in all) {
+          if ((r['status'] ?? '') != 'completed') continue;
+          final createdAt = r['createdAt'];
+          final reviewedAt = r['reviewedAt'];
+          if (createdAt == null || reviewedAt == null) continue;
+          DateTime? c;
+          DateTime? v;
+          if (createdAt is Timestamp) c = createdAt.toDate();
+          if (createdAt is String) c = DateTime.tryParse(createdAt);
+          if (reviewedAt is Timestamp) v = reviewedAt.toDate();
+          if (reviewedAt is String) v = DateTime.tryParse(reviewedAt);
+          if (c == null || v == null) continue;
+          // Filter by REVIEW date within the selected window
+          if (v.isBefore(start) || v.isAfter(end)) continue;
+          final key =
+              '${v.year}-${v.month.toString().padLeft(2, '0')}-${v.day.toString().padLeft(2, '0')}';
+          final hours = v.difference(c).inMinutes / 60.0;
+          (hoursByDay[key] ??= <double>[]).add(hours);
+        }
+        final List<Map<String, dynamic>> series =
+            hoursByDay.entries.map((e) {
+                final avg =
+                    e.value.isEmpty
+                        ? 0.0
+                        : e.value.reduce((a, b) => a + b) / e.value.length;
+                return {'date': e.key, 'avgHours': avg};
+              }).toList()
+              ..sort(
+                (a, b) => (a['date'] as String).compareTo(b['date'] as String),
+              );
+        setState(() {
+          _avgResponseTrend = series;
+        });
+      }
     } catch (e) {
       print('Error loading avg response trend: $e');
       setState(() {
@@ -425,138 +531,7 @@ class _ReportsState extends State<Reports> {
     _updateStatsFromSnapshot();
   }
 
-  Future<void> _exportGlobalCsv(BuildContext context) async {
-    try {
-      final all = await ScanRequestsService.getScanRequests();
-      final filtered = ScanRequestsService.filterByTimeRange(
-        all,
-        _selectedTimeRange,
-      );
-      int completed = 0;
-      int pending = 0;
-      int within24 = 0;
-      int within48 = 0;
-      int overduePending = 0;
-      double sumHours = 0;
-      int withResponse = 0;
-
-      final completedDetailRows = <List<String>>[
-        [
-          'Report ID',
-          'User',
-          'Status',
-          'Created At',
-          'Reviewed At',
-          'Response Hours',
-        ],
-      ];
-      final pendingDetailRows = <List<String>>[
-        [
-          'Report ID',
-          'User',
-          'Status',
-          'Created At',
-          'Age (hours)',
-          'Overdue >24h',
-        ],
-      ];
-
-      for (final r in filtered) {
-        final status = (r['status'] ?? '').toString();
-        final id = (r['id'] ?? '').toString();
-        final user = (r['userName'] ?? r['userId'] ?? '').toString();
-        final cRaw = r['createdAt'];
-        DateTime? c;
-        if (cRaw is Timestamp) c = cRaw.toDate();
-        if (cRaw is String) c = DateTime.tryParse(cRaw);
-
-        if (status == 'completed') {
-          completed++;
-          final vRaw = r['reviewedAt'];
-          DateTime? v;
-          if (vRaw is Timestamp) v = vRaw.toDate();
-          if (vRaw is String) v = DateTime.tryParse(vRaw);
-          final createdStr = c != null ? c.toIso8601String() : '';
-          final reviewedStr = v != null ? v.toIso8601String() : '';
-          String hoursStr = '';
-          if (c != null && v != null) {
-            final hours = v.difference(c).inMinutes / 60.0;
-            hoursStr = hours.toStringAsFixed(2);
-            sumHours += hours;
-            withResponse++;
-            if (hours <= 24.0) within24++;
-            if (hours <= 48.0) within48++;
-          }
-          completedDetailRows.add([
-            id,
-            user,
-            status,
-            createdStr,
-            reviewedStr,
-            hoursStr,
-          ]);
-        } else if (status == 'pending') {
-          pending++;
-          double? ageHrs;
-          if (c != null) {
-            ageHrs = DateTime.now().difference(c).inMinutes / 60.0;
-            if (ageHrs > 24.0) overduePending++;
-          }
-          pendingDetailRows.add([
-            id,
-            user,
-            status,
-            c != null ? c.toIso8601String() : '',
-            ageHrs != null ? ageHrs.toStringAsFixed(2) : '',
-            (ageHrs != null && ageHrs > 24.0) ? 'YES' : 'NO',
-          ]);
-        }
-      }
-
-      final avgHours =
-          withResponse == 0
-              ? '0'
-              : (sumHours / withResponse).toStringAsFixed(2);
-      final completionRate =
-          (completed + pending) == 0
-              ? '0'
-              : ((completed / (completed + pending)) * 100).toStringAsFixed(0);
-      final sla24 =
-          completed == 0
-              ? '0'
-              : ((within24 / completed) * 100).toStringAsFixed(0);
-      final sla48 =
-          completed == 0
-              ? '0'
-              : ((within48 / completed) * 100).toStringAsFixed(0);
-
-      final rows = <List<String>>[
-        ['Metric', 'Value', 'Range'],
-        ['Completed', completed.toString(), _selectedTimeRange],
-        ['Pending', pending.toString(), _selectedTimeRange],
-        ['Avg Response (hrs)', avgHours, _selectedTimeRange],
-        ['SLA <=24h %', sla24, _selectedTimeRange],
-        ['SLA <=48h %', sla48, _selectedTimeRange],
-        ['Completion Rate %', completionRate, _selectedTimeRange],
-        ['Overdue Pending >24h', overduePending.toString(), _selectedTimeRange],
-        [],
-        ['Completed Reports'],
-        ...completedDetailRows,
-        [],
-        ['Pending Reports'],
-        ...pendingDetailRows,
-      ];
-      await CsvExportService.copyToClipboard(
-        context,
-        'reports_summary_${_selectedTimeRange.replaceAll(' ', '_').toLowerCase()}.csv',
-        rows,
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to export CSV: $e')));
-    }
-  }
+  // CSV export removed
 
   // Users CSV export removed per product decision
 
@@ -656,114 +631,98 @@ class _ReportsState extends State<Reports> {
                         );
                       },
                     ),
-                    PopupMenuButton<String>(
-                      onSelected: (value) async {
-                        if (value == 'pdf') {
-                          final result = await showDialog<Map<String, String>>(
-                            context: context,
-                            builder: (context) => const GenerateReportDialog(),
-                          );
-                          if (result != null) {
-                            final selectedRange =
-                                result['range'] ?? _selectedTimeRange;
-                            final pageSize = result['pageSize'] ?? 'A4';
-                            try {
-                              // Show progress dialog during PDF generation
-                              showDialog(
-                                context: context,
-                                barrierDismissible: false,
-                                builder:
-                                    (_) => const AlertDialog(
-                                      content: SizedBox(
-                                        height: 56,
-                                        child: Row(
-                                          children: [
-                                            SizedBox(
-                                              height: 24,
-                                              width: 24,
-                                              child: CircularProgressIndicator(
-                                                strokeWidth: 2,
-                                              ),
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.picture_as_pdf),
+                      label: const Text('Export PDF'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2D7204),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                      ),
+                      onPressed: () async {
+                        final result = await showDialog<Map<String, String>>(
+                          context: context,
+                          builder: (context) => const GenerateReportDialog(),
+                        );
+                        if (result != null) {
+                          final selectedRange =
+                              result['range'] ?? _selectedTimeRange;
+                          final pageSize = result['pageSize'] ?? 'A4';
+                          try {
+                            showDialog(
+                              context: context,
+                              barrierDismissible: false,
+                              builder:
+                                  (_) => const AlertDialog(
+                                    content: SizedBox(
+                                      height: 56,
+                                      child: Row(
+                                        children: [
+                                          SizedBox(
+                                            height: 24,
+                                            width: 24,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
                                             ),
-                                            SizedBox(width: 16),
-                                            Expanded(
-                                              child: Text(
-                                                'Generating PDF report...',
-                                              ),
+                                          ),
+                                          SizedBox(width: 16),
+                                          Expanded(
+                                            child: Text(
+                                              'Generating PDF report...',
                                             ),
-                                          ],
-                                        ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                              );
-
-                              await ReportPdfService.generateAndShareReport(
-                                context: context,
-                                timeRange: selectedRange,
-                                pageSize: pageSize,
-                                backgroundAsset:
-                                    'assets/report_template_bg.png',
-                              );
-
-                              Navigator.of(context, rootNavigator: true).pop();
-                            } catch (e) {
-                              Navigator.of(
-                                context,
-                                rootNavigator: true,
-                              ).maybePop();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Failed to generate PDF: $e'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
+                                  ),
+                            );
+                            await ReportPdfService.generateAndShareReport(
+                              context: context,
+                              timeRange: selectedRange,
+                              pageSize: pageSize,
+                              backgroundAsset: 'assets/report_template_bg.png',
+                            );
+                            Navigator.of(context, rootNavigator: true).pop();
+                            // Log activity: PDF generated
+                            try {
+                              final preparedBy =
+                                  await SettingsService.getUtilityName();
+                              await FirebaseFirestore.instance
+                                  .collection('activities')
+                                  .add({
+                                    'action': 'Generated PDF report',
+                                    'user':
+                                        preparedBy.isEmpty
+                                            ? 'Admin'
+                                            : preparedBy,
+                                    'type': 'export',
+                                    'color': Colors.purple.value,
+                                    'icon': Icons.picture_as_pdf.codePoint,
+                                    'timestamp': FieldValue.serverTimestamp(),
+                                  });
+                            } catch (_) {
+                              // ignore logging failures
                             }
+                          } catch (e) {
+                            Navigator.of(
+                              context,
+                              rootNavigator: true,
+                            ).maybePop();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Failed to generate PDF: $e'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
                           }
-                        } else if (value == 'csv') {
-                          await _exportGlobalCsv(context);
                         }
                       },
-                      itemBuilder:
-                          (context) => [
-                            PopupMenuItem(
-                              value: 'pdf',
-                              child: Row(
-                                children: const [
-                                  Icon(Icons.picture_as_pdf, size: 18),
-                                  SizedBox(width: 8),
-                                  Text('Generate PDF'),
-                                ],
-                              ),
-                            ),
-                            PopupMenuItem(
-                              value: 'csv',
-                              child: Row(
-                                children: const [
-                                  Icon(Icons.download, size: 18),
-                                  SizedBox(width: 8),
-                                  Text('Export CSV'),
-                                ],
-                              ),
-                            ),
-                          ],
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.file_download),
-                        label: const Text('Export'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2D7204),
-                          foregroundColor: Colors.white,
-                          disabledBackgroundColor: const Color(0xFF2D7204),
-                          disabledForegroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(24),
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 10,
-                          ),
-                        ),
-                        onPressed: null,
-                      ),
                     ),
                   ],
                 ),
@@ -1369,6 +1328,12 @@ class AvgResponseTrendChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isEmpty = trend.isEmpty;
+    final int numPoints = trend.length;
+    final double minX = numPoints == 1 ? -0.5 : 0.0;
+    final double maxX =
+        numPoints == 1
+            ? 0.5
+            : (numPoints > 0 ? (numPoints - 1).toDouble() : 0.0);
     return Card(
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -1401,6 +1366,8 @@ class AvgResponseTrendChart extends StatelessWidget {
                 height: 220,
                 child: LineChart(
                   LineChartData(
+                    minX: minX,
+                    maxX: maxX,
                     gridData: FlGridData(show: true, drawVerticalLine: false),
                     titlesData: FlTitlesData(
                       leftTitles: AxisTitles(
@@ -1414,15 +1381,19 @@ class AvgResponseTrendChart extends StatelessWidget {
                         sideTitles: SideTitles(
                           showTitles: true,
                           reservedSize: 32,
-                          interval: _computeXInterval(trend),
+                          interval:
+                              selectedTimeRange == '1 Day'
+                                  ? 1
+                                  : _computeXInterval(trend),
                           getTitlesWidget: (value, meta) {
                             final i = value.toInt();
                             if (i < 0 || i >= trend.length)
                               return const SizedBox.shrink();
-                            final label = (trend[i]['date'] as String)
-                                .split('-')
-                                .sublist(1)
-                                .join('-');
+                            final raw = (trend[i]['date'] as String);
+                            final label =
+                                selectedTimeRange == '1 Day'
+                                    ? raw // already in HH:00
+                                    : raw.split('-').sublist(1).join('-');
                             return Text(
                               label,
                               style: const TextStyle(fontSize: 10),
@@ -1444,7 +1415,8 @@ class AvgResponseTrendChart extends StatelessWidget {
                         isCurved: true,
                         color: Colors.teal,
                         barWidth: 3,
-                        dotData: FlDotData(show: false),
+                        // Show a dot when there is only a single data point so the chart isn't blank
+                        dotData: FlDotData(show: numPoints <= 1),
                         spots: [
                           for (int i = 0; i < trend.length; i++)
                             FlSpot(
@@ -2856,6 +2828,8 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
       ),
     );
   }
+
+  // Trend feedback removed per request
 }
 
 class ReportsTrendDialog extends StatefulWidget {
@@ -3565,6 +3539,8 @@ class GenerateReportDialog extends StatefulWidget {
 
 class _GenerateReportDialogState extends State<GenerateReportDialog> {
   String _selectedRange = 'Last 7 Days';
+  DateTime? _customStart;
+  DateTime? _customEnd;
   // Page size fixed to A4
   final List<Map<String, dynamic>> _ranges = [
     {
@@ -3596,6 +3572,11 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
       'label': 'Last Year',
       'icon': Icons.calendar_month,
       'desc': 'Reports from the last 12 months.',
+    },
+    {
+      'label': 'Custom…',
+      'icon': Icons.date_range_outlined,
+      'desc': 'Pick a date range for the report.',
     },
   ];
 
@@ -3664,6 +3645,36 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
             ),
           ),
           const SizedBox(height: 16),
+          if (_selectedRange == 'Custom…') ...[
+            OutlinedButton.icon(
+              icon: const Icon(Icons.date_range),
+              label: Text(
+                _customStart != null && _customEnd != null
+                    ? '${_customStart!.toIso8601String().substring(0, 10)} to ${_customEnd!.toIso8601String().substring(0, 10)}'
+                    : 'Pick date range',
+              ),
+              onPressed: () async {
+                final initial = DateTimeRange(
+                  start:
+                      _customStart ??
+                      DateTime.now().subtract(const Duration(days: 7)),
+                  end: _customEnd ?? DateTime.now(),
+                );
+                final picked = await showDateRangePicker(
+                  context: context,
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime.now(),
+                  initialDateRange: initial,
+                );
+                if (picked != null) {
+                  setState(() {
+                    _customStart = picked.start;
+                    _customEnd = picked.end;
+                  });
+                }
+              },
+            ),
+          ],
           const SizedBox(height: 18),
           Divider(),
           const SizedBox(height: 10),
@@ -3731,7 +3742,16 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
             foregroundColor: Colors.white,
           ),
           onPressed: () {
-            Navigator.pop(context, {'range': _selectedRange, 'pageSize': 'A4'});
+            String range = _selectedRange;
+            if (_selectedRange == 'Custom…') {
+              if (_customStart == null || _customEnd == null) return;
+              final start = _customStart!;
+              final end = _customEnd!;
+              final startStr = start.toIso8601String().substring(0, 10);
+              final endStr = end.toIso8601String().substring(0, 10);
+              range = 'Custom ($startStr to $endStr)';
+            }
+            Navigator.pop(context, {'range': range, 'pageSize': 'A4'});
           },
         ),
       ],

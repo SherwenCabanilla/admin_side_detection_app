@@ -380,12 +380,20 @@ class ScanRequestsService {
             return false;
           }
 
-          // Check if request date is within the custom range (inclusive)
-          final isInRange =
-              requestDate.isAfter(
-                startDate.subtract(const Duration(days: 1)),
-              ) &&
-              requestDate.isBefore(endDate.add(const Duration(days: 1)));
+          // Inclusive date range: [startDate 00:00, endDate 23:59:59]
+          final DateTime startOfDay = DateTime(
+            startDate.year,
+            startDate.month,
+            startDate.day,
+          );
+          final DateTime endExclusive = DateTime(
+            endDate.year,
+            endDate.month,
+            endDate.day,
+          ).add(const Duration(days: 1));
+          final bool isInRange =
+              !requestDate.isBefore(startOfDay) &&
+              requestDate.isBefore(endExclusive);
 
           print(
             'Request ${request['id']} date: $requestDate, in range: $isInRange',

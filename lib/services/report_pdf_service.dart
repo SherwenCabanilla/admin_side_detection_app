@@ -56,7 +56,7 @@ class ReportPdfService {
     // Application frequency column removed per request; focus on trend only
 
     // We'll fill these soon; declare placeholders for closure
-    List<String> labels = const [];
+    List<String> trendLabelKeys = const [];
     Map<String, int> diseaseByDay = const {};
     Map<String, int> healthyByDay = const {};
     Map<String, Map<String, int>> diseaseDayCounts = const {};
@@ -65,7 +65,7 @@ class ReportPdfService {
       // Build series for this disease from daily counts
       final lower = diseaseName.toLowerCase();
       final entries =
-          labels.map((k) {
+          trendLabelKeys.map((k) {
             final val =
                 lower == 'healthy'
                     ? (healthyByDay[k] ?? 0)
@@ -97,23 +97,57 @@ class ReportPdfService {
       (a, b) => (b['count'] as int).compareTo(a['count'] as int),
     );
 
-    // Determine date range for weather
+    // Determine reporting period strictly from the selected timeRange
+    // so the header reflects the user's choice even when there is no data.
     DateTime startDate;
     DateTime endDate;
-    if (filtered.isNotEmpty) {
-      final dates =
-          filtered.map<DateTime>((r) {
-              final c = r['createdAt'];
-              if (c is String) return DateTime.tryParse(c) ?? DateTime.now();
-              return c.toDate() as DateTime;
-            }).toList()
-            ..sort();
-      startDate = dates.first;
-      endDate = dates.last;
+    final nowForRange = DateTime.now();
+    if (timeRange.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(timeRange);
+      if (match != null) {
+        startDate = DateTime.parse(match.group(1)!);
+        endDate = DateTime.parse(match.group(2)!);
+      } else {
+        endDate = nowForRange;
+        startDate = endDate.subtract(const Duration(days: 7));
+      }
     } else {
-      // fallback: last 7 days
-      endDate = DateTime.now();
-      startDate = endDate.subtract(const Duration(days: 7));
+      switch (timeRange) {
+        case '1 Day':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 1));
+          break;
+        case 'Last 7 Days':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 7));
+          break;
+        case 'Last 30 Days':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 30));
+          break;
+        case 'Last 60 Days':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 60));
+          break;
+        case 'Last 90 Days':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 90));
+          break;
+        case 'Last Year':
+          endDate = nowForRange;
+          startDate = DateTime(
+            nowForRange.year - 1,
+            nowForRange.month,
+            nowForRange.day,
+          );
+          break;
+        default:
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 7));
+      }
     }
 
     // Fetch weather summary (avg/min/max temp) for range
@@ -189,24 +223,54 @@ class ReportPdfService {
         }
       }
       if (reviewed != null) {
-        final hours = reviewed.difference(dt).inMinutes / 60.0;
-        (responseHoursByDay[key] ??= <double>[]).add(hours);
+        // Only include responses whose REVIEW date falls within the selected range
+        final DateTime startOfDay = DateTime(
+          startDate.year,
+          startDate.month,
+          startDate.day,
+        );
+        final DateTime endExclusive = DateTime(
+          endDate.year,
+          endDate.month,
+          endDate.day,
+        ).add(const Duration(days: 1));
+        if (!reviewed.isBefore(startOfDay) && reviewed.isBefore(endExclusive)) {
+          final hours = reviewed.difference(dt).inMinutes / 60.0;
+          final String reviewKey =
+              '${reviewed.year}-${reviewed.month.toString().padLeft(2, '0')}-${reviewed.day.toString().padLeft(2, '0')}';
+          (responseHoursByDay[reviewKey] ??= <double>[]).add(hours);
+        }
       }
     }
     // Build aligned label set (dates) and ordered series arrays
     final allKeys =
         <String>{}
           ..addAll(diseaseByDay.keys)
-          ..addAll(healthyByDay.keys);
-    labels = allKeys.toList()..sort();
-    final diseaseSeries = labels
+          ..addAll(healthyByDay.keys)
+          ..addAll(responseHoursByDay.keys);
+    trendLabelKeys = allKeys.toList()..sort();
+    // Build full series first from complete label keys
+    final diseaseSeriesFull = trendLabelKeys
         .map((k) => (diseaseByDay[k] ?? 0).toDouble())
         .map((v) => v.isFinite ? v : 0.0)
         .toList(growable: false);
-    final healthySeries = labels
+    final healthySeriesFull = trendLabelKeys
         .map((k) => (healthyByDay[k] ?? 0).toDouble())
         .map((v) => v.isFinite ? v : 0.0)
         .toList(growable: false);
+    // Downsample labels for display; remap series to those label positions
+    final List<String> displayLabels =
+        _downsampleLabels(trendLabelKeys).map((e) => e.substring(5)).toList();
+    final List<String> displayKeys = _downsampleLabels(trendLabelKeys);
+    final Map<String, int> keyIndex = {
+      for (int i = 0; i < trendLabelKeys.length; i++) trendLabelKeys[i]: i,
+    };
+    final diseaseSeries = [
+      for (final k in displayKeys) diseaseSeriesFull[keyIndex[k] ?? 0],
+    ];
+    final healthySeries = [
+      for (final k in displayKeys) healthySeriesFull[keyIndex[k] ?? 0],
+    ];
 
     // Now that labels and daily series are ready, fill trend per disease
     for (final item in diseaseStats) {
@@ -225,8 +289,8 @@ class ReportPdfService {
     //         .entries
     //         .toList()
     //       ..sort((a, b) => a.key.compareTo(b.key));
-    final int completed = await ScanRequestsService.getCompletedReportsCount();
-    final int pending = await ScanRequestsService.getPendingReportsCount();
+    // Overview counts should reflect the selected range only
+    final int completed = filtered.length; // completed within range
     final String avgResponse = await ScanRequestsService.getAverageResponseTime(
       timeRange: timeRange,
     );
@@ -240,7 +304,24 @@ class ReportPdfService {
     final String utilityName = await SettingsService.getUtilityName();
 
     final now = DateTime.now();
-    final String title = 'Mango Disease Summary ($timeRange)';
+    // Human-readable title: if Custom (YYYY-MM-DD to YYYY-MM-DD), format nicely
+    String titleRangeLabel = timeRange;
+    if (timeRange.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(timeRange);
+      if (match != null) {
+        try {
+          final start = DateTime.parse(match.group(1)!);
+          final end = DateTime.parse(match.group(2)!);
+          titleRangeLabel = _fmtHumanRange(start, end);
+        } catch (_) {
+          // keep original label on parse error
+        }
+      }
+    }
+    final String title = 'Mango Disease Summary ($titleRangeLabel)';
 
     // Adaptive sizing for compact single-page layout
     final isSmall = pageSize.toLowerCase() == 'a5';
@@ -350,7 +431,7 @@ class ReportPdfService {
                 pw.Bullet(
                   text: 'Total Reports Reviewed: ' + completed.toString(),
                 ),
-                pw.Bullet(text: 'Pending Requests: ' + pending.toString()),
+                // Pending is not shown in PDF per requirement
                 pw.Bullet(text: 'Average Response Time: ' + avgResponse),
                 pw.SizedBox(height: isSmall ? 6 : 8),
                 // Stacked large charts
@@ -376,7 +457,7 @@ class ReportPdfService {
                 ),
                 pw.SizedBox(height: 3),
                 _buildTrendChart(
-                  labels,
+                  displayLabels,
                   diseaseSeries,
                   healthySeries,
                   height: chartHeight,
@@ -435,6 +516,23 @@ class ReportPdfService {
       bytes: await doc.save(),
       filename: 'report_${now.millisecondsSinceEpoch}.pdf',
     );
+  }
+
+  // Keep about 8 evenly spaced labels; always include first and last.
+  static List<String> _downsampleLabels(List<String> sortedFullYmd) {
+    if (sortedFullYmd.length <= 8) {
+      return sortedFullYmd;
+    }
+    final int n = sortedFullYmd.length;
+    final int step = (n / 8).ceil();
+    final List<String> out = [];
+    for (int i = 0; i < n; i += step) {
+      out.add(sortedFullYmd[i]);
+    }
+    // Ensure last label present
+    final String last = sortedFullYmd.last;
+    if (out.last != last) out.add(last);
+    return out;
   }
 
   static pw.Widget _buildDiseaseTable(
@@ -564,7 +662,7 @@ class ReportPdfService {
       child: pw.Chart(
         grid: pw.CartesianGrid(
           xAxis: pw.FixedAxis.fromStrings(
-            labels.map((e) => e.substring(5)).toList(),
+            labels,
             marginStart: 10,
             marginEnd: 10,
           ),

@@ -124,6 +124,49 @@ class _AdminDashboardState extends State<AdminDashboard>
     }
   }
 
+  // Resolve activity icon primarily by 'type' for consistency across platforms.
+  // Falls back to stored 'icon' codepoint when available.
+  IconData _resolveActivityIcon(Map<String, dynamic> data) {
+    final String type = (data['type'] ?? '').toString();
+    switch (type) {
+      case 'accept':
+        return Icons.person_add;
+      case 'update':
+        return Icons.edit;
+      case 'delete':
+        return Icons.block;
+      case 'verify':
+        return Icons.verified_user;
+      case 'pending':
+        return Icons.pending_actions;
+      case 'complete':
+        return Icons.assignment_turned_in;
+      case 'export':
+        return Icons.picture_as_pdf;
+    }
+    final dynamic iconCode = data['icon'];
+    if (iconCode is int) return _getIconFromCode(iconCode);
+    return Icons.info;
+  }
+
+  // Resolve color with a sensible default if missing
+  Color _resolveActivityColor(Map<String, dynamic> data) {
+    final dynamic c = data['color'];
+    if (c is int) return Color(c);
+    switch ((data['type'] ?? '').toString()) {
+      case 'accept':
+        return Colors.green;
+      case 'update':
+        return Colors.blue;
+      case 'delete':
+        return Colors.red;
+      case 'pending':
+        return Colors.amber;
+      default:
+        return Colors.grey;
+    }
+  }
+
   // Remove the hardcoded activities list
   // List<Map<String, dynamic>> activities = [
   //   {
@@ -411,9 +454,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                                   docs[index].data() as Map<String, dynamic>;
                               return ListTile(
                                 leading: CircleAvatar(
-                                  backgroundColor: Color(data['color']),
+                                  backgroundColor: _resolveActivityColor(data),
                                   child: Icon(
-                                    _getIconFromCode(data['icon'] as int),
+                                    _resolveActivityIcon(data),
                                     color: Colors.white,
                                   ),
                                 ),
