@@ -1648,9 +1648,28 @@ class _ReportsModalContentState extends State<ReportsModalContent>
               return false;
             });
             final bool expertMatches = expertNameLower.contains(query);
-            final String createdDateText =
-                _formatDateOnly(createdDate).toLowerCase();
-            final bool dateTextMatches = createdDateText.contains(query);
+            // Build flexible date variants to tolerate padded/unpadded day/month
+            // and 2-digit or 4-digit years.
+            final String dd = createdDate.day.toString().padLeft(2, '0');
+            final String d = createdDate.day.toString();
+            final String mm = createdDate.month.toString().padLeft(2, '0');
+            final String m = createdDate.month.toString();
+            final String y4 = createdDate.year.toString();
+            final String y2 = y4.substring(2);
+            final List<String> dateVariants =
+                [
+                  '$dd/$mm/$y4',
+                  '$d/$m/$y4',
+                  '$dd/$m/$y4',
+                  '$d/$mm/$y4',
+                  '$dd/$mm/$y2',
+                  '$d/$m/$y2',
+                  '$dd/$m/$y2',
+                  '$d/$mm/$y2',
+                ].map((s) => s.toLowerCase()).toList();
+            final bool dateTextMatches = dateVariants.any(
+              (s) => s.contains(query),
+            );
 
             matchesSearch =
                 userMatches ||
@@ -1771,13 +1790,31 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                   controller: _tabController,
                   labelColor: Colors.white,
                   unselectedLabelColor: Colors.black87,
+                  labelPadding: EdgeInsets.zero,
+                  indicatorSize: TabBarIndicatorSize.label,
                   indicator: const BoxDecoration(
                     color: Colors.blue,
                     borderRadius: BorderRadius.all(Radius.circular(8)),
                   ),
                   tabs: const [
-                    Tab(text: 'Completed Reports'),
-                    Tab(text: 'Pending Reports'),
+                    Tab(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 8,
+                        ),
+                        child: Text('Completed Reports'),
+                      ),
+                    ),
+                    Tab(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 8,
+                        ),
+                        child: Text('Pending Reports'),
+                      ),
+                    ),
                   ],
                 ),
               ),

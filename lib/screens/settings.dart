@@ -14,7 +14,7 @@ class Settings extends StatefulWidget {
 class _SettingsState extends State<Settings> {
   bool _emailNotifications = true;
   String _selectedLanguage = 'English';
-  String? _adminName = 'Admin';
+  String? _adminName;
   String? _email =
       FirebaseAuth.instance.currentUser?.email ?? 'admin@example.com';
 
@@ -97,11 +97,29 @@ class _SettingsState extends State<Settings> {
                     ),
                   ),
                 ),
-                ListTile(
-                  leading: const Icon(Icons.person),
-                  title: const Text('Edit Admin Name'),
-                  subtitle: Text(_adminName ?? 'Admin'),
-                  onTap: _editAdminName,
+                StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                  stream: () {
+                    final user = FirebaseAuth.instance.currentUser;
+                    if (user == null) {
+                      return const Stream<
+                        DocumentSnapshot<Map<String, dynamic>>
+                      >.empty();
+                    }
+                    return FirebaseFirestore.instance
+                        .collection('admins')
+                        .doc(user.uid)
+                        .snapshots();
+                  }(),
+                  builder: (context, snapshot) {
+                    final data = snapshot.data?.data();
+                    _adminName = data?['adminName'] ?? _adminName ?? 'Admin';
+                    return ListTile(
+                      leading: const Icon(Icons.person),
+                      title: const Text('Edit Admin Name'),
+                      subtitle: Text(_adminName ?? 'Admin'),
+                      onTap: _editAdminName,
+                    );
+                  },
                 ),
                 ListTile(
                   leading: const Icon(Icons.email),
@@ -388,7 +406,7 @@ class _SettingsState extends State<Settings> {
           ),
           const SizedBox(height: 16),
 
-          // System Management
+          // Session
           Card(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -396,7 +414,7 @@ class _SettingsState extends State<Settings> {
                 const Padding(
                   padding: EdgeInsets.all(16),
                   child: Text(
-                    'System Management',
+                    'Session',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -404,29 +422,6 @@ class _SettingsState extends State<Settings> {
                     ),
                   ),
                 ),
-                StatefulBuilder(
-                  builder: (context, setState) {
-                    bool isHovered = false;
-                    return MouseRegion(
-                      onEnter: (_) => setState(() => isHovered = true),
-                      onExit: (_) => setState(() => isHovered = false),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        decoration: BoxDecoration(
-                          color:
-                              isHovered ? Colors.green.withOpacity(0.1) : null,
-                        ),
-                        child: ListTile(
-                          leading: const Icon(Icons.assessment),
-                          title: const Text('View Reports'),
-                          subtitle: const Text('Access system reports'),
-                          onTap: widget.onViewReports,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                const Divider(),
                 StatefulBuilder(
                   builder: (context, setState) {
                     bool isHovered = false;

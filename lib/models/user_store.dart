@@ -14,7 +14,7 @@ class UserStore {
         final data = doc.data() as Map<String, dynamic>;
         return {
           'id': doc.id,
-          'name': data['fullName'] ?? '',
+          'name': _titleCase(data['fullName'] ?? ''),
           'email': data['email'] ?? '',
           'phone': data['phoneNumber'] ?? '',
           'address': data['address'] ?? '',
@@ -85,13 +85,38 @@ class UserStore {
   static String _formatDate(dynamic date) {
     if (date == null) return '';
     if (date is Timestamp) {
-      return '${date.toDate().day}/${date.toDate().month}/${date.toDate().year}';
+      final dt = date.toDate();
+      return _formatDdMmYyyy(dt);
     }
     if (date is String) {
-      // Handle string date format
+      // Normalize any ISO-like string to dd/mm/yyyy
+      final parsed = DateTime.tryParse(date);
+      if (parsed != null) {
+        return _formatDdMmYyyy(parsed);
+      }
+      // Unknown string format; return as-is
       return date;
     }
     return '';
+  }
+
+  static String _formatDdMmYyyy(DateTime dt) {
+    final dd = dt.day.toString().padLeft(2, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    final yyyy = dt.year.toString();
+    return '$dd/$mm/$yyyy';
+  }
+
+  static String _titleCase(String input) {
+    if (input.isEmpty) return input;
+    return input
+        .split(RegExp(r'\s+'))
+        .map((word) {
+          if (word.isEmpty) return word;
+          final lower = word.toLowerCase();
+          return lower[0].toUpperCase() + lower.substring(1);
+        })
+        .join(' ');
   }
 
   // Get pending users count
