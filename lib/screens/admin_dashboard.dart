@@ -374,20 +374,53 @@ class _AdminDashboardState extends State<AdminDashboard>
                       onTap: () {
                         showDialog(
                           context: context,
-                          builder:
-                              (context) => Dialog(
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: Container(
-                                  width:
-                                      MediaQuery.of(context).size.width * 0.9,
-                                  height:
-                                      MediaQuery.of(context).size.height * 0.8,
-                                  padding: const EdgeInsets.all(20),
-                                  child: ReportsModalContent(),
-                                ),
-                              ),
+                          builder: (context) {
+                            final ValueNotifier<bool> fullscreen =
+                                ValueNotifier<bool>(false);
+                            return ValueListenableBuilder<bool>(
+                              valueListenable: fullscreen,
+                              builder:
+                                  (context, isFull, _) => Dialog(
+                                    insetPadding:
+                                        isFull
+                                            ? EdgeInsets.zero
+                                            : const EdgeInsets.symmetric(
+                                              horizontal: 40,
+                                              vertical: 40,
+                                            ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                          isFull
+                                              ? BorderRadius.zero
+                                              : BorderRadius.circular(16),
+                                    ),
+                                    child: Container(
+                                      width:
+                                          isFull
+                                              ? MediaQuery.of(
+                                                context,
+                                              ).size.width
+                                              : MediaQuery.of(
+                                                    context,
+                                                  ).size.width *
+                                                  0.9,
+                                      height:
+                                          isFull
+                                              ? MediaQuery.of(
+                                                context,
+                                              ).size.height
+                                              : MediaQuery.of(
+                                                    context,
+                                                  ).size.height *
+                                                  0.8,
+                                      padding: const EdgeInsets.all(20),
+                                      child: ReportsModalContent(
+                                        fullscreenNotifier: fullscreen,
+                                      ),
+                                    ),
+                                  ),
+                            );
+                          },
                         );
                       },
                     ),

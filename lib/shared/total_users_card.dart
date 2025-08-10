@@ -1404,6 +1404,10 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
 }
 
 class ReportsModalContent extends StatefulWidget {
+  final ValueNotifier<bool>? fullscreenNotifier;
+  const ReportsModalContent({Key? key, this.fullscreenNotifier})
+    : super(key: key);
+
   @override
   _ReportsModalContentState createState() => _ReportsModalContentState();
 }
@@ -1767,6 +1771,19 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                   ],
                 ),
                 const SizedBox(width: 16),
+                if (widget.fullscreenNotifier != null)
+                  ValueListenableBuilder<bool>(
+                    valueListenable: widget.fullscreenNotifier!,
+                    builder:
+                        (context, isFull, _) => IconButton(
+                          tooltip: isFull ? 'Exit Fullscreen' : 'Fullscreen',
+                          icon: Icon(
+                            isFull ? Icons.fullscreen_exit : Icons.fullscreen,
+                          ),
+                          onPressed:
+                              () => widget.fullscreenNotifier!.value = !isFull,
+                        ),
+                  ),
                 IconButton(
                   onPressed: () => Navigator.of(context).pop(),
                   icon: const Icon(Icons.close),
