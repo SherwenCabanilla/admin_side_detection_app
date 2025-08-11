@@ -428,109 +428,134 @@ class ScanRequestsService {
   }) async {
     try {
       final scanRequests = await getScanRequests();
-      final filteredRequests = filterByTimeRange(scanRequests, timeRange);
 
-      print('=== AVG RESPONSE TIME DEBUG ===');
-      print('Time Range: $timeRange');
-      print('Total scan requests: ${scanRequests.length}');
-      print('Filtered requests: ${filteredRequests.length}');
-
-      // Group requests by expert
-      final Map<String, List<Map<String, dynamic>>> expertGroups = {};
-
-      for (final request in filteredRequests) {
-        if (request['status'] == 'completed' &&
-            request['createdAt'] != null &&
-            request['reviewedAt'] != null) {
-          final expertId =
-              request['expertReview']?['expertUid'] ??
-              request['expertUid'] ??
-              request['expertId'];
-
-          print('Request ${request['id']}: expertId = $expertId');
-          print('  expertReview: ${request['expertReview']}');
-          print('  expertUid: ${request['expertUid']}');
-          print('  expertId: ${request['expertId']}');
-
-          if (expertId != null) {
-            expertGroups.putIfAbsent(expertId, () => []).add(request);
-          }
+      // Resolve window anchored to reviewedAt (completion time)
+      final DateTime now = DateTime.now();
+      DateTime? startInclusive;
+      DateTime? endExclusive;
+      if (timeRange.startsWith('Custom (')) {
+        final regex = RegExp(
+          r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        );
+        final match = regex.firstMatch(timeRange);
+        if (match != null) {
+          final startDate = DateTime.parse(match.group(1)!);
+          final endDate = DateTime.parse(match.group(2)!);
+          startInclusive = DateTime(
+            startDate.year,
+            startDate.month,
+            startDate.day,
+          );
+          endExclusive = DateTime(
+            endDate.year,
+            endDate.month,
+            endDate.day,
+          ).add(const Duration(days: 1));
+        }
+      }
+      if (startInclusive == null || endExclusive == null) {
+        switch (timeRange) {
+          case '1 Day':
+            startInclusive = now.subtract(const Duration(days: 1));
+            endExclusive = now;
+            break;
+          case 'Last 7 Days':
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+            break;
+          case 'Last 30 Days':
+            startInclusive = now.subtract(const Duration(days: 30));
+            endExclusive = now;
+            break;
+          case 'Last 60 Days':
+            startInclusive = now.subtract(const Duration(days: 60));
+            endExclusive = now;
+            break;
+          case 'Last 90 Days':
+            startInclusive = now.subtract(const Duration(days: 90));
+            endExclusive = now;
+            break;
+          case 'Last Year':
+            startInclusive = DateTime(now.year - 1, now.month, now.day);
+            endExclusive = now;
+            break;
+          default:
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
         }
       }
 
-      print('Expert groups: ${expertGroups.keys.toList()}');
-      print('Number of experts: ${expertGroups.length}');
+      print('=== AVG RESPONSE TIME (OVERALL) DEBUG ===');
+      print('Time Range: $timeRange');
+      print('Now: $now');
+      print('Start (reviewedAt): $startInclusive');
+      print('End (exclusive, reviewedAt): $endExclusive');
 
-      if (expertGroups.isEmpty) {
-        print('No expert groups found, returning 0 hours');
+      int completedCount = 0;
+      int totalSeconds = 0;
+
+      for (final request in scanRequests) {
+        if ((request['status'] ?? '') != 'completed') continue;
+        final createdAtRaw = request['createdAt'];
+        final reviewedAtRaw = request['reviewedAt'];
+        if (createdAtRaw == null || reviewedAtRaw == null) continue;
+
+        DateTime createdAt;
+        DateTime reviewedAt;
+
+        if (createdAtRaw is Timestamp) {
+          createdAt = createdAtRaw.toDate();
+        } else if (createdAtRaw is String) {
+          createdAt = DateTime.tryParse(createdAtRaw) ?? DateTime.now();
+        } else {
+          continue;
+        }
+
+        if (reviewedAtRaw is Timestamp) {
+          reviewedAt = reviewedAtRaw.toDate();
+        } else if (reviewedAtRaw is String) {
+          reviewedAt = DateTime.tryParse(reviewedAtRaw) ?? createdAt;
+        } else {
+          continue;
+        }
+
+        // Filter by reviewedAt window
+        final bool inWindow;
+        if (timeRange == '1 Day') {
+          inWindow = reviewedAt.isAfter(startInclusive);
+        } else if (timeRange.startsWith('Custom (')) {
+          inWindow =
+              !reviewedAt.isBefore(startInclusive) &&
+              reviewedAt.isBefore(endExclusive);
+        } else {
+          inWindow =
+              !reviewedAt.isBefore(startInclusive) &&
+              !reviewedAt.isAfter(endExclusive);
+        }
+        if (!inWindow) continue;
+
+        final seconds = reviewedAt.difference(createdAt).inSeconds;
+        totalSeconds += seconds;
+        completedCount += 1;
+      }
+
+      if (completedCount == 0) {
+        print('No completed requests in range. Returning 0 hours');
         return '0 hours';
       }
 
-      // Calculate average response time for each expert
-      final List<double> expertAverages = [];
+      final double averageSeconds = totalSeconds / completedCount;
+      final double averageHours = averageSeconds / 3600.0;
 
-      for (final entry in expertGroups.entries) {
-        final expertId = entry.key;
-        final expertRequests = entry.value;
-        int totalSeconds = 0;
-
-        print(
-          'Processing expert $expertId with ${expertRequests.length} requests',
-        );
-
-        for (final request in expertRequests) {
-          DateTime createdAt, reviewedAt;
-
-          if (request['createdAt'] is Timestamp) {
-            createdAt = request['createdAt'].toDate();
-          } else if (request['createdAt'] is String) {
-            createdAt =
-                DateTime.tryParse(request['createdAt']) ?? DateTime.now();
-          } else {
-            createdAt = DateTime.now();
-          }
-
-          if (request['reviewedAt'] is Timestamp) {
-            reviewedAt = request['reviewedAt'].toDate();
-          } else {
-            reviewedAt =
-                DateTime.tryParse(request['reviewedAt']) ?? DateTime.now();
-          }
-
-          final difference = reviewedAt.difference(createdAt);
-          final seconds = difference.inSeconds;
-          totalSeconds += seconds;
-
-          print('  Request ${request['id']}: ${seconds} seconds');
-        }
-
-        // Calculate average for this expert
-        final expertAverageSeconds = totalSeconds / expertRequests.length;
-        expertAverages.add(expertAverageSeconds);
-
-        print(
-          '  Expert $expertId average: ${expertAverageSeconds} seconds (${expertAverageSeconds / 60} minutes)',
-        );
-      }
-
-      // Calculate average of per-expert averages
-      final averageSeconds =
-          expertAverages.reduce((a, b) => a + b) / expertAverages.length;
-      final averageHours = averageSeconds / 3600; // Convert seconds to hours
-
-      print('Final average: ${averageSeconds} seconds (${averageHours} hours)');
-      print('Expert averages: $expertAverages');
+      print(
+        'Overall average across $completedCount requests: '
+        '${averageSeconds.toStringAsFixed(2)} seconds '
+        '(${averageHours.toStringAsFixed(2)} hours)',
+      );
       print('================================');
 
-      // Format the result appropriately
-      if (averageHours < 1) {
-        // Less than 1 hour, show in minutes
-        final minutes = averageSeconds / 60;
-        return '${minutes.toStringAsFixed(1)} minutes';
-      } else {
-        // 1 hour or more, show in hours
-        return '${averageHours.toStringAsFixed(2)} hours';
-      }
+      // Always return in hours for UI consistency
+      return '${averageHours.toStringAsFixed(2)} hours';
     } catch (e) {
       print('Error getting average response time: $e');
       return '0 hours';

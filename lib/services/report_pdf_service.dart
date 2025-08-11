@@ -15,10 +15,11 @@ class ReportPdfService {
     String? backgroundAsset,
   }) async {
     // Fetch data needed for the report
-    // Get all requests, then filter for timeframe and completed only
+    // Get all requests
     final List<Map<String, dynamic>> allRequests =
         await ScanRequestsService.getScanRequests();
-    final List<Map<String, dynamic>> filtered =
+    // Created-at anchored, completed-only list for disease analysis
+    final List<Map<String, dynamic>> filteredCreatedCompleted =
         ScanRequestsService.filterByTimeRange(
           allRequests,
           timeRange,
@@ -26,7 +27,7 @@ class ReportPdfService {
     // Build disease stats from validated data
     final Map<String, int> diseaseCounts = {};
     int totalDetections = 0;
-    for (final r in filtered) {
+    for (final r in filteredCreatedCompleted) {
       List<dynamic> diseaseSummary = [];
       if (r['diseaseSummary'] != null) {
         diseaseSummary = r['diseaseSummary'] as List<dynamic>? ?? [];
@@ -164,7 +165,7 @@ class ReportPdfService {
     diseaseDayCounts = {};
     // For response-time trend (avg hours per day)
     final Map<String, List<double>> responseHoursByDay = {};
-    for (final r in filtered) {
+    for (final r in filteredCreatedCompleted) {
       final createdAt = r['createdAt'];
       DateTime dt;
       if (createdAt is String) {
@@ -289,8 +290,73 @@ class ReportPdfService {
     //         .entries
     //         .toList()
     //       ..sort((a, b) => a.key.compareTo(b.key));
-    // Overview counts should reflect the selected range only
-    final int completed = filtered.length; // completed within range
+    // Overview counts should reflect COMPLETIONS in the selected range (reviewedAt)
+    // Build reviewed-window: [start 00:00, end 24:00) to include the entire end day
+    final DateTime startInclusive = DateTime(
+      startDate.year,
+      startDate.month,
+      startDate.day,
+    );
+    final DateTime endExclusive = DateTime(
+      endDate.year,
+      endDate.month,
+      endDate.day,
+    ).add(const Duration(days: 1));
+    final List<Map<String, dynamic>> completedInWindow = [];
+    for (final r in allRequests) {
+      if ((r['status'] ?? '') != 'completed') continue;
+      final reviewedRaw = r['reviewedAt'];
+      if (reviewedRaw == null) continue;
+      DateTime reviewed;
+      if (reviewedRaw is String) {
+        reviewed = DateTime.tryParse(reviewedRaw) ?? startInclusive;
+      } else if (reviewedRaw.runtimeType.toString() == 'Timestamp') {
+        // Avoid importing Firestore types in PDF layer; handle by runtimeType
+        reviewed = reviewedRaw.toDate();
+      } else {
+        continue;
+      }
+      // 1 Day uses a rolling 24h window via startInclusive=now-1day, endExclusive=now
+      final bool inWindow =
+          !reviewed.isBefore(startInclusive) && reviewed.isBefore(endExclusive);
+      if (inWindow) completedInWindow.add(r);
+    }
+    final int completed = completedInWindow.length;
+    // Compute SLA (≤24h, ≤48h) among completedInWindow
+    int within24 = 0;
+    int within48 = 0;
+    for (final r in completedInWindow) {
+      final createdRaw = r['createdAt'];
+      final reviewedRaw = r['reviewedAt'];
+      if (createdRaw == null || reviewedRaw == null) continue;
+      DateTime created;
+      DateTime reviewed;
+      if (createdRaw is String) {
+        created = DateTime.tryParse(createdRaw) ?? startInclusive;
+      } else if (createdRaw.runtimeType.toString() == 'Timestamp') {
+        created = createdRaw.toDate();
+      } else {
+        continue;
+      }
+      if (reviewedRaw is String) {
+        reviewed = DateTime.tryParse(reviewedRaw) ?? created;
+      } else if (reviewedRaw.runtimeType.toString() == 'Timestamp') {
+        reviewed = reviewedRaw.toDate();
+      } else {
+        continue;
+      }
+      final hours = reviewed.difference(created).inMinutes / 60.0;
+      if (hours <= 24.0) within24++;
+      if (hours <= 48.0) within48++;
+    }
+    final String sla24Label =
+        completed == 0
+            ? '—'
+            : '${((within24 / completed) * 100).toStringAsFixed(0)}%';
+    final String sla48Label =
+        completed == 0
+            ? '—'
+            : '${((within48 / completed) * 100).toStringAsFixed(0)}%';
     final String avgResponse = await ScanRequestsService.getAverageResponseTime(
       timeRange: timeRange,
     );
@@ -372,7 +438,7 @@ class ReportPdfService {
                       ),
                     ),
                     pw.Text(
-                      _fmtYmd(now),
+                      _fmtHumanDate(now),
                       style: pw.TextStyle(
                         fontSize: chipLabelFont + 1,
                         font: baseFont,
@@ -433,6 +499,8 @@ class ReportPdfService {
                 ),
                 // Pending is not shown in PDF per requirement
                 pw.Bullet(text: 'Average Response Time: ' + avgResponse),
+                pw.Bullet(text: 'SLA < 24h: ' + sla24Label),
+                pw.Bullet(text: 'SLA < 48h: ' + sla48Label),
                 pw.SizedBox(height: isSmall ? 6 : 8),
                 // Stacked large charts
                 pw.Text(
@@ -796,9 +864,24 @@ class ReportPdfService {
 
   // _safeStep no longer used in simplified layout
 
-  static String _fmtYmd(DateTime d) =>
-      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}'
-          .toString();
+  static String _fmtHumanDate(DateTime d) {
+    const names = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final m = (d.month >= 1 && d.month <= 12) ? names[d.month - 1] : '';
+    return '$m ${d.day}, ${d.year}';
+  }
 
   static String _fmtHumanRange(DateTime start, DateTime end) {
     String m(int m) => _monthName(m);

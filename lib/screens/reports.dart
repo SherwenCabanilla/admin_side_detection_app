@@ -43,6 +43,45 @@ class _ReportsState extends State<Reports> {
   String? _completionRate;
   int? _overduePendingCount;
 
+  String _monthName(int m) {
+    const names = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    if (m < 1 || m > 12) return '';
+    return names[m - 1];
+  }
+
+  String _displayRangeLabel(String range) {
+    if (range.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        try {
+          final s = DateTime.parse(match.group(1)!);
+          final e = DateTime.parse(match.group(2)!);
+          String fmt(DateTime d) =>
+              '${_monthName(d.month)} ${d.day}, ${d.year}';
+          return '${fmt(s)} to ${fmt(e)}';
+        } catch (_) {}
+      }
+      return range.substring(8, range.length - 1);
+    }
+    return range;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -74,13 +113,62 @@ class _ReportsState extends State<Reports> {
             'expertReview': data['expertReview'],
           };
         }).toList();
-    final filteredRequests = ScanRequestsService.filterByTimeRange(
-      scanRequests,
-      _selectedTimeRange,
-    );
-    // Real-time aggregates
-    int totalResponseTimeHours = 0;
-    int completedRequests = 0;
+
+    // Build a reviewedAt-anchored time window to match card/SLA logic
+    final DateTime now = DateTime.now();
+    DateTime? startInclusive;
+    DateTime? endExclusive;
+    if (_selectedTimeRange.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(_selectedTimeRange);
+      if (match != null) {
+        final s = DateTime.parse(match.group(1)!);
+        final e = DateTime.parse(match.group(2)!);
+        startInclusive = DateTime(s.year, s.month, s.day);
+        endExclusive = DateTime(
+          e.year,
+          e.month,
+          e.day,
+        ).add(const Duration(days: 1));
+      }
+    }
+    if (startInclusive == null || endExclusive == null) {
+      switch (_selectedTimeRange) {
+        case '1 Day':
+          startInclusive = now.subtract(const Duration(days: 1));
+          endExclusive = now;
+          break;
+        case 'Last 7 Days':
+          startInclusive = now.subtract(const Duration(days: 7));
+          endExclusive = now;
+          break;
+        case 'Last 30 Days':
+          startInclusive = now.subtract(const Duration(days: 30));
+          endExclusive = now;
+          break;
+        case 'Last 60 Days':
+          startInclusive = now.subtract(const Duration(days: 60));
+          endExclusive = now;
+          break;
+        case 'Last 90 Days':
+          startInclusive = now.subtract(const Duration(days: 90));
+          endExclusive = now;
+          break;
+        case 'Last Year':
+          startInclusive = DateTime(now.year - 1, now.month, now.day);
+          endExclusive = now;
+          break;
+        default:
+          startInclusive = now.subtract(const Duration(days: 7));
+          endExclusive = now;
+      }
+    }
+
+    // Real-time aggregates using reviewedAt window
+    double totalResponseTimeHours = 0;
+    int completedInWindow = 0;
     int completed = 0;
     int pending = 0;
     int within24 = 0;
@@ -88,29 +176,36 @@ class _ReportsState extends State<Reports> {
     int overduePending = 0;
     final Map<String, List<double>> hoursByDay = {};
 
-    for (final request in filteredRequests) {
-      final status = (request['status'] ?? '').toString();
-      final createdAtRaw = request['createdAt'];
+    for (final r in scanRequests) {
+      final status = (r['status'] ?? '').toString();
+      final createdAtRaw = r['createdAt'];
       DateTime? createdAt;
       if (createdAtRaw is Timestamp) createdAt = createdAtRaw.toDate();
       if (createdAtRaw is String) createdAt = DateTime.tryParse(createdAtRaw);
 
       if (status == 'completed') {
-        completed++;
-        final reviewedAtRaw = request['reviewedAt'];
+        final reviewedAtRaw = r['reviewedAt'];
         DateTime? reviewedAt;
         if (reviewedAtRaw is Timestamp) reviewedAt = reviewedAtRaw.toDate();
         if (reviewedAtRaw is String)
           reviewedAt = DateTime.tryParse(reviewedAtRaw);
         if (createdAt != null && reviewedAt != null) {
-          final hours = reviewedAt.difference(createdAt).inMinutes / 60.0;
-          totalResponseTimeHours += (hours).floor();
-          completedRequests++;
-          if (hours <= 24.0) within24++;
-          if (hours <= 48.0) within48++;
-          final key =
-              '${createdAt.year}-${createdAt.month.toString().padLeft(2, '0')}-${createdAt.day.toString().padLeft(2, '0')}';
-          (hoursByDay[key] ??= <double>[]).add(hours);
+          completed++;
+          final inWindow =
+              _selectedTimeRange == '1 Day'
+                  ? reviewedAt.isAfter(startInclusive)
+                  : (!reviewedAt.isBefore(startInclusive) &&
+                      reviewedAt.isBefore(endExclusive));
+          if (inWindow) {
+            final hours = reviewedAt.difference(createdAt).inMinutes / 60.0;
+            totalResponseTimeHours += hours;
+            completedInWindow++;
+            if (hours <= 24.0) within24++;
+            if (hours <= 48.0) within48++;
+            final key =
+                '${reviewedAt.year}-${reviewedAt.month.toString().padLeft(2, '0')}-${reviewedAt.day.toString().padLeft(2, '0')}';
+            (hoursByDay[key] ??= <double>[]).add(hours);
+          }
         }
       } else if (status == 'pending') {
         pending++;
@@ -122,11 +217,10 @@ class _ReportsState extends State<Reports> {
     }
 
     final averageResponseTime =
-        completedRequests == 0
+        completedInWindow == 0
             ? '0 hours'
-            : '${(totalResponseTimeHours / completedRequests).toStringAsFixed(2)} hours';
+            : '${(totalResponseTimeHours / completedInWindow).toStringAsFixed(2)} hours';
 
-    // Build daily average response series
     final List<Map<String, dynamic>> series =
         hoursByDay.entries.map((e) {
             final avg =
@@ -139,15 +233,14 @@ class _ReportsState extends State<Reports> {
             (a, b) => (a['date'] as String).compareTo(b['date'] as String),
           );
 
-    // Compute SLA and completion rate
     final sla24 =
-        completed == 0
+        completedInWindow == 0
             ? '—'
-            : '${((within24 / completed) * 100).toStringAsFixed(0)}%';
+            : '${((within24 / completedInWindow) * 100).toStringAsFixed(0)}%';
     final sla48 =
-        completed == 0
+        completedInWindow == 0
             ? '—'
-            : '${((within48 / completed) * 100).toStringAsFixed(0)}%';
+            : '${((within48 / completedInWindow) * 100).toStringAsFixed(0)}%';
     final totalForRate = completed + pending;
     final completionRate =
         totalForRate == 0
@@ -445,16 +538,63 @@ class _ReportsState extends State<Reports> {
   Future<void> _loadSla() async {
     try {
       final all = await ScanRequestsService.getScanRequests();
-      final filtered = ScanRequestsService.filterByTimeRange(
-        all,
-        _selectedTimeRange,
-      );
+      // Build reviewedAt-anchored window
+      final DateTime now = DateTime.now();
+      DateTime? startInclusive;
+      DateTime? endExclusive;
+      if (_selectedTimeRange.startsWith('Custom (')) {
+        final regex = RegExp(
+          r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        );
+        final match = regex.firstMatch(_selectedTimeRange);
+        if (match != null) {
+          final s = DateTime.parse(match.group(1)!);
+          final e = DateTime.parse(match.group(2)!);
+          startInclusive = DateTime(s.year, s.month, s.day);
+          endExclusive = DateTime(
+            e.year,
+            e.month,
+            e.day,
+          ).add(const Duration(days: 1));
+        }
+      }
+      if (startInclusive == null || endExclusive == null) {
+        switch (_selectedTimeRange) {
+          case '1 Day':
+            startInclusive = now.subtract(const Duration(days: 1));
+            endExclusive = now;
+            break;
+          case 'Last 7 Days':
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+            break;
+          case 'Last 30 Days':
+            startInclusive = now.subtract(const Duration(days: 30));
+            endExclusive = now;
+            break;
+          case 'Last 60 Days':
+            startInclusive = now.subtract(const Duration(days: 60));
+            endExclusive = now;
+            break;
+          case 'Last 90 Days':
+            startInclusive = now.subtract(const Duration(days: 90));
+            endExclusive = now;
+            break;
+          case 'Last Year':
+            startInclusive = DateTime(now.year - 1, now.month, now.day);
+            endExclusive = now;
+            break;
+          default:
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+        }
+      }
       int completed = 0;
       int within24 = 0;
       int within48 = 0;
       int pending = 0;
       int overduePending = 0;
-      for (final r in filtered) {
+      for (final r in all) {
         final status = (r['status'] ?? '').toString();
         final createdAt = r['createdAt'];
         DateTime? created;
@@ -474,6 +614,20 @@ class _ReportsState extends State<Reports> {
           } else {
             continue;
           }
+          // Filter by reviewedAt window
+          final bool inWindow;
+          if (_selectedTimeRange == '1 Day') {
+            inWindow = reviewed.isAfter(startInclusive);
+          } else if (_selectedTimeRange.startsWith('Custom (')) {
+            inWindow =
+                !reviewed.isBefore(startInclusive) &&
+                reviewed.isBefore(endExclusive);
+          } else {
+            inWindow =
+                !reviewed.isBefore(startInclusive) &&
+                !reviewed.isAfter(endExclusive);
+          }
+          if (!inWindow) continue;
           completed++;
           final hours = reviewed.difference(created).inMinutes / 60.0;
           if (hours <= 24.0) within24++;
@@ -562,6 +716,7 @@ class _ReportsState extends State<Reports> {
                       padding: const EdgeInsets.only(right: 12),
                       child: DropdownButton<String>(
                         value: _selectedTimeRange,
+                        underline: const SizedBox.shrink(),
                         items:
                             (<String>[
                                   '1 Day',
@@ -579,7 +734,10 @@ class _ReportsState extends State<Reports> {
                                 .map(
                                   (range) => DropdownMenuItem(
                                     value: range,
-                                    child: Text(range),
+                                    child: Text(
+                                      _displayRangeLabel(range),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
                                 )
                                 .toList(),
@@ -602,9 +760,8 @@ class _ReportsState extends State<Reports> {
                                   '${picked.start.year}-${picked.start.month.toString().padLeft(2, '0')}-${picked.start.day.toString().padLeft(2, '0')}';
                               final end =
                                   '${picked.end.year}-${picked.end.month.toString().padLeft(2, '0')}-${picked.end.day.toString().padLeft(2, '0')}';
-                              await _onTimeRangeChanged(
-                                'Custom ($start to $end)',
-                              );
+                              final label = 'Custom ($start to $end)';
+                              await _onTimeRangeChanged(label);
                             }
                           } else {
                             _onTimeRangeChanged(value);
@@ -1354,6 +1511,45 @@ class AvgResponseTrendChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    String _monthName(int m) {
+      const names = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ];
+      if (m < 1 || m > 12) return '';
+      return names[m - 1];
+    }
+
+    String _displayRangeLabel(String range) {
+      if (range.startsWith('Custom (')) {
+        final regex = RegExp(
+          r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        );
+        final match = regex.firstMatch(range);
+        if (match != null) {
+          try {
+            final s = DateTime.parse(match.group(1)!);
+            final e = DateTime.parse(match.group(2)!);
+            String fmt(DateTime d) =>
+                '${_monthName(d.month)} ${d.day}, ${d.year}';
+            return '${fmt(s)} to ${fmt(e)}';
+          } catch (_) {}
+        }
+        return range.substring(8, range.length - 1);
+      }
+      return range;
+    }
+
     final isEmpty = trend.isEmpty;
     final int numPoints = trend.length;
     final double minX = numPoints == 1 ? -0.5 : 0.0;
@@ -1376,9 +1572,22 @@ class AvgResponseTrendChart extends StatelessWidget {
                   'Avg Expert Response (hrs)',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-                Text(
-                  selectedTimeRange,
-                  style: const TextStyle(color: Colors.grey),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    _displayRangeLabel(selectedTimeRange),
+                    style: TextStyle(
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -1965,6 +2174,45 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   List<Map<String, dynamic>> _liveAggregated = const [];
   // Removed: we aggregate in build() with a safe fallback to pre-fetched data
 
+  String _monthName(int m) {
+    const names = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    if (m < 1 || m > 12) return '';
+    return names[m - 1];
+  }
+
+  String _displayRangeLabel(String range) {
+    if (range.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        try {
+          final s = DateTime.parse(match.group(1)!);
+          final e = DateTime.parse(match.group(2)!);
+          String fmt(DateTime d) =>
+              '${_monthName(d.month)} ${d.day}, ${d.year}';
+          return '${fmt(s)} to ${fmt(e)}';
+        } catch (_) {}
+      }
+      return range.substring(8, range.length - 1);
+    }
+    return range;
+  }
+
   DateTimeRange _resolveDateRange(String range) {
     final now = DateTime.now();
     if (range.startsWith('Custom (')) {
@@ -2200,7 +2448,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    widget.selectedTimeRange,
+                    _displayRangeLabel(widget.selectedTimeRange),
                     style: TextStyle(
                       color: Colors.grey[700],
                       fontWeight: FontWeight.w500,
@@ -3246,6 +3494,48 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
   String _selectedRange = 'Last 7 Days';
   bool _loading = true;
   List<_ExpertResponseStats> _expertStats = [];
+  int _totalCompletedReports = 0;
+  double _weightedAverageHours = 0.0;
+
+  String _monthName(int m) {
+    const names = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    if (m < 1 || m > 12) return '';
+    return names[m - 1];
+  }
+
+  String _displayRangeLabel(String range) {
+    if (range.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        try {
+          final s = DateTime.parse(match.group(1)!);
+          final e = DateTime.parse(match.group(2)!);
+          String fmt(DateTime d) =>
+              '${_monthName(d.month)} ${d.day}, ${d.year}';
+          return '${fmt(s)} to ${fmt(e)}';
+        } catch (_) {}
+      }
+      // Fallback: strip the wrapper if parsing fails
+      return range.substring(8, range.length - 1);
+    }
+    return range;
+  }
 
   @override
   void initState() {
@@ -3259,34 +3549,105 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       _loading = true;
     });
     final scanRequests = widget.scanRequests;
-    final filteredRequests = ScanRequestsService.filterByTimeRange(
-      scanRequests,
-      _selectedRange,
-    );
-    final Map<String, List<Map<String, dynamic>>> expertGroups = {};
-    for (final req in filteredRequests) {
-      if (req['status'] == 'completed') {
-        final expertId =
-            req['expertReview']?['expertId'] ??
-            req['expertUid'] ??
-            req['expertId'];
-        print(
-          '[DEBUG] For request \'${req['id']}\', found expertId: $expertId',
-        );
-        if (expertId != null &&
-            req['createdAt'] != null &&
-            req['reviewedAt'] != null) {
-          expertGroups.putIfAbsent(expertId, () => []).add(req);
-        } else {
-          print(
-            '[DEBUG] Skipped completed request (no expertId): ${req['id']} expertReview=${req['expertReview']} expertUid=${req['expertUid']}',
-          );
-        }
+    // Build reviewedAt-anchored window
+    final DateTime now = DateTime.now();
+    DateTime? startInclusive;
+    DateTime? endExclusive;
+    if (_selectedRange.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(_selectedRange);
+      if (match != null) {
+        final s = DateTime.parse(match.group(1)!);
+        final e = DateTime.parse(match.group(2)!);
+        startInclusive = DateTime(s.year, s.month, s.day);
+        endExclusive = DateTime(
+          e.year,
+          e.month,
+          e.day,
+        ).add(const Duration(days: 1));
       }
+    }
+    if (startInclusive == null || endExclusive == null) {
+      switch (_selectedRange) {
+        case '1 Day':
+          startInclusive = now.subtract(const Duration(days: 1));
+          endExclusive = now;
+          break;
+        case 'Last 7 Days':
+          startInclusive = now.subtract(const Duration(days: 7));
+          endExclusive = now;
+          break;
+        case 'Last 30 Days':
+          startInclusive = now.subtract(const Duration(days: 30));
+          endExclusive = now;
+          break;
+        case 'Last 60 Days':
+          startInclusive = now.subtract(const Duration(days: 60));
+          endExclusive = now;
+          break;
+        case 'Last 90 Days':
+          startInclusive = now.subtract(const Duration(days: 90));
+          endExclusive = now;
+          break;
+        case 'Last Year':
+          startInclusive = DateTime(now.year - 1, now.month, now.day);
+          endExclusive = now;
+          break;
+        default:
+          startInclusive = now.subtract(const Duration(days: 7));
+          endExclusive = now;
+      }
+    }
+    final Map<String, List<Map<String, dynamic>>> expertGroups = {};
+    for (final req in scanRequests) {
+      if ((req['status'] ?? '') != 'completed') continue;
+      final expertId =
+          req['expertReview']?['expertId'] ??
+          req['expertUid'] ??
+          req['expertId'];
+      if (expertId == null) continue;
+      final createdRaw = req['createdAt'];
+      final reviewedRaw = req['reviewedAt'];
+      if (createdRaw == null || reviewedRaw == null) continue;
+      DateTime created;
+      DateTime reviewed;
+      if (createdRaw is Timestamp) {
+        created = createdRaw.toDate();
+      } else if (createdRaw is String) {
+        created = DateTime.tryParse(createdRaw) ?? DateTime.now();
+      } else {
+        continue;
+      }
+      if (reviewedRaw is Timestamp) {
+        reviewed = reviewedRaw.toDate();
+      } else if (reviewedRaw is String) {
+        reviewed = DateTime.tryParse(reviewedRaw) ?? created;
+      } else {
+        continue;
+      }
+      // Filter by reviewedAt window
+      bool inWindow;
+      if (_selectedRange == '1 Day') {
+        inWindow = reviewed.isAfter(startInclusive);
+      } else if (_selectedRange.startsWith('Custom (')) {
+        inWindow =
+            !reviewed.isBefore(startInclusive) &&
+            reviewed.isBefore(endExclusive);
+      } else {
+        inWindow =
+            !reviewed.isBefore(startInclusive) &&
+            !reviewed.isAfter(endExclusive);
+      }
+      if (!inWindow) continue;
+      expertGroups.putIfAbsent(expertId, () => []).add(req);
     }
     print('[DEBUG] expertGroups keys: \'${expertGroups.keys.toList()}\'');
     final Map<String, Map<String, dynamic>> experts = {};
     final List<_ExpertResponseStats> stats = [];
+    int grandTotalSeconds = 0;
+    int grandCompletedCount = 0;
     for (final entry in expertGroups.entries) {
       final expertId = entry.key;
       final requests = entry.value;
@@ -3312,6 +3673,8 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
         times.add(seconds.toDouble());
       }
       final avgSeconds = requests.isEmpty ? 0 : totalSeconds ~/ requests.length;
+      grandTotalSeconds += totalSeconds;
+      grandCompletedCount += requests.length;
       final expert = experts[expertId];
       final firstReq = requests.isNotEmpty ? requests.first : null;
       stats.add(
@@ -3325,6 +3688,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
           avatar: expert?['imageProfile'] ?? '',
           avgSeconds: avgSeconds,
           trend: times,
+          count: requests.length,
         ),
       );
     }
@@ -3338,6 +3702,11 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
     setState(() {
       _expertStats = stats;
       _loading = false;
+      _totalCompletedReports = grandCompletedCount;
+      _weightedAverageHours =
+          grandCompletedCount == 0
+              ? 0.0
+              : (grandTotalSeconds / grandCompletedCount) / 3600.0;
     });
   }
 
@@ -3362,7 +3731,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       child: Container(
-        width: 700,
+        width: 750,
         padding: const EdgeInsets.all(32),
         decoration: BoxDecoration(
           color: Colors.white,
@@ -3375,46 +3744,117 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Average Response Time (per Expert)',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                Expanded(
+                  child: Text(
+                    'Average Response Time (per Expert)',
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
                 Row(
                   children: [
-                    DropdownButton<String>(
-                      value: _selectedRange,
-                      items:
-                          [
-                                '1 Day',
-                                'Last 7 Days',
-                                'Last 30 Days',
-                                'Last 60 Days',
-                                'Last 90 Days',
-                                'Last Year',
-                              ]
-                              .map(
-                                (range) => DropdownMenuItem(
-                                  value: range,
-                                  child: Text(range),
+                    SizedBox(
+                      width: 260,
+                      child: DropdownButton<String>(
+                        value: _selectedRange,
+                        isExpanded: true,
+                        underline: const SizedBox.shrink(),
+                        items: () {
+                          final base = <String>[
+                            '1 Day',
+                            'Last 7 Days',
+                            'Last 30 Days',
+                            'Last 60 Days',
+                            'Last 90 Days',
+                            'Last Year',
+                            'Custom…',
+                          ];
+                          // Ensure the concrete Custom (YYYY-MM-DD to YYYY-MM-DD) is present as an item
+                          if (_selectedRange.startsWith('Custom (') &&
+                              !base.contains(_selectedRange)) {
+                            base.add(_selectedRange);
+                          }
+                          return base.map((range) {
+                            final label = _displayRangeLabel(range);
+                            return DropdownMenuItem(
+                              value: range,
+                              child: Text(
+                                label,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }).toList();
+                        }(),
+                        selectedItemBuilder: (context) {
+                          final base = <String>[
+                            '1 Day',
+                            'Last 7 Days',
+                            'Last 30 Days',
+                            'Last 60 Days',
+                            'Last 90 Days',
+                            'Last Year',
+                            'Custom…',
+                          ];
+                          if (_selectedRange.startsWith('Custom (') &&
+                              !base.contains(_selectedRange)) {
+                            base.add(_selectedRange);
+                          }
+                          return base.map((range) {
+                            final label = _displayRangeLabel(range);
+                            return Align(
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                label,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }).toList();
+                        },
+                        onChanged: (value) async {
+                          print('=== DROPDOWN ONCHANGED CALLED ===');
+                          print('Dropdown onChanged called with value: $value');
+                          if (value == null) return;
+                          if (value == 'Custom…') {
+                            final picked = await showDateRangePicker(
+                              context: context,
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime.now(),
+                              initialDateRange: DateTimeRange(
+                                start: DateTime.now().subtract(
+                                  const Duration(days: 7),
                                 ),
-                              )
-                              .toList(),
-                      onChanged: (value) {
-                        print('=== DROPDOWN ONCHANGED CALLED ===');
-                        print('Dropdown onChanged called with value: $value');
-                        if (value != null) {
-                          print('=== MODAL DROPDOWN DEBUG ===');
-                          print('Modal dropdown changed to: $value');
-                          setState(() {
-                            _selectedRange = value;
-                          });
-                          print('Calling onTimeRangeChanged callback...');
-                          widget.onTimeRangeChanged?.call(value);
-                          print('Callback called, now loading expert stats...');
-                          _loadExpertStats();
-                          print('=== END MODAL DROPDOWN DEBUG ===');
-                        }
-                      },
+                                end: DateTime.now(),
+                              ),
+                            );
+                            if (picked != null) {
+                              final start =
+                                  '${picked.start.year}-${picked.start.month.toString().padLeft(2, '0')}-${picked.start.day.toString().padLeft(2, '0')}';
+                              final end =
+                                  '${picked.end.year}-${picked.end.month.toString().padLeft(2, '0')}-${picked.end.day.toString().padLeft(2, '0')}';
+                              final label = 'Custom ($start to $end)';
+                              setState(() => _selectedRange = label);
+                              widget.onTimeRangeChanged?.call(label);
+                              _loadExpertStats();
+                            }
+                          } else {
+                            print('=== MODAL DROPDOWN DEBUG ===');
+                            print('Modal dropdown changed to: $value');
+                            setState(() {
+                              _selectedRange = value;
+                            });
+                            print('Calling onTimeRangeChanged callback...');
+                            widget.onTimeRangeChanged?.call(value);
+                            print(
+                              'Callback called, now loading expert stats...',
+                            );
+                            _loadExpertStats();
+                            print('=== END MODAL DROPDOWN DEBUG ===');
+                          }
+                        },
+                      ),
                     ),
                     IconButton(
                       icon: const Icon(Icons.close, size: 28),
@@ -3437,6 +3877,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                         columns: const [
                           DataColumn(label: Text('Expert')),
                           DataColumn(label: Text('Avg. Response Time')),
+                          DataColumn(label: Text('Reports')),
                           DataColumn(
                             label: Align(
                               alignment: Alignment.center,
@@ -3470,6 +3911,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                                       DataCell(
                                         Text(_formatDuration(e.avgSeconds)),
                                       ),
+                                      DataCell(Text(e.count.toString())),
                                       DataCell(
                                         Align(
                                           alignment: Alignment.centerRight,
@@ -3496,6 +3938,23 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                     ),
                   ],
                 ),
+            const SizedBox(height: 12),
+            if (_totalCompletedReports > 0)
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  () {
+                    final label = _displayRangeLabel(_selectedRange);
+                    return 'Overall (weighted) for $label: '
+                        '${_weightedAverageHours.toStringAsFixed(2)} hours '
+                        'across $_totalCompletedReports reports';
+                  }(),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                ),
+              ),
             const SizedBox(height: 16),
             Align(
               alignment: Alignment.centerRight,
@@ -3517,12 +3976,14 @@ class _ExpertResponseStats {
   final String avatar;
   final int avgSeconds;
   final List<double> trend;
+  final int count;
   _ExpertResponseStats({
     required this.expertId,
     required this.name,
     required this.avatar,
     required this.avgSeconds,
     required this.trend,
+    required this.count,
   });
 }
 
