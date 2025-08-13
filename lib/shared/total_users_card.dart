@@ -345,16 +345,24 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
           await ScanRequestsService.getCompletedReportsCount();
       final pendingCount = await ScanRequestsService.getPendingReportsCount();
 
+      if (!mounted) return;
       setState(() {
         _completedReports = completedCount;
         _pendingReports = pendingCount;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _isHovered.dispose();
+    super.dispose();
   }
 
   @override

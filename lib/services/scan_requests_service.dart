@@ -528,9 +528,10 @@ class ScanRequestsService {
               !reviewedAt.isBefore(startInclusive) &&
               reviewedAt.isBefore(endExclusive);
         } else {
+          // Use end-exclusive to align with UI logic and avoid boundary double-counting
           inWindow =
               !reviewedAt.isBefore(startInclusive) &&
-              !reviewedAt.isAfter(endExclusive);
+              reviewedAt.isBefore(endExclusive);
         }
         if (!inWindow) continue;
 

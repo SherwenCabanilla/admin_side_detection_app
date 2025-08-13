@@ -167,7 +167,6 @@ class _ReportsState extends State<Reports> {
     }
 
     // Real-time aggregates using reviewedAt window
-    double totalResponseTimeHours = 0;
     int completedInWindow = 0;
     int completed = 0;
     int pending = 0;
@@ -198,7 +197,6 @@ class _ReportsState extends State<Reports> {
                       reviewedAt.isBefore(endExclusive));
           if (inWindow) {
             final hours = reviewedAt.difference(createdAt).inMinutes / 60.0;
-            totalResponseTimeHours += hours;
             completedInWindow++;
             if (hours <= 24.0) within24++;
             if (hours <= 48.0) within48++;
@@ -216,10 +214,7 @@ class _ReportsState extends State<Reports> {
       }
     }
 
-    final averageResponseTime =
-        completedInWindow == 0
-            ? '0 hours'
-            : '${(totalResponseTimeHours / completedInWindow).toStringAsFixed(2)} hours';
+    // Average response time for the card is computed via service; avoid recomputing here
 
     final List<Map<String, dynamic>> series =
         hoursByDay.entries.map((e) {
@@ -248,7 +243,6 @@ class _ReportsState extends State<Reports> {
             : '${((completed / totalForRate) * 100).toStringAsFixed(0)}%';
 
     setState(() {
-      _stats['averageResponseTime'] = averageResponseTime;
       _stats['totalReportsReviewed'] = completed;
       _stats['pendingRequests'] = pending;
       _avgResponseTrend = series;
@@ -671,6 +665,9 @@ class _ReportsState extends State<Reports> {
   }
 
   Future<void> _onTimeRangeChanged(String newTimeRange) async {
+    if (newTimeRange == _selectedTimeRange) {
+      return;
+    }
     setState(() {
       _selectedTimeRange = newTimeRange;
     });
