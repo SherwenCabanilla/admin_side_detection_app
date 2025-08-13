@@ -168,8 +168,8 @@ class _ReportsState extends State<Reports> {
 
     // Real-time aggregates using reviewedAt window
     int completedInWindow = 0;
-    int completed = 0;
-    int pending = 0;
+    double totalHoursInWindow = 0.0;
+    int pendingInWindow = 0;
     int within24 = 0;
     int within48 = 0;
     int overduePending = 0;
@@ -189,14 +189,14 @@ class _ReportsState extends State<Reports> {
         if (reviewedAtRaw is String)
           reviewedAt = DateTime.tryParse(reviewedAtRaw);
         if (createdAt != null && reviewedAt != null) {
-          completed++;
           final inWindow =
               _selectedTimeRange == '1 Day'
                   ? reviewedAt.isAfter(startInclusive)
                   : (!reviewedAt.isBefore(startInclusive) &&
                       reviewedAt.isBefore(endExclusive));
           if (inWindow) {
-            final hours = reviewedAt.difference(createdAt).inMinutes / 60.0;
+            final hours = reviewedAt.difference(createdAt).inSeconds / 3600.0;
+            totalHoursInWindow += hours;
             completedInWindow++;
             if (hours <= 24.0) within24++;
             if (hours <= 48.0) within48++;
@@ -206,9 +206,17 @@ class _ReportsState extends State<Reports> {
           }
         }
       } else if (status == 'pending') {
-        pending++;
+        // Count pending within the selected window using createdAt
         if (createdAt != null) {
-          final ageHrs = DateTime.now().difference(createdAt).inMinutes / 60.0;
+          final inPendingWindow =
+              _selectedTimeRange == '1 Day'
+                  ? createdAt.isAfter(startInclusive)
+                  : (!createdAt.isBefore(startInclusive) &&
+                      createdAt.isBefore(endExclusive));
+          if (inPendingWindow) pendingInWindow++;
+          // Track overall overdue pending (>24h since created)
+          final ageHrs =
+              DateTime.now().difference(createdAt).inSeconds / 3600.0;
           if (ageHrs > 24.0) overduePending++;
         }
       }
@@ -228,27 +236,33 @@ class _ReportsState extends State<Reports> {
             (a, b) => (a['date'] as String).compareTo(b['date'] as String),
           );
 
-    final sla24 =
+    // Realtime KPI calculations
+    final averageResponseTimeStr =
+        completedInWindow == 0
+            ? '0 hours'
+            : '${(totalHoursInWindow / completedInWindow).toStringAsFixed(2)} hours';
+    final String sla24Str =
         completedInWindow == 0
             ? '—'
             : '${((within24 / completedInWindow) * 100).toStringAsFixed(0)}%';
-    final sla48 =
+    final String sla48Str =
         completedInWindow == 0
             ? '—'
             : '${((within48 / completedInWindow) * 100).toStringAsFixed(0)}%';
-    final totalForRate = completed + pending;
-    final completionRate =
-        totalForRate == 0
+    final int totalForCompletion = completedInWindow + pendingInWindow;
+    final String completionRateStr =
+        totalForCompletion == 0
             ? '—'
-            : '${((completed / totalForRate) * 100).toStringAsFixed(0)}%';
+            : '${((completedInWindow / totalForCompletion) * 100).toStringAsFixed(0)}%';
 
     setState(() {
-      _stats['totalReportsReviewed'] = completed;
-      _stats['pendingRequests'] = pending;
+      _stats['totalReportsReviewed'] = completedInWindow;
+      _stats['pendingRequests'] = pendingInWindow;
       _avgResponseTrend = series;
-      _slaWithin24h = sla24;
-      _slaWithin48h = sla48;
-      _completionRate = completionRate;
+      _stats['averageResponseTime'] = averageResponseTimeStr;
+      _slaWithin24h = sla24Str;
+      _slaWithin48h = sla48Str;
+      _completionRate = completionRateStr;
       _overduePendingCount = overduePending;
     });
   }
@@ -617,9 +631,10 @@ class _ReportsState extends State<Reports> {
                 !reviewed.isBefore(startInclusive) &&
                 reviewed.isBefore(endExclusive);
           } else {
+            // Use end-exclusive to align with rest of UI calculations
             inWindow =
                 !reviewed.isBefore(startInclusive) &&
-                !reviewed.isAfter(endExclusive);
+                reviewed.isBefore(endExclusive);
           }
           if (!inWindow) continue;
           completed++;
@@ -671,13 +686,12 @@ class _ReportsState extends State<Reports> {
     setState(() {
       _selectedTimeRange = newTimeRange;
     });
-    // Refresh all dependent data
+    // Refresh all dependent data; snapshot updater will compute realtime KPIs
     await Future.wait([
       _loadStats(),
       _loadReportsTrend(),
       _loadDiseaseStats(),
       _loadAvgResponseTrend(),
-      _loadSla(),
     ]);
     _updateStatsFromSnapshot();
   }

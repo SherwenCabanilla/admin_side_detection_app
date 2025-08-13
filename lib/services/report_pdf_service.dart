@@ -236,7 +236,7 @@ class ReportPdfService {
           endDate.day,
         ).add(const Duration(days: 1));
         if (!reviewed.isBefore(startOfDay) && reviewed.isBefore(endExclusive)) {
-          final hours = reviewed.difference(dt).inMinutes / 60.0;
+          final hours = reviewed.difference(dt).inSeconds / 3600.0;
           final String reviewKey =
               '${reviewed.year}-${reviewed.month.toString().padLeft(2, '0')}-${reviewed.day.toString().padLeft(2, '0')}';
           (responseHoursByDay[reviewKey] ??= <double>[]).add(hours);
@@ -345,7 +345,7 @@ class ReportPdfService {
       } else {
         continue;
       }
-      final hours = reviewed.difference(created).inMinutes / 60.0;
+      final hours = reviewed.difference(created).inSeconds / 3600.0;
       if (hours <= 24.0) within24++;
       if (hours <= 48.0) within48++;
     }
