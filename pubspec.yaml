@@ -21,6 +21,7 @@ dependencies:
   pdf: ^3.11.0
   printing: ^5.13.1
   http: ^1.2.2
+  syncfusion_flutter_datepicker: ^28.1.38
 
 dev_dependencies:
   flutter_test:

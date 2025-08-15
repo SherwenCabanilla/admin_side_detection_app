@@ -86,13 +86,13 @@ class UserStore {
     if (date == null) return '';
     if (date is Timestamp) {
       final dt = date.toDate();
-      return _formatDdMmYyyy(dt);
+      return _formatMonDyyyy(dt);
     }
     if (date is String) {
       // Normalize any ISO-like string to dd/mm/yyyy
       final parsed = DateTime.tryParse(date);
       if (parsed != null) {
-        return _formatDdMmYyyy(parsed);
+        return _formatMonDyyyy(parsed);
       }
       // Unknown string format; return as-is
       return date;
@@ -100,11 +100,26 @@ class UserStore {
     return '';
   }
 
-  static String _formatDdMmYyyy(DateTime dt) {
-    final dd = dt.day.toString().padLeft(2, '0');
-    final mm = dt.month.toString().padLeft(2, '0');
-    final yyyy = dt.year.toString();
-    return '$dd/$mm/$yyyy';
+  static const List<String> _monthShort = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+
+  static String _formatMonDyyyy(DateTime dt) {
+    final month = _monthShort[dt.month - 1];
+    final day = dt.day.toString();
+    final year = dt.year.toString();
+    return '$month $day $year';
   }
 
   static String _titleCase(String input) {

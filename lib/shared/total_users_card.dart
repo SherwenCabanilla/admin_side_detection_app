@@ -1,9 +1,36 @@
+import 'date_range_picker.dart';
 import 'package:flutter/material.dart';
 // import '../models/user_store.dart';
 import '../services/scan_requests_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import '../screens/admin_dashboard.dart';
+
+// Shared disease-to-color mapping used across modals and cards
+Color diseaseColor(String disease) {
+  final normalized =
+      (disease.toString())
+          .replaceAll(RegExp(r'[\-_]+'), ' ')
+          .trim()
+          .toLowerCase();
+  if (normalized.contains('healthy')) return Colors.blue;
+  if (normalized.contains('powdery') || normalized.contains('mildew')) {
+    return Colors.green.shade900;
+  }
+  if (normalized.contains('dieback')) return Colors.redAccent;
+  if (normalized.contains('bacterial') && normalized.contains('spot')) {
+    return Colors.purple;
+  }
+  if (normalized.contains('anthracnose')) return Colors.orange;
+  if (normalized.contains('tip burn') || normalized.contains('tipburn')) {
+    return Colors.brown;
+  }
+  if (normalized == 'unknown') return Colors.blueGrey;
+  if (normalized.contains('rust')) return Colors.orange;
+  if (normalized.contains('blight')) return Colors.deepOrange;
+  if (normalized.contains('spot')) return Colors.teal;
+  return Colors.redAccent;
+}
 
 class TotalUsersCard extends StatefulWidget {
   final VoidCallback? onTap;
@@ -57,6 +84,15 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
     }
 
     return raw;
+  }
+
+  Color _colorForDisease(String disease) {
+    return diseaseColor(_fixDiseaseName(disease));
+  }
+
+  // Reuse existing color mapping to ensure consistency
+  Color _getColorForDisease(String disease) {
+    return diseaseColor(_fixDiseaseName(disease));
   }
 
   List<Widget> _buildRecommendationsList(dynamic recommendations) {
@@ -656,9 +692,48 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
   ) {
     final userName = report['userName'] ?? 'Unknown User';
     final createdAt = report['createdAt'];
+    final reviewedAt = report['reviewedAt'];
     final images = report['images'] ?? [];
     final diseaseSummary = report['diseaseSummary'] ?? [];
     final expertReview = report['expertReview'];
+
+    String _monthShort(int m) =>
+        const [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ][m - 1];
+
+    String _formatMdyWithTime(DateTime dt) {
+      final mm = _monthShort(dt.month);
+      final hh = dt.hour.toString().padLeft(2, '0');
+      final min = dt.minute.toString().padLeft(2, '0');
+      return '$mm ${dt.day} ${dt.year} $hh:$min';
+    }
+
+    String _humanizeDuration(Duration d) {
+      int totalMinutes = d.inMinutes.abs();
+      final days = totalMinutes ~/ (24 * 60);
+      totalMinutes %= (24 * 60);
+      final hours = totalMinutes ~/ 60;
+      final minutes = totalMinutes % 60;
+      final parts = <String>[];
+      if (days > 0) parts.add('$days day${days == 1 ? '' : 's'}');
+      if (hours > 0) parts.add('$hours hour${hours == 1 ? '' : 's'}');
+      if (minutes > 0 || parts.isEmpty) {
+        parts.add('$minutes min${minutes == 1 ? '' : 's'}');
+      }
+      return parts.join(' ');
+    }
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
@@ -683,12 +758,38 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                         ),
                       ),
                       Text(
-                        'Submitted: ${_formatDate(createdAt)}',
+                        () {
+                          final dt = _parseDate(createdAt);
+                          return 'Submitted: ${_formatMdyWithTime(dt)}';
+                        }(),
                         style: const TextStyle(
                           fontSize: 12,
                           color: Colors.grey,
                         ),
                       ),
+                      if (isCompleted && reviewedAt != null) ...[
+                        Text(
+                          () {
+                            final dt = _parseDate(reviewedAt);
+                            return 'Reviewed: ${_formatMdyWithTime(dt)}';
+                          }(),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        Text(
+                          () {
+                            final submitted = _parseDate(createdAt);
+                            final reviewed = _parseDate(reviewedAt);
+                            return 'Turnaround: ${_humanizeDuration(reviewed.difference(submitted))}';
+                          }(),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -1241,8 +1342,11 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                   width: width,
                   height: height,
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.red, width: 4),
-                    color: Colors.red.withOpacity(0.1),
+                    border: Border.all(
+                      color: _colorForDisease(disease),
+                      width: 4,
+                    ),
+                    color: _colorForDisease(disease).withOpacity(0.1),
                   ),
                 ),
               ),
@@ -1256,7 +1360,7 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.9),
+                    color: _colorForDisease(disease).withOpacity(0.9),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: Colors.white, width: 2),
                   ),
@@ -1378,8 +1482,8 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
               width: width,
               height: height,
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.red, width: 3),
-                color: Colors.red.withOpacity(0.1),
+                border: Border.all(color: diseaseColor(disease), width: 3),
+                color: diseaseColor(disease).withOpacity(0.1),
               ),
             ),
           ),
@@ -1390,7 +1494,7 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.9),
+                color: diseaseColor(disease).withOpacity(0.9),
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(color: Colors.white, width: 1),
               ),
@@ -1422,6 +1526,14 @@ class ReportsModalContent extends StatefulWidget {
 
 class _ReportsModalContentState extends State<ReportsModalContent>
     with SingleTickerProviderStateMixin {
+  // Access the shared date range picker from reports
+  Future<DateTimeRange?> _pickRange(
+    BuildContext context,
+    DateTimeRange initial,
+  ) {
+    return pickDateRangeWithSf(context, initial: initial);
+  }
+
   final ValueNotifier<bool> _showBoundingBoxesNotifier = ValueNotifier(false);
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
@@ -1586,18 +1698,21 @@ class _ReportsModalContentState extends State<ReportsModalContent>
   Future<void> _pickFromDate() async {
     final DateTime now = DateTime.now();
     final DateTime initial = _fromDate ?? (_toDate != null ? _toDate! : now);
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(now.year + 2),
+    DateTime? start = initial;
+    DateTime? end = _toDate ?? now;
+    // Reuse the unified Syncfusion range picker dialog from reports
+    final result = await pickDateRangeWithSf(
+      context,
+      initial: DateTimeRange(start: start, end: end),
     );
-    if (picked != null) {
+    if (result != null) {
       setState(() {
-        _fromDate = DateTime(picked.year, picked.month, picked.day);
-        if (_toDate != null && _fromDate!.isAfter(_toDate!)) {
-          _toDate = _fromDate;
-        }
+        _fromDate = DateTime(
+          result.start.year,
+          result.start.month,
+          result.start.day,
+        );
+        _toDate = DateTime(result.end.year, result.end.month, result.end.day);
       });
     }
   }
@@ -1605,18 +1720,20 @@ class _ReportsModalContentState extends State<ReportsModalContent>
   Future<void> _pickToDate() async {
     final DateTime now = DateTime.now();
     final DateTime initial = _toDate ?? (_fromDate != null ? _fromDate! : now);
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(now.year + 2),
+    DateTime? start = _fromDate ?? now;
+    DateTime? end = initial;
+    final result = await pickDateRangeWithSf(
+      context,
+      initial: DateTimeRange(start: start, end: end),
     );
-    if (picked != null) {
+    if (result != null) {
       setState(() {
-        _toDate = DateTime(picked.year, picked.month, picked.day);
-        if (_fromDate != null && _toDate!.isBefore(_fromDate!)) {
-          _fromDate = _toDate;
-        }
+        _fromDate = DateTime(
+          result.start.year,
+          result.start.month,
+          result.start.day,
+        );
+        _toDate = DateTime(result.end.year, result.end.month, result.end.day);
       });
     }
   }
@@ -1939,13 +2056,11 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                 OutlinedButton.icon(
                   onPressed: _pickFromDate,
                   icon: const Icon(Icons.date_range),
-                  label: Text('From: ${_formatDateOnly(_fromDate)}'),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: _pickToDate,
-                  icon: const Icon(Icons.event),
-                  label: Text('To: ${_formatDateOnly(_toDate)}'),
+                  label: Text(
+                    _fromDate != null && _toDate != null
+                        ? '${_formatDateOnly(_fromDate)} to ${_formatDateOnly(_toDate)}'
+                        : 'Pick date range',
+                  ),
                 ),
                 const SizedBox(width: 8),
                 if (_fromDate != null || _toDate != null)
@@ -2049,13 +2164,11 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                 OutlinedButton.icon(
                   onPressed: _pickFromDate,
                   icon: const Icon(Icons.date_range),
-                  label: Text('From: ${_formatDateOnly(_fromDate)}'),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: _pickToDate,
-                  icon: const Icon(Icons.event),
-                  label: Text('To: ${_formatDateOnly(_toDate)}'),
+                  label: Text(
+                    _fromDate != null && _toDate != null
+                        ? '${_formatDateOnly(_fromDate)} to ${_formatDateOnly(_toDate)}'
+                        : 'Pick date range',
+                  ),
                 ),
                 const SizedBox(width: 8),
                 if (_fromDate != null || _toDate != null)
@@ -2145,6 +2258,7 @@ class _ReportsModalContentState extends State<ReportsModalContent>
   ) {
     final userName = report['userName'] ?? 'Unknown User';
     final createdAt = report['createdAt'];
+    final reviewedAt = report['reviewedAt'];
     final images = report['images'] ?? [];
     final diseaseSummary = report['diseaseSummary'] ?? [];
     final expertReview = report['expertReview'];
@@ -2172,12 +2286,87 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                         ),
                       ),
                       Text(
-                        'Submitted: ${_formatDate(createdAt)}',
+                        () {
+                          final dt = _parseDate(createdAt);
+                          String month(int m) =>
+                              const [
+                                'Jan',
+                                'Feb',
+                                'Mar',
+                                'Apr',
+                                'May',
+                                'Jun',
+                                'Jul',
+                                'Aug',
+                                'Sep',
+                                'Oct',
+                                'Nov',
+                                'Dec',
+                              ][m - 1];
+                          final hh = dt.hour.toString().padLeft(2, '0');
+                          final mm = dt.minute.toString().padLeft(2, '0');
+                          return 'Submitted: ${month(dt.month)} ${dt.day} ${dt.year} $hh:$mm';
+                        }(),
                         style: const TextStyle(
                           fontSize: 12,
                           color: Colors.grey,
                         ),
                       ),
+                      if (isCompleted && reviewedAt != null) ...[
+                        Text(
+                          () {
+                            final dt = _parseDate(reviewedAt);
+                            String month(int m) =>
+                                const [
+                                  'Jan',
+                                  'Feb',
+                                  'Mar',
+                                  'Apr',
+                                  'May',
+                                  'Jun',
+                                  'Jul',
+                                  'Aug',
+                                  'Sep',
+                                  'Oct',
+                                  'Nov',
+                                  'Dec',
+                                ][m - 1];
+                            final hh = dt.hour.toString().padLeft(2, '0');
+                            final mm = dt.minute.toString().padLeft(2, '0');
+                            return 'Reviewed: ${month(dt.month)} ${dt.day} ${dt.year} $hh:$mm';
+                          }(),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        Text(
+                          () {
+                            final submitted = _parseDate(createdAt);
+                            final reviewed = _parseDate(reviewedAt);
+                            Duration d = reviewed.difference(submitted);
+                            int totalMinutes = d.inMinutes.abs();
+                            final days = totalMinutes ~/ (24 * 60);
+                            totalMinutes %= (24 * 60);
+                            final hours = totalMinutes ~/ 60;
+                            final minutes = totalMinutes % 60;
+                            final parts = <String>[];
+                            if (days > 0)
+                              parts.add('$days day${days == 1 ? '' : 's'}');
+                            if (hours > 0)
+                              parts.add('$hours hour${hours == 1 ? '' : 's'}');
+                            if (minutes > 0 || parts.isEmpty)
+                              parts.add(
+                                '$minutes min${minutes == 1 ? '' : 's'}',
+                              );
+                            return 'Turnaround: ${parts.join(' ')}';
+                          }(),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -2929,8 +3118,8 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                   width: width,
                   height: height,
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.red, width: 4),
-                    color: Colors.red.withOpacity(0.1),
+                    border: Border.all(color: diseaseColor(disease), width: 4),
+                    color: diseaseColor(disease).withOpacity(0.1),
                   ),
                 ),
               ),
@@ -2944,7 +3133,7 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.9),
+                    color: diseaseColor(disease).withOpacity(0.9),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: Colors.white, width: 2),
                   ),
@@ -3066,8 +3255,8 @@ class _ReportsModalContentState extends State<ReportsModalContent>
               width: width,
               height: height,
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.red, width: 3),
-                color: Colors.red.withOpacity(0.1),
+                border: Border.all(color: diseaseColor(disease), width: 3),
+                color: diseaseColor(disease).withOpacity(0.1),
               ),
             ),
           ),
@@ -3078,7 +3267,7 @@ class _ReportsModalContentState extends State<ReportsModalContent>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.9),
+                color: diseaseColor(disease).withOpacity(0.9),
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(color: Colors.white, width: 1),
               ),

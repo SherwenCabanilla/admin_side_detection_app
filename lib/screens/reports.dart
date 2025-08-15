@@ -11,6 +11,10 @@ import '../services/scan_requests_service.dart';
 import 'admin_dashboard.dart' show ScanRequestsSnapshot;
 import 'package:provider/provider.dart';
 import 'dart:async';
+// syncfusion date picker is imported in shared/date_range_picker.dart
+import '../shared/date_range_picker.dart';
+
+// picker moved to lib/shared/date_range_picker.dart
 
 class Reports extends StatefulWidget {
   final VoidCallback? onGoToUsers;
@@ -393,39 +397,64 @@ class _ReportsState extends State<Reports> {
   Future<void> _loadAvgResponseTrend() async {
     try {
       final all = await ScanRequestsService.getScanRequests();
-      // Determine date window based on selected range
+      // Determine date window based on selected range (end-exclusive)
       final DateTime now = DateTime.now();
-      DateTime start;
-      switch (_selectedTimeRange) {
-        case '1 Day':
-          start = now.subtract(const Duration(days: 1));
-          break;
-        case 'Last 7 Days':
-          start = now.subtract(const Duration(days: 7));
-          break;
-        case 'Last 30 Days':
-          start = now.subtract(const Duration(days: 30));
-          break;
-        case 'Last 60 Days':
-          start = now.subtract(const Duration(days: 60));
-          break;
-        case 'Last 90 Days':
-          start = now.subtract(const Duration(days: 90));
-          break;
-        case 'Last Year':
-          start = now.subtract(const Duration(days: 365));
-          break;
-        default:
-          start = now.subtract(const Duration(days: 7));
+      DateTime? startInclusive;
+      DateTime? endExclusive;
+      if (_selectedTimeRange.startsWith('Custom (')) {
+        final regex = RegExp(
+          r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        );
+        final match = regex.firstMatch(_selectedTimeRange);
+        if (match != null) {
+          final s = DateTime.parse(match.group(1)!);
+          final e = DateTime.parse(match.group(2)!);
+          startInclusive = DateTime(s.year, s.month, s.day);
+          endExclusive = DateTime(
+            e.year,
+            e.month,
+            e.day,
+          ).add(const Duration(days: 1));
+        }
       }
-      final DateTime end = now;
+      if (startInclusive == null || endExclusive == null) {
+        switch (_selectedTimeRange) {
+          case '1 Day':
+            startInclusive = now.subtract(const Duration(days: 1));
+            endExclusive = now;
+            break;
+          case 'Last 7 Days':
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+            break;
+          case 'Last 30 Days':
+            startInclusive = now.subtract(const Duration(days: 30));
+            endExclusive = now;
+            break;
+          case 'Last 60 Days':
+            startInclusive = now.subtract(const Duration(days: 60));
+            endExclusive = now;
+            break;
+          case 'Last 90 Days':
+            startInclusive = now.subtract(const Duration(days: 90));
+            endExclusive = now;
+            break;
+          case 'Last Year':
+            startInclusive = DateTime(now.year - 1, now.month, now.day);
+            endExclusive = now;
+            break;
+          default:
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+        }
+      }
       if (_selectedTimeRange == '1 Day') {
         // Build hourly buckets for the last 24 hours (inclusive of current hour)
         final DateTime endHour = DateTime(
-          end.year,
-          end.month,
-          end.day,
-          end.hour,
+          endExclusive.year,
+          endExclusive.month,
+          endExclusive.day,
+          endExclusive.hour,
         );
         final DateTime startHour = endHour.subtract(const Duration(hours: 23));
 
@@ -449,8 +478,10 @@ class _ReportsState extends State<Reports> {
           if (reviewedAt is String) reviewed = DateTime.tryParse(reviewedAt);
           if (created == null || reviewed == null) continue;
 
-          // Filter by REVIEW time within the window
-          if (reviewed.isBefore(start) || reviewed.isAfter(end)) continue;
+          // Filter by REVIEW time within the window (end-exclusive)
+          if (reviewed.isBefore(startInclusive) ||
+              !reviewed.isBefore(endExclusive))
+            continue;
 
           // Determine the hour bucket of review time
           final DateTime hourKey = DateTime(
@@ -513,8 +544,8 @@ class _ReportsState extends State<Reports> {
           if (reviewedAt is Timestamp) v = reviewedAt.toDate();
           if (reviewedAt is String) v = DateTime.tryParse(reviewedAt);
           if (c == null || v == null) continue;
-          // Filter by REVIEW date within the selected window
-          if (v.isBefore(start) || v.isAfter(end)) continue;
+          // Filter by REVIEW date within the selected window (end-exclusive)
+          if (v.isBefore(startInclusive) || !v.isBefore(endExclusive)) continue;
           final key =
               '${v.year}-${v.month.toString().padLeft(2, '0')}-${v.day.toString().padLeft(2, '0')}';
           final hours = v.difference(c).inMinutes / 60.0;
@@ -692,6 +723,7 @@ class _ReportsState extends State<Reports> {
       _loadReportsTrend(),
       _loadDiseaseStats(),
       _loadAvgResponseTrend(),
+      _loadSla(),
     ]);
     _updateStatsFromSnapshot();
   }
@@ -755,11 +787,9 @@ class _ReportsState extends State<Reports> {
                         onChanged: (value) async {
                           if (value == null) return;
                           if (value == 'Custom…') {
-                            final picked = await showDateRangePicker(
-                              context: context,
-                              firstDate: DateTime(2020),
-                              lastDate: DateTime.now(),
-                              initialDateRange: DateTimeRange(
+                            final picked = await pickDateRangeWithSf(
+                              context,
+                              initial: DateTimeRange(
                                 start: DateTime.now().subtract(
                                   const Duration(days: 7),
                                 ),
@@ -1616,6 +1646,51 @@ class AvgResponseTrendChart extends StatelessWidget {
                     minX: minX,
                     maxX: maxX,
                     gridData: FlGridData(show: true, drawVerticalLine: false),
+                    lineTouchData: LineTouchData(
+                      touchTooltipData: LineTouchTooltipData(
+                        tooltipBgColor: Colors.blueGrey,
+                        getTooltipItems: (touchedSpots) {
+                          return touchedSpots.map((barSpot) {
+                            final index = barSpot.x.toInt();
+                            final raw = (trend[index]['date'] as String);
+                            String dateLabel;
+                            if (selectedTimeRange == '1 Day') {
+                              dateLabel = raw; // HH:00
+                            } else {
+                              final dt = DateTime.tryParse(raw);
+                              if (dt != null) {
+                                const months = [
+                                  'Jan',
+                                  'Feb',
+                                  'Mar',
+                                  'Apr',
+                                  'May',
+                                  'Jun',
+                                  'Jul',
+                                  'Aug',
+                                  'Sep',
+                                  'Oct',
+                                  'Nov',
+                                  'Dec',
+                                ];
+                                dateLabel = '${months[dt.month - 1]} ${dt.day}';
+                              } else {
+                                dateLabel = raw;
+                              }
+                            }
+                            final valueStr =
+                                '${barSpot.y.toStringAsFixed(1)} hrs';
+                            return LineTooltipItem(
+                              '$valueStr\n$dateLabel',
+                              const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            );
+                          }).toList();
+                        },
+                      ),
+                    ),
                     titlesData: FlTitlesData(
                       leftTitles: AxisTitles(
                         sideTitles: SideTitles(
@@ -3829,11 +3904,9 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                           print('Dropdown onChanged called with value: $value');
                           if (value == null) return;
                           if (value == 'Custom…') {
-                            final picked = await showDateRangePicker(
-                              context: context,
-                              firstDate: DateTime(2020),
-                              lastDate: DateTime.now(),
-                              initialDateRange: DateTimeRange(
+                            final picked = await pickDateRangeWithSf(
+                              context,
+                              initial: DateTimeRange(
                                 start: DateTime.now().subtract(
                                   const Duration(days: 7),
                                 ),
@@ -4159,11 +4232,9 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
                       DateTime.now().subtract(const Duration(days: 7)),
                   end: _customEnd ?? DateTime.now(),
                 );
-                final picked = await showDateRangePicker(
-                  context: context,
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime.now(),
-                  initialDateRange: initial,
+                final picked = await pickDateRangeWithSf(
+                  context,
+                  initial: initial,
                 );
                 if (picked != null) {
                   setState(() {
