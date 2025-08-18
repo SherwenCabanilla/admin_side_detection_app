@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../services/report_pdf_service.dart';
-import '../services/settings_service.dart';
+// import '../services/settings_service.dart';
 import '../shared/total_users_card.dart';
 import '../shared/pending_approvals_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -13,6 +13,7 @@ import 'package:provider/provider.dart';
 import 'dart:async';
 // syncfusion date picker is imported in shared/date_range_picker.dart
 import '../shared/date_range_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 // picker moved to lib/shared/date_range_picker.dart
 
@@ -810,25 +811,7 @@ class _ReportsState extends State<Reports> {
                         },
                       ),
                     ),
-                    StreamBuilder<String>(
-                      stream: SettingsService.utilityNameStream(),
-                      builder: (context, snapshot) {
-                        final name = snapshot.data ?? 'Utility';
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 12),
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.settings),
-                            label: Text(name, overflow: TextOverflow.ellipsis),
-                            onPressed: () async {
-                              await showDialog(
-                                context: context,
-                                builder: (context) => const EditUtilityDialog(),
-                              );
-                            },
-                          ),
-                        );
-                      },
-                    ),
+                    // Removed Utility name editor; prepared-by now uses admin profile name
                     ElevatedButton.icon(
                       icon: const Icon(Icons.picture_as_pdf),
                       label: const Text('Export PDF'),
@@ -880,17 +863,35 @@ class _ReportsState extends State<Reports> {
                                     ),
                                   ),
                             );
+                            // Fetch admin profile name for Prepared By
+                            String preparedBy = 'Admin';
+                            try {
+                              final user = FirebaseAuth.instance.currentUser;
+                              if (user != null) {
+                                final snap =
+                                    await FirebaseFirestore.instance
+                                        .collection('admins')
+                                        .doc(user.uid)
+                                        .get();
+                                final data = snap.data();
+                                if (data != null) {
+                                  final dynamic v = data['adminName'];
+                                  final String n =
+                                      (v == null ? '' : v.toString()).trim();
+                                  if (n.isNotEmpty) preparedBy = n;
+                                }
+                              }
+                            } catch (_) {}
                             await ReportPdfService.generateAndShareReport(
                               context: context,
                               timeRange: selectedRange,
                               pageSize: pageSize,
                               backgroundAsset: 'assets/report_template_bg.png',
+                              preparedBy: preparedBy,
                             );
                             Navigator.of(context, rootNavigator: true).pop();
                             // Log activity: PDF generated
                             try {
-                              final preparedBy =
-                                  await SettingsService.getUtilityName();
                               await FirebaseFirestore.instance
                                   .collection('activities')
                                   .add({
@@ -1775,84 +1776,7 @@ class AvgResponseTrendChart extends StatelessWidget {
   }
 }
 
-class EditUtilityDialog extends StatefulWidget {
-  const EditUtilityDialog({Key? key}) : super(key: key);
-
-  @override
-  State<EditUtilityDialog> createState() => _EditUtilityDialogState();
-}
-
-class _EditUtilityDialogState extends State<EditUtilityDialog> {
-  final TextEditingController _controller = TextEditingController();
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    SettingsService.getUtilityName().then((value) {
-      if (mounted) _controller.text = value;
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Edit Utility Name'),
-      content: SizedBox(
-        width: 400,
-        child: TextField(
-          controller: _controller,
-          decoration: const InputDecoration(
-            labelText: 'Utility name',
-            hintText: 'Enter name to show on PDF',
-            border: OutlineInputBorder(),
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed:
-              _saving
-                  ? null
-                  : () async {
-                    setState(() => _saving = true);
-                    try {
-                      await SettingsService.setUtilityName(_controller.text);
-                      if (mounted) Navigator.of(context).pop();
-                    } catch (e) {
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Failed to save: $e')),
-                      );
-                    } finally {
-                      if (mounted) setState(() => _saving = false);
-                    }
-                  },
-          child:
-              _saving
-                  ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                  : const Text('Save'),
-        ),
-      ],
-    );
-  }
-
-  // (No helpers inside dialog state)
-}
+// EditUtilityDialog removed
 
 class TotalReportsCard extends StatelessWidget {
   final int completedCount;

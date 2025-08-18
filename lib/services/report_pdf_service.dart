@@ -4,7 +4,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart' as pdf;
 import 'package:printing/printing.dart';
 import 'scan_requests_service.dart';
-import 'settings_service.dart';
+// import 'settings_service.dart';
 import 'weather_service.dart';
 
 class ReportPdfService {
@@ -13,6 +13,7 @@ class ReportPdfService {
     required String timeRange,
     String pageSize = 'A4',
     String? backgroundAsset,
+    required String preparedBy,
   }) async {
     // Fetch data needed for the report
     // Get all requests
@@ -361,13 +362,13 @@ class ReportPdfService {
       timeRange: timeRange,
     );
 
-    // Use built-in font with Unicode fallback to avoid missing glyph issues
-    final baseFont = await PdfGoogleFonts.nunitoRegular();
-    final boldFont = await PdfGoogleFonts.nunitoBold();
+    // Fonts: Noto Sans (print-friendly, wide coverage)
+    final baseFont = await PdfGoogleFonts.notoSansRegular();
+    final boldFont = await PdfGoogleFonts.notoSansBold();
     final doc = pw.Document();
 
-    // Load utility name
-    final String utilityName = await SettingsService.getUtilityName();
+    // Prepared by comes from caller (admin profile name)
+    final String utilityName = preparedBy.trim();
 
     final now = DateTime.now();
     // Human-readable title: if Custom (YYYY-MM-DD to YYYY-MM-DD), format nicely
@@ -389,16 +390,36 @@ class ReportPdfService {
     }
     final String title = 'Mango Disease Summary ($titleRangeLabel)';
 
-    // Adaptive sizing for compact single-page layout
-    final isSmall = pageSize.toLowerCase() == 'a5';
+    // Layout + unified typography
+    final bool isSmall = pageSize.toLowerCase() == 'a5';
     final double margin = isSmall ? 10 : 16;
-    final double headerFont = isSmall ? 12 : 16;
-    final double chipLabelFont = isSmall ? 7.5 : 9;
-    final double chipValueFont = isSmall ? 10 : 12;
+    final double scale = isSmall ? 0.9 : 1.0; // compact on smaller pages
+    // Type scale (consistent across the document)
+    const double baseH1 = 16.0;
+    const double baseH2 = 13.0;
+    const double baseBody = 10.5;
+    const double baseCaption = 9.5;
+    const double baseTable = 10.0;
+    final pw.TextStyle tsH1 = pw.TextStyle(
+      font: boldFont,
+      fontSize: baseH1 * scale,
+    );
+    final pw.TextStyle tsH2 = pw.TextStyle(
+      font: boldFont,
+      fontSize: baseH2 * scale,
+    );
+    final pw.TextStyle tsBody = pw.TextStyle(
+      font: baseFont,
+      fontSize: baseBody * scale,
+    );
+    final pw.TextStyle tsCaption = pw.TextStyle(
+      font: baseFont,
+      fontSize: baseCaption * scale,
+    );
+    // Table styles are applied via _buildDiseaseTable parameters
     // Make charts more compact to ensure the disease table fits on the page
     final double chartHeight = isSmall ? 70 : 90;
     final int tableRows = isSmall ? 4 : 6;
-    final double tableFont = isSmall ? 8 : 9.5;
 
     // If using a background template with embedded logos, we won't draw logos here
     final bool useBackground = backgroundAsset != null;
@@ -417,7 +438,7 @@ class ReportPdfService {
                     ? pw.EdgeInsets.zero
                     : pw.EdgeInsets.fromLTRB(
                       isSmall ? 14 : 28, // left
-                      isSmall ? 80 : 120, // top to clear header graphics
+                      isSmall ? 80 : 110, // top to clear header graphics
                       isSmall ? 14 : 28, // right
                       isSmall ? 18 : 28, // bottom
                     ),
@@ -429,21 +450,8 @@ class ReportPdfService {
                 pw.Row(
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
-                    pw.Text(
-                      title,
-                      style: pw.TextStyle(
-                        fontSize: headerFont,
-                        fontWeight: pw.FontWeight.bold,
-                        font: boldFont,
-                      ),
-                    ),
-                    pw.Text(
-                      _fmtHumanDate(now),
-                      style: pw.TextStyle(
-                        fontSize: chipLabelFont + 1,
-                        font: baseFont,
-                      ),
-                    ),
+                    pw.Text(title, style: tsH1),
+                    pw.Text(_fmtHumanDate(now), style: tsCaption),
                   ],
                 ),
                 pw.SizedBox(height: 2),
@@ -453,7 +461,7 @@ class ReportPdfService {
                   children: [
                     pw.Text(
                       'Reporting Period: ' + _fmtHumanRange(startDate, endDate),
-                      style: pw.TextStyle(fontSize: chipLabelFont + 1),
+                      style: tsCaption,
                     ),
                     pw.SizedBox(),
                   ],
@@ -463,66 +471,50 @@ class ReportPdfService {
                 _labeledRow(
                   'Location:',
                   'Carmen, Davao del Norte',
-                  chipLabelFont,
+                  baseBody * scale,
                   font: baseFont,
                   boldFont: boldFont,
                 ),
                 _labeledRow(
                   'Weather Summary:',
                   weatherLabel,
-                  chipLabelFont,
+                  baseBody * scale,
                   font: baseFont,
                   boldFont: boldFont,
                 ),
                 _labeledRow(
                   'Prepared By:',
-                  utilityName.isEmpty
-                      ? 'AgriScan Monitoring System'
-                      : utilityName,
-                  chipLabelFont,
+                  utilityName.isEmpty ? 'Admin' : utilityName,
+                  baseBody * scale,
                   font: baseFont,
                   boldFont: boldFont,
                 ),
                 pw.Divider(thickness: 0.7),
                 pw.SizedBox(height: isSmall ? 4 : 6),
                 // Overview bullets (more readable)
-                pw.Text(
-                  'Overview',
-                  style: pw.TextStyle(
-                    fontSize: chipValueFont,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
-                ),
+                pw.Text('Overview', style: tsH2),
                 pw.SizedBox(height: 2),
                 pw.Bullet(
                   text: 'Total Reports Reviewed: ' + completed.toString(),
+                  style: tsBody,
                 ),
                 // Pending is not shown in PDF per requirement
-                pw.Bullet(text: 'Average Response Time: ' + avgResponse),
-                pw.Bullet(text: 'SLA < 24h: ' + sla24Label),
-                pw.Bullet(text: 'SLA < 48h: ' + sla48Label),
+                pw.Bullet(
+                  text: 'Average Response Time: ' + avgResponse,
+                  style: tsBody,
+                ),
+                pw.Bullet(text: 'SLA < 24h: ' + sla24Label, style: tsBody),
+                pw.Bullet(text: 'SLA < 48h: ' + sla48Label, style: tsBody),
                 pw.SizedBox(height: isSmall ? 6 : 8),
                 // Stacked large charts
-                pw.Text(
-                  'Avg Expert Response (hrs)',
-                  style: pw.TextStyle(
-                    fontSize: chipValueFont,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
-                ),
+                pw.Text('Avg Expert Response (hrs)', style: tsH2),
                 pw.SizedBox(height: 3),
                 _buildResponseTrendChart(
                   _buildResponseTrend(responseHoursByDay),
                   height: chartHeight + 10,
                 ),
                 pw.SizedBox(height: isSmall ? 4 : 8),
-                pw.Text(
-                  'Disease Distribution',
-                  style: pw.TextStyle(
-                    fontSize: chipValueFont,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
-                ),
+                pw.Text('Disease Distribution', style: tsH2),
                 pw.SizedBox(height: 3),
                 _buildTrendChart(
                   displayLabels,
@@ -541,19 +533,15 @@ class ReportPdfService {
                 ),
                 pw.SizedBox(height: isSmall ? 6 : 8),
                 // Disease Distribution table - ensure it fits by allowing page break
-                pw.Text(
-                  'Disease Distribution',
-                  style: pw.TextStyle(
-                    fontSize: chipValueFont,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
-                ),
+                pw.Text('Disease Distribution', style: tsH2),
                 pw.SizedBox(height: 3),
                 pw.Flexible(
                   child: _buildDiseaseTable(
                     diseaseStats,
                     maxRows: tableRows,
-                    fontSize: tableFont,
+                    fontSize: baseTable * scale,
+                    font: baseFont,
+                    boldFont: boldFont,
                   ),
                 ),
                 pw.SizedBox(height: isSmall ? 4 : 6),
@@ -561,7 +549,7 @@ class ReportPdfService {
                 pw.SizedBox(height: isSmall ? 4 : 6),
                 pw.Text(
                   'This report summarizes detections within the selected time range. Tip burn/Unknown are excluded from disease counts.',
-                  style: pw.TextStyle(fontSize: chipLabelFont),
+                  style: tsCaption,
                 ),
               ],
             ),
@@ -607,6 +595,8 @@ class ReportPdfService {
     List<Map<String, dynamic>> stats, {
     int maxRows = 6,
     double fontSize = 10,
+    pw.Font? font,
+    pw.Font? boldFont,
   }) {
     final sorted = [...stats]
       ..sort((a, b) => (b['count'] ?? 0).compareTo(a['count'] ?? 0));
@@ -631,8 +621,9 @@ class ReportPdfService {
     final headerStyle = pw.TextStyle(
       fontWeight: pw.FontWeight.bold,
       fontSize: fontSize,
+      font: boldFont,
     );
-    final cellStyle = pw.TextStyle(fontSize: fontSize);
+    final cellStyle = pw.TextStyle(fontSize: fontSize, font: font);
 
     final rows = <pw.TableRow>[
       pw.TableRow(
