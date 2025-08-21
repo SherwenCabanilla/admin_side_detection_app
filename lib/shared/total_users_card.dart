@@ -866,10 +866,10 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
 
                     return GestureDetector(
                       onTap:
-                          () => _showImageModal(
+                          () => showImageCarouselModal(
                             context,
-                            imageUrl,
-                            imageData,
+                            images,
+                            imageIndex,
                             showBoundingBoxes,
                           ),
                       child: Container(
@@ -1243,6 +1243,377 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                               if (imageModalShowBoundingBoxes &&
                                   imageData is Map<String, dynamic>)
                                 ..._buildLargeBoundingBoxes(imageData),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void showImageCarouselModal(
+    BuildContext context,
+    List<dynamic> images,
+    int initialIndex,
+    bool showBoundingBoxes,
+  ) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        int currentIndex = initialIndex;
+        bool showBoxes = showBoundingBoxes;
+        final PageController pageController = PageController(
+          initialPage: initialIndex,
+        );
+        print(
+          '[Carousel] open: initialIndex=' +
+              initialIndex.toString() +
+              ', total=' +
+              images.length.toString() +
+              ', showBoxes=' +
+              showBoundingBoxes.toString(),
+        );
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            String _extractImageUrl(dynamic imageData) {
+              if (imageData is String) {
+                return imageData.trim();
+              }
+              if (imageData is Map<String, dynamic>) {
+                final url =
+                    imageData['url'] ??
+                    imageData['imageUrl'] ??
+                    imageData['image'] ??
+                    imageData['src'] ??
+                    imageData['link'] ??
+                    imageData['downloadURL'] ??
+                    imageData['storageURL'] ??
+                    '';
+                final cleaned =
+                    url
+                        .toString()
+                        .replaceAll('\n', '')
+                        .replaceAll('\r', '')
+                        .trim();
+                print('[Carousel] resolved URL from map: ' + cleaned);
+                return cleaned;
+              }
+              final other = imageData.toString().trim();
+              print('[Carousel] resolved URL from other: ' + other);
+              return other;
+            }
+
+            void goPrev() {
+              if (currentIndex > 0) {
+                print('[Carousel] goPrev from ' + currentIndex.toString());
+                pageController.previousPage(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeInOut,
+                );
+              }
+            }
+
+            void goNext() {
+              if (currentIndex < images.length - 1) {
+                print('[Carousel] goNext from ' + currentIndex.toString());
+                pageController.nextPage(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeInOut,
+                );
+              }
+            }
+
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.95,
+                height: MediaQuery.of(context).size.height * 0.9,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              IconButton(
+                                tooltip: 'Previous',
+                                onPressed: currentIndex > 0 ? goPrev : null,
+                                icon: const Icon(Icons.chevron_left),
+                              ),
+                              Text(
+                                'Image ${currentIndex + 1} of ${images.length}',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Next',
+                                onPressed:
+                                    currentIndex < images.length - 1
+                                        ? goNext
+                                        : null,
+                                icon: const Icon(Icons.chevron_right),
+                              ),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              // Bounding Box Toggle for large image (modal state)
+                              Row(
+                                children: [
+                                  const Text(
+                                    'Bounding Boxes',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Switch(
+                                    value: showBoxes,
+                                    onChanged: (v) {
+                                      print(
+                                        '[Carousel] toggle boxes -> ' +
+                                            v.toString(),
+                                      );
+                                      setModalState(() {
+                                        showBoxes = v;
+                                      });
+                                    },
+                                    activeColor: Colors.blue,
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(width: 16),
+                              IconButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                icon: const Icon(Icons.close),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Image content
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey[300]!),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Stack(
+                            children: [
+                              PageView.builder(
+                                controller: pageController,
+                                itemCount: images.length,
+                                onPageChanged: (idx) {
+                                  setModalState(() {
+                                    currentIndex = idx;
+                                  });
+                                  print(
+                                    '[Carousel] onPageChanged -> ' +
+                                        idx.toString(),
+                                  );
+                                },
+                                itemBuilder: (context, idx) {
+                                  final dynamic pageImageData = images[idx];
+                                  final String pageUrl = _extractImageUrl(
+                                    pageImageData,
+                                  );
+                                  print(
+                                    '[Carousel] build page idx=' +
+                                        idx.toString(),
+                                  );
+                                  return Stack(
+                                    children: [
+                                      Builder(
+                                        builder: (context) {
+                                          try {
+                                            return Image.network(
+                                              pageUrl,
+                                              width: double.infinity,
+                                              height: double.infinity,
+                                              fit: BoxFit.contain,
+                                              errorBuilder: (
+                                                context,
+                                                error,
+                                                stackTrace,
+                                              ) {
+                                                return Container(
+                                                  width: double.infinity,
+                                                  height: double.infinity,
+                                                  color: Colors.grey[300],
+                                                  child: Column(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .center,
+                                                    children: [
+                                                      const Icon(
+                                                        Icons
+                                                            .image_not_supported,
+                                                        size: 100,
+                                                        color: Colors.grey,
+                                                      ),
+                                                      const SizedBox(
+                                                        height: 16,
+                                                      ),
+                                                      Text(
+                                                        'Image Error',
+                                                        style: TextStyle(
+                                                          fontSize: 18,
+                                                          color:
+                                                              Colors.grey[600],
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                );
+                                              },
+                                            );
+                                          } catch (e) {
+                                            return Container(
+                                              width: double.infinity,
+                                              height: double.infinity,
+                                              color: Colors.red[100],
+                                              child: Column(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  const Icon(
+                                                    Icons.error,
+                                                    size: 100,
+                                                    color: Colors.red,
+                                                  ),
+                                                  const SizedBox(height: 16),
+                                                  Text(
+                                                    'Image Error',
+                                                    style: TextStyle(
+                                                      fontSize: 18,
+                                                      color: Colors.red[600],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          }
+                                        },
+                                      ),
+                                      if (showBoxes &&
+                                          pageImageData is Map<String, dynamic>)
+                                        ..._buildLargeBoundingBoxes(
+                                          pageImageData,
+                                        ),
+                                      // Left/right overlay tap zones
+                                      Positioned.fill(
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Expanded(
+                                              child: GestureDetector(
+                                                behavior:
+                                                    HitTestBehavior.opaque,
+                                                onTap:
+                                                    currentIndex > 0
+                                                        ? () {
+                                                          print(
+                                                            '[Carousel] left overlay tap',
+                                                          );
+                                                          goPrev();
+                                                        }
+                                                        : null,
+                                                child: Align(
+                                                  alignment:
+                                                      Alignment.centerLeft,
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.all(
+                                                          8.0,
+                                                        ),
+                                                    child: Icon(
+                                                      Icons.chevron_left,
+                                                      size: 36,
+                                                      color:
+                                                          currentIndex > 0
+                                                              ? Colors.black54
+                                                              : Colors
+                                                                  .transparent,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            Expanded(
+                                              child: GestureDetector(
+                                                behavior:
+                                                    HitTestBehavior.opaque,
+                                                onTap:
+                                                    currentIndex <
+                                                            images.length - 1
+                                                        ? () {
+                                                          print(
+                                                            '[Carousel] right overlay tap',
+                                                          );
+                                                          goNext();
+                                                        }
+                                                        : null,
+                                                child: Align(
+                                                  alignment:
+                                                      Alignment.centerRight,
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.all(
+                                                          8.0,
+                                                        ),
+                                                    child: Icon(
+                                                      Icons.chevron_right,
+                                                      size: 36,
+                                                      color:
+                                                          currentIndex <
+                                                                  images.length -
+                                                                      1
+                                                              ? Colors.black54
+                                                              : Colors
+                                                                  .transparent,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
                             ],
                           ),
                         ),
@@ -1995,7 +2366,7 @@ class _ReportsModalContentState extends State<ReportsModalContent>
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
-        final List<Map<String, dynamic>> reports = snapshot.data ?? [];
+        final reports = snapshot.data ?? [];
 
         if (reports.isEmpty) {
           return const Center(
@@ -2103,7 +2474,7 @@ class _ReportsModalContentState extends State<ReportsModalContent>
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
-        final List<Map<String, dynamic>> reports = snapshot.data ?? [];
+        final reports = snapshot.data ?? [];
 
         if (reports.isEmpty) {
           return const Center(
@@ -2443,10 +2814,11 @@ class _ReportsModalContentState extends State<ReportsModalContent>
 
                     return GestureDetector(
                       onTap:
-                          () => _showEnlargedImageModal(
+                          () => showImageCarouselModal(
                             context,
-                            imageUrl,
-                            imageData,
+                            images,
+                            imageIndex,
+                            showBoundingBoxes,
                           ),
                       child: Container(
                         width: 200,
@@ -3029,6 +3401,327 @@ class _ReportsModalContentState extends State<ReportsModalContent>
               ),
             );
           },
+        );
+      },
+    );
+  }
+
+  void showImageCarouselModal(
+    BuildContext context,
+    List<dynamic> images,
+    int initialIndex,
+    bool showBoundingBoxes,
+  ) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        int currentIndex = initialIndex;
+
+        String _extractImageUrl(dynamic imageData) {
+          if (imageData is String) {
+            return imageData.trim();
+          }
+          if (imageData is Map<String, dynamic>) {
+            final url =
+                imageData['url'] ??
+                imageData['imageUrl'] ??
+                imageData['image'] ??
+                imageData['src'] ??
+                imageData['link'] ??
+                imageData['downloadURL'] ??
+                imageData['storageURL'] ??
+                '';
+            return url
+                .toString()
+                .replaceAll('\n', '')
+                .replaceAll('\r', '')
+                .trim();
+          }
+          return imageData.toString().trim();
+        }
+
+        void goPrev() {
+          if (currentIndex > 0) {
+            final int target = currentIndex - 1;
+            setState(() {
+              currentIndex = target;
+            });
+          }
+        }
+
+        void goNext() {
+          if (currentIndex < images.length - 1) {
+            final int target = currentIndex + 1;
+            setState(() {
+              currentIndex = target;
+            });
+          }
+        }
+
+        final dynamic currentImageData = images[currentIndex];
+        final String imageUrl = _extractImageUrl(currentImageData);
+
+        bool imageModalShowBoundingBoxes = showBoundingBoxes;
+
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.95,
+            height: MediaQuery.of(context).size.height * 0.9,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: StatefulBuilder(
+              builder: (BuildContext context, StateSetter setModalState) {
+                final dynamic currentImageData = images[currentIndex];
+                final String imageUrl = _extractImageUrl(currentImageData);
+                return Column(
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              IconButton(
+                                tooltip: 'Previous',
+                                onPressed:
+                                    currentIndex > 0
+                                        ? () => setModalState(() {
+                                          goPrev();
+                                        })
+                                        : null,
+                                icon: const Icon(Icons.chevron_left),
+                              ),
+                              Text(
+                                'Image ${currentIndex + 1} of ${images.length}',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Next',
+                                onPressed:
+                                    currentIndex < images.length - 1
+                                        ? () => setModalState(() {
+                                          goNext();
+                                        })
+                                        : null,
+                                icon: const Icon(Icons.chevron_right),
+                              ),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              // Bounding Box Toggle for large image
+                              Row(
+                                children: [
+                                  const Text(
+                                    'Bounding Boxes',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Switch(
+                                    value: imageModalShowBoundingBoxes,
+                                    onChanged: (value) {
+                                      setModalState(() {
+                                        imageModalShowBoundingBoxes = value;
+                                      });
+                                    },
+                                    activeColor: Colors.blue,
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(width: 16),
+                              IconButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                icon: const Icon(Icons.close),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Image content
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey[300]!),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Stack(
+                            children: [
+                              // Large image
+                              Builder(
+                                builder: (context) {
+                                  try {
+                                    return Image.network(
+                                      imageUrl,
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (
+                                        context,
+                                        error,
+                                        stackTrace,
+                                      ) {
+                                        return Container(
+                                          width: double.infinity,
+                                          height: double.infinity,
+                                          color: Colors.grey[300],
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              const Icon(
+                                                Icons.image_not_supported,
+                                                size: 100,
+                                                color: Colors.grey,
+                                              ),
+                                              const SizedBox(height: 16),
+                                              Text(
+                                                'Image Error',
+                                                style: TextStyle(
+                                                  fontSize: 18,
+                                                  color: Colors.grey[600],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  } catch (e) {
+                                    return Container(
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      color: Colors.red[100],
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          const Icon(
+                                            Icons.error,
+                                            size: 100,
+                                            color: Colors.red,
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Text(
+                                            'Image Error',
+                                            style: TextStyle(
+                                              fontSize: 18,
+                                              color: Colors.red[600],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
+                              // Bounding boxes overlay for large image
+                              if (imageModalShowBoundingBoxes &&
+                                  currentImageData is Map<String, dynamic>)
+                                ..._buildLargeBoundingBoxes(currentImageData),
+                              // Left/right overlay tap zones
+                              Positioned.fill(
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap:
+                                            currentIndex > 0
+                                                ? () {
+                                                  print(
+                                                    '[Carousel] left overlay tap',
+                                                  );
+                                                  setModalState(() {
+                                                    goPrev();
+                                                  });
+                                                }
+                                                : null,
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(8.0),
+                                            child: Icon(
+                                              Icons.chevron_left,
+                                              size: 36,
+                                              color:
+                                                  currentIndex > 0
+                                                      ? Colors.black54
+                                                      : Colors.transparent,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap:
+                                            currentIndex < images.length - 1
+                                                ? () {
+                                                  print(
+                                                    '[Carousel] right overlay tap',
+                                                  );
+                                                  setModalState(() {
+                                                    goNext();
+                                                  });
+                                                }
+                                                : null,
+                                        child: Align(
+                                          alignment: Alignment.centerRight,
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(8.0),
+                                            child: Icon(
+                                              Icons.chevron_right,
+                                              size: 36,
+                                              color:
+                                                  currentIndex <
+                                                          images.length - 1
+                                                      ? Colors.black54
+                                                      : Colors.transparent,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
         );
       },
     );
