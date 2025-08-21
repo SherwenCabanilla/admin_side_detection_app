@@ -2304,10 +2304,11 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                   labelColor: Colors.white,
                   unselectedLabelColor: Colors.black87,
                   labelPadding: EdgeInsets.zero,
-                  indicatorSize: TabBarIndicatorSize.label,
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  indicatorPadding: EdgeInsets.zero,
                   indicator: const BoxDecoration(
                     color: Colors.blue,
-                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                    borderRadius: BorderRadius.all(Radius.circular(12)),
                   ),
                   tabs: const [
                     Tab(
