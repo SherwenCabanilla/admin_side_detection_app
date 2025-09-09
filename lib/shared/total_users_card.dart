@@ -5,6 +5,60 @@ import '../services/scan_requests_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import '../screens/admin_dashboard.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+
+// Resolve a possibly non-HTTP image reference (e.g., Firebase Storage path)
+// to a downloadable URL. Accepts strings, maps with common url keys, or other.
+Future<String> resolveStorageImageUrl(dynamic imageData) async {
+  String candidate = '';
+  String storagePath = '';
+  if (imageData is String) {
+    candidate = imageData.trim();
+  } else if (imageData is Map<String, dynamic>) {
+    // Prefer a direct Firebase Storage path when available
+    final dynamic sp = imageData['storagePath'] ?? imageData['path'];
+    if (sp is String && sp.trim().isNotEmpty) {
+      storagePath = sp.trim();
+    }
+    final dynamic url =
+        imageData['url'] ??
+        imageData['imageUrl'] ??
+        imageData['image'] ??
+        imageData['src'] ??
+        imageData['link'] ??
+        imageData['downloadURL'] ??
+        imageData['storageURL'] ??
+        '';
+    candidate = url.toString().trim();
+  } else if (imageData != null) {
+    candidate = imageData.toString().trim();
+  }
+
+  // Remove accidental line breaks/spaces that corrupt URLs
+  candidate = candidate.replaceAll('\n', '').replaceAll('\r', '').trim();
+  if (candidate.isEmpty && storagePath.isEmpty) return '';
+  final bool isHttp =
+      candidate.startsWith('http://') || candidate.startsWith('https://');
+  if (isHttp) {
+    // Use the URL as-is. Both .appspot.com and .firebasestorage.app are valid
+    // bucket domains depending on when the project was created.
+    return candidate;
+  }
+
+  try {
+    if (candidate.startsWith('gs://')) {
+      final ref = FirebaseStorage.instance.refFromURL(candidate);
+      return await ref.getDownloadURL();
+    }
+    // Treat as relative path inside default bucket (prefer storagePath if present)
+    final String pathToUse = storagePath.isNotEmpty ? storagePath : candidate;
+    final ref = FirebaseStorage.instance.ref(pathToUse);
+    return await ref.getDownloadURL();
+  } catch (_) {
+    // Fallback to original; Image.network will likely fail but UI handles errorBuilder
+    return candidate.isNotEmpty ? candidate : storagePath;
+  }
+}
 
 // Shared disease-to-color mapping used across modals and cards
 Color diseaseColor(String disease) {
@@ -884,11 +938,31 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                           child: Stack(
                             children: [
                               // Image
-                              Builder(
-                                builder: (context) {
+                              FutureBuilder<String>(
+                                future: resolveStorageImageUrl(imageData),
+                                builder: (context, snapshot) {
+                                  final resolvedUrl = snapshot.data ?? imageUrl;
+                                  if (!snapshot.hasData &&
+                                      !(resolvedUrl.startsWith('http://') ||
+                                          resolvedUrl.startsWith('https://'))) {
+                                    return Container(
+                                      width: 200,
+                                      height: 200,
+                                      color: Colors.grey[200],
+                                      child: const Center(
+                                        child: SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }
                                   try {
                                     return Image.network(
-                                      imageUrl,
+                                      resolvedUrl,
                                       width: 200,
                                       height: 200,
                                       fit: BoxFit.contain,
@@ -897,7 +971,9 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                                         error,
                                         stackTrace,
                                       ) {
-                                        print('Image error for URL: $imageUrl');
+                                        print(
+                                          'Image error for URL: $resolvedUrl',
+                                        );
                                         print('Error: $error');
                                         return Container(
                                           width: 200,
@@ -1453,11 +1529,29 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                                   );
                                   return Stack(
                                     children: [
-                                      Builder(
-                                        builder: (context) {
+                                      FutureBuilder<String>(
+                                        future: resolveStorageImageUrl(
+                                          pageImageData,
+                                        ),
+                                        builder: (context, snapshot) {
+                                          final url = snapshot.data ?? pageUrl;
+                                          if (!snapshot.hasData &&
+                                              !(url.startsWith('http://') ||
+                                                  url.startsWith('https://'))) {
+                                            return Center(
+                                              child: SizedBox(
+                                                width: 28,
+                                                height: 28,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                    ),
+                                              ),
+                                            );
+                                          }
                                           try {
                                             return Image.network(
-                                              pageUrl,
+                                              url,
                                               width: double.infinity,
                                               height: double.infinity,
                                               fit: BoxFit.contain,
