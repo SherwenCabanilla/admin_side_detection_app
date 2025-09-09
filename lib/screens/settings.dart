@@ -18,6 +18,84 @@ class _SettingsState extends State<Settings> {
   String? _email =
       FirebaseAuth.instance.currentUser?.email ?? 'admin@example.com';
 
+  Future<void> _updateEmailNotificationPref(bool enabled) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+      await FirebaseFirestore.instance.collection('admins').doc(user.uid).set({
+        'notificationPrefs': {'email': enabled},
+      }, SetOptions(merge: true));
+      setState(() => _emailNotifications = enabled);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            enabled
+                ? 'Email notifications enabled'
+                : 'Email notifications disabled',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to update notifications: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _sendTestEmail() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+      final adminDoc =
+          await FirebaseFirestore.instance
+              .collection('admins')
+              .doc(user.uid)
+              .get();
+      final dynamic adminRaw = adminDoc.data();
+      final Map<String, dynamic> adminData =
+          adminRaw is Map
+              ? Map<String, dynamic>.from(adminRaw)
+              : <String, dynamic>{};
+      final String adminEmail = (adminData['email'] as String?) ?? _email ?? '';
+      if (adminEmail.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No admin email found to send test message.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      // Create a document compatible with Firebase Trigger Email extension
+      await FirebaseFirestore.instance.collection('mail').add({
+        'to': [adminEmail],
+        'message': {
+          'subject': 'Test notification from Admin Web',
+          'text': 'This is a test email to confirm notifications are working.',
+          'html':
+              '<p>This is a test email to confirm notifications are working.</p><p>You can disable these in Settings → Notification Settings.</p>',
+        },
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Test email queued. Check your inbox.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to send test email: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Future<void> _editAdminName() async {
     final controller = TextEditingController(text: _adminName ?? 'Admin');
     final newName = await showDialog<String>(
@@ -390,16 +468,48 @@ class _SettingsState extends State<Settings> {
                     ),
                   ),
                 ),
-                SwitchListTile(
-                  secondary: const Icon(Icons.email),
-                  title: const Text('Email Notifications'),
-                  subtitle: const Text('Receive notifications via email'),
-                  value: _emailNotifications,
-                  onChanged: (bool value) {
-                    setState(() {
-                      _emailNotifications = value;
-                    });
+                StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                  stream: () {
+                    final user = FirebaseAuth.instance.currentUser;
+                    if (user == null) {
+                      return const Stream<
+                        DocumentSnapshot<Map<String, dynamic>>
+                      >.empty();
+                    }
+                    return FirebaseFirestore.instance
+                        .collection('admins')
+                        .doc(user.uid)
+                        .snapshots();
+                  }(),
+                  builder: (context, snapshot) {
+                    final dynamic raw = snapshot.data?.data();
+                    final Map<String, dynamic> data =
+                        raw is Map
+                            ? Map<String, dynamic>.from(raw)
+                            : <String, dynamic>{};
+                    final Map<String, dynamic> prefs =
+                        data['notificationPrefs'] is Map
+                            ? Map<String, dynamic>.from(
+                              data['notificationPrefs'] as Map,
+                            )
+                            : <String, dynamic>{};
+                    final bool currentPref =
+                        (prefs['email'] as bool?) ?? _emailNotifications;
+                    return SwitchListTile(
+                      secondary: const Icon(Icons.email),
+                      title: const Text('Email Notifications'),
+                      subtitle: const Text('Receive notifications via email'),
+                      value: currentPref,
+                      onChanged:
+                          (bool value) => _updateEmailNotificationPref(value),
+                    );
                   },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.send),
+                  title: const Text('Send test email'),
+                  subtitle: const Text('Verify email notification setup'),
+                  onTap: _sendTestEmail,
                 ),
               ],
             ),
