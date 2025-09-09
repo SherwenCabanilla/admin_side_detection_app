@@ -72,6 +72,7 @@ exports.notifyAdminOnUserRegister = onDocumentCreated(
 
     const from = `"MangoSense Notifications" <${gmailEmail}>`;
     const subject = "New user registration received";
+    const adminUrl = "https://mango-leaf-analyzer.web.app/";
 
     const userName = newUser.fullName || newUser.name || "";
     const userEmail = newUser.email || "";
@@ -88,7 +89,9 @@ exports.notifyAdminOnUserRegister = onDocumentCreated(
       `Role: ${userRole}\n` +
       `Status: ${userStatus}\n` +
       (userAddress ? `Address: ${userAddress}\n` : "") +
-      "\nPlease sign in to the admin dashboard to review and approve this user.";
+      "\nPlease sign in to the admin dashboard to review and approve this user." +
+      `\n\nAdmin Portal: ${adminUrl}` +
+      "\nOn mobile: open your browser menu and choose 'Desktop site' for best results.";
 
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; background:#f6f8fb; padding:24px;">
@@ -120,7 +123,11 @@ exports.notifyAdminOnUserRegister = onDocumentCreated(
                 ${userAddress ? `<tr><td style="padding:8px 0; color:#475467;">Address</td><td style="padding:8px 0; font-weight:600;">${userAddress}</td></tr>` : ""}
               </tbody>
             </table>
-            <p style="margin:16px 0 0 0; color:#475467;">Please sign in to the admin dashboard to review and approve this user.</p>
+            <p style="margin:16px 0 16px 0; color:#475467;">Please sign in to the admin dashboard to review and approve this user.</p>
+            <p style="margin:0 0 16px 0;">
+              <a href="${adminUrl}" style="display:inline-block; background:#16a34a; color:#ffffff; text-decoration:none; padding:10px 14px; border-radius:6px; font-weight:600;">Open Admin Portal</a>
+            </p>
+            <p style="margin:0; font-size:12px; color:#667085;">If opening on a mobile device, use your browser's <strong>Desktop site</strong> option for the best experience.</p>
           </div>
           <div style="background:#f9fafb; color:#667085; padding:12px 20px; font-size:12px;">
             <p style="margin:0;">This message was sent by MangoSense Admin.</p>
