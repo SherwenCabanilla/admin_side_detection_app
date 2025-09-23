@@ -102,7 +102,29 @@ class _ReportsState extends State<Reports> {
   void _updateStatsFromSnapshot() async {
     final scanRequestsProvider = Provider.of<ScanRequestsSnapshot?>(context);
     final snapshot = scanRequestsProvider?.snapshot;
-    if (snapshot == null) return;
+    if (snapshot == null) {
+      // Fallback: update card KPIs using service when realtime snapshot is unavailable
+      try {
+        final counts = await ScanRequestsService.getCountsForTimeRange(
+          timeRange: _selectedTimeRange,
+        );
+        final int completedByCreated = counts['completed'] ?? 0;
+        final int pendingByCreated = counts['pending'] ?? 0;
+        final int totalForCompletion = completedByCreated + pendingByCreated;
+        final String completionRateStr =
+            totalForCompletion == 0
+                ? '—'
+                : '${((completedByCreated / totalForCompletion) * 100).toStringAsFixed(0)}%';
+
+        final int overduePendingCreated = counts['overduePending'] ?? 0;
+
+        setState(() {
+          _completionRate = completionRateStr;
+          _overduePendingCount = overduePendingCreated;
+        });
+      } catch (_) {}
+      return;
+    }
     final scanRequests =
         snapshot.docs.map((doc) {
           final data = doc.data() as Map<String, dynamic>;
@@ -713,6 +735,24 @@ class _ReportsState extends State<Reports> {
     setState(() {
       _selectedTimeRange = newTimeRange;
     });
+    // Immediately update card KPIs to reflect the new range
+    try {
+      final counts = await ScanRequestsService.getCountsForTimeRange(
+        timeRange: newTimeRange,
+      );
+      final int completedByCreated = counts['completed'] ?? 0;
+      final int pendingByCreated = counts['pending'] ?? 0;
+      final int totalForCompletion = completedByCreated + pendingByCreated;
+      final String completionRateStr =
+          totalForCompletion == 0
+              ? '—'
+              : '${((completedByCreated / totalForCompletion) * 100).toStringAsFixed(0)}%';
+      final int overduePendingCreated = counts['overduePending'] ?? 0;
+      setState(() {
+        _completionRate = completionRateStr;
+        _overduePendingCount = overduePendingCreated;
+      });
+    } catch (_) {}
     // Refresh all dependent data; snapshot updater will compute realtime KPIs
     await Future.wait([
       _loadStats(),
@@ -1127,7 +1167,9 @@ class _ReportsState extends State<Reports> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                Text('Selected range: $_selectedTimeRange'),
+                Text(
+                  'Selected range: ${_displayRangeLabel(_selectedTimeRange)}',
+                ),
                 const SizedBox(height: 12),
                 const SizedBox(height: 12),
                 FutureBuilder<List<Map<String, dynamic>>>(
