@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -20,7 +22,23 @@ void main() async {
     print('Firebase already initialized: $e');
   }
 
-  runApp(const MyApp());
+  if (kReleaseMode) {
+    runZonedGuarded(
+      () {
+        runApp(const MyApp());
+      },
+      (error, stackTrace) {
+        // Optionally send errors to crash reporting in release
+      },
+      zoneSpecification: ZoneSpecification(
+        print: (self, parent, zone, message) {
+          // Suppress prints in release builds
+        },
+      ),
+    );
+  } else {
+    runApp(const MyApp());
+  }
 }
 
 class MyApp extends StatelessWidget {

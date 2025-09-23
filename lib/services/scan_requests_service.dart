@@ -43,12 +43,74 @@ class ScanRequestsService {
       final scanRequests = await getScanRequests();
       print('Total scan requests: ${scanRequests.length}');
 
-      // Filter by time range
-      final filteredRequests =
-          filterByTimeRange(
-            scanRequests,
-            timeRange,
-          ).where((r) => (r['status'] ?? 'pending') == 'completed').toList();
+      // Filter by reviewedAt window and include only completed
+      final DateTime now = DateTime.now();
+      DateTime? startInclusive;
+      DateTime? endExclusive;
+      if (timeRange.startsWith('Custom (')) {
+        final regex = RegExp(
+          r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        );
+        final match = regex.firstMatch(timeRange);
+        if (match != null) {
+          final s = DateTime.parse(match.group(1)!);
+          final e = DateTime.parse(match.group(2)!);
+          startInclusive = DateTime(s.year, s.month, s.day);
+          endExclusive = DateTime(
+            e.year,
+            e.month,
+            e.day,
+          ).add(const Duration(days: 1));
+        }
+      }
+      if (startInclusive == null || endExclusive == null) {
+        switch (timeRange) {
+          case '1 Day':
+            startInclusive = now.subtract(const Duration(days: 1));
+            endExclusive = now;
+            break;
+          case 'Last 7 Days':
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+            break;
+          case 'Last 30 Days':
+            startInclusive = now.subtract(const Duration(days: 30));
+            endExclusive = now;
+            break;
+          case 'Last 60 Days':
+            startInclusive = now.subtract(const Duration(days: 60));
+            endExclusive = now;
+            break;
+          case 'Last 90 Days':
+            startInclusive = now.subtract(const Duration(days: 90));
+            endExclusive = now;
+            break;
+          case 'Last Year':
+            startInclusive = DateTime(now.year - 1, now.month, now.day);
+            endExclusive = now;
+            break;
+          default:
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+        }
+      }
+
+      final filteredRequests = <Map<String, dynamic>>[];
+      for (final r in scanRequests) {
+        if ((r['status'] ?? '') != 'completed') continue;
+        final reviewedAt = r['reviewedAt'];
+        if (reviewedAt == null) continue;
+        DateTime? reviewed;
+        if (reviewedAt is Timestamp) reviewed = reviewedAt.toDate();
+        if (reviewedAt is String) reviewed = DateTime.tryParse(reviewedAt);
+        if (reviewed == null) continue;
+        final inWindow =
+            timeRange == '1 Day'
+                ? reviewed.isAfter(startInclusive)
+                : (!reviewed.isBefore(startInclusive) &&
+                    reviewed.isBefore(endExclusive));
+        if (inWindow) filteredRequests.add(r);
+      }
       print('Filtered requests for $timeRange: ${filteredRequests.length}');
 
       // Debug: Print details of filtered requests
@@ -561,5 +623,44 @@ class ScanRequestsService {
       print('Error getting average response time: $e');
       return '0 hours';
     }
+  }
+
+  // Compute completed, pending, and overdue-pending (>24h) counts using createdAt window
+  static Future<Map<String, int>> getCountsForTimeRange({
+    required String timeRange,
+  }) async {
+    final List<Map<String, dynamic>> all = await getScanRequests();
+    final List<Map<String, dynamic>> filtered = filterByTimeRange(
+      all,
+      timeRange,
+    );
+    int completed = 0;
+    int pending = 0;
+    int overduePending = 0;
+    for (final r in filtered) {
+      final status = (r['status'] ?? '').toString();
+      if (status == 'completed') {
+        completed++;
+      } else if (status == 'pending') {
+        pending++;
+        final createdAt = r['createdAt'];
+        DateTime? created;
+        if (createdAt is Timestamp) {
+          created = createdAt.toDate();
+        } else if (createdAt is String) {
+          created = DateTime.tryParse(createdAt);
+        }
+        if (created != null) {
+          final double hrs =
+              DateTime.now().difference(created).inMinutes / 60.0;
+          if (hrs > 24.0) overduePending++;
+        }
+      }
+    }
+    return {
+      'completed': completed,
+      'pending': pending,
+      'overduePending': overduePending,
+    };
   }
 }
