@@ -164,8 +164,6 @@ class ReportPdfService {
     diseaseByDay = {};
     healthyByDay = {};
     diseaseDayCounts = {};
-    // For response-time trend (avg hours per day)
-    final Map<String, List<double>> responseHoursByDay = {};
     for (final r in filteredCreatedCompleted) {
       final createdAt = r['createdAt'];
       DateTime dt;
@@ -213,49 +211,14 @@ class ReportPdfService {
           }
         }
       }
-
-      // Compute expert response time in hours when reviewedAt present
-      final reviewedAt = r['reviewedAt'];
-      DateTime? reviewed;
-      if (reviewedAt != null) {
-        if (reviewedAt is String) {
-          reviewed = DateTime.tryParse(reviewedAt);
-        } else {
-          reviewed = reviewedAt.toDate();
-        }
-      }
-      if (reviewed != null) {
-        // Only include responses whose REVIEW date falls within the selected range
-        final DateTime startOfDay = DateTime(
-          startDate.year,
-          startDate.month,
-          startDate.day,
-        );
-        final DateTime endExclusive = DateTime(
-          endDate.year,
-          endDate.month,
-          endDate.day,
-        ).add(const Duration(days: 1));
-        if (!reviewed.isBefore(startOfDay) && reviewed.isBefore(endExclusive)) {
-          final hours = reviewed.difference(dt).inSeconds / 3600.0;
-          final String reviewKey =
-              '${reviewed.year}-${reviewed.month.toString().padLeft(2, '0')}-${reviewed.day.toString().padLeft(2, '0')}';
-          (responseHoursByDay[reviewKey] ??= <double>[]).add(hours);
-        }
-      }
     }
     // Build aligned label set (dates) and ordered series arrays
     final allKeys =
         <String>{}
           ..addAll(diseaseByDay.keys)
-          ..addAll(healthyByDay.keys)
-          ..addAll(responseHoursByDay.keys);
+          ..addAll(healthyByDay.keys);
     trendLabelKeys = allKeys.toList()..sort();
     // Build full series first from complete label keys
-    final diseaseSeriesFull = trendLabelKeys
-        .map((k) => (diseaseByDay[k] ?? 0).toDouble())
-        .map((v) => v.isFinite ? v : 0.0)
-        .toList(growable: false);
     final healthySeriesFull = trendLabelKeys
         .map((k) => (healthyByDay[k] ?? 0).toDouble())
         .map((v) => v.isFinite ? v : 0.0)
@@ -267,9 +230,6 @@ class ReportPdfService {
     final Map<String, int> keyIndex = {
       for (int i = 0; i < trendLabelKeys.length; i++) trendLabelKeys[i]: i,
     };
-    final diseaseSeries = [
-      for (final k in displayKeys) diseaseSeriesFull[keyIndex[k] ?? 0],
-    ];
     final healthySeries = [
       for (final k in displayKeys) healthySeriesFull[keyIndex[k] ?? 0],
     ];
@@ -279,18 +239,11 @@ class ReportPdfService {
       final name = (item['name'] ?? '').toString();
       item['trend'] = classifyTrend(name);
     }
-    // Keep available if needed later; not used in simplified layout
-    // final List<MapEntry<String, double>> responseTrend =
-    //     responseHoursByDay
-    //         .map(
-    //           (k, v) => MapEntry(
-    //             k,
-    //             v.isEmpty ? 0.0 : (v.reduce((a, b) => a + b) / v.length),
-    //           ),
-    //         )
-    //         .entries
-    //         .toList()
-    //       ..sort((a, b) => a.key.compareTo(b.key));
+    // Split stats into healthy vs disease for separate tables
+    final List<Map<String, dynamic>> healthyOnlyStats =
+        diseaseStats.where((e) => (e['type'] ?? '') == 'healthy').toList();
+    final List<Map<String, dynamic>> diseaseOnlyStats =
+        diseaseStats.where((e) => (e['type'] ?? '') != 'healthy').toList();
     // Overview counts should reflect COMPLETIONS in the selected range (reviewedAt)
     // Build reviewed-window: [start 00:00, end 24:00) to include the entire end day
     final DateTime startInclusive = DateTime(
@@ -323,44 +276,7 @@ class ReportPdfService {
       if (inWindow) completedInWindow.add(r);
     }
     final int completed = completedInWindow.length;
-    // Compute SLA (≤24h, ≤48h) among completedInWindow
-    int within24 = 0;
-    int within48 = 0;
-    for (final r in completedInWindow) {
-      final createdRaw = r['createdAt'];
-      final reviewedRaw = r['reviewedAt'];
-      if (createdRaw == null || reviewedRaw == null) continue;
-      DateTime created;
-      DateTime reviewed;
-      if (createdRaw is String) {
-        created = DateTime.tryParse(createdRaw) ?? startInclusive;
-      } else if (createdRaw.runtimeType.toString() == 'Timestamp') {
-        created = createdRaw.toDate();
-      } else {
-        continue;
-      }
-      if (reviewedRaw is String) {
-        reviewed = DateTime.tryParse(reviewedRaw) ?? created;
-      } else if (reviewedRaw.runtimeType.toString() == 'Timestamp') {
-        reviewed = reviewedRaw.toDate();
-      } else {
-        continue;
-      }
-      final hours = reviewed.difference(created).inSeconds / 3600.0;
-      if (hours <= 24.0) within24++;
-      if (hours <= 48.0) within48++;
-    }
-    final String sla24Label =
-        completed == 0
-            ? '—'
-            : '${((within24 / completed) * 100).toStringAsFixed(0)}%';
-    final String sla48Label =
-        completed == 0
-            ? '—'
-            : '${((within48 / completed) * 100).toStringAsFixed(0)}%';
-    final String avgResponse = await ScanRequestsService.getAverageResponseTime(
-      timeRange: timeRange,
-    );
+    // SLA and average response time are no longer shown in the report
 
     // Fonts: Noto Sans (print-friendly, wide coverage)
     final baseFont = await PdfGoogleFonts.notoSansRegular();
@@ -426,145 +342,200 @@ class ReportPdfService {
     final pw.ImageProvider? bgImage =
         useBackground ? await _tryLoadLogo(backgroundAsset) : null;
 
-    doc.addPage(
-      pw.Page(
-        pageFormat: _resolvePageFormat(pageSize),
-        margin:
-            bgImage == null ? pw.EdgeInsets.all(margin) : pw.EdgeInsets.zero,
-        build: (context) {
-          final content = pw.Padding(
-            padding:
-                bgImage == null
-                    ? pw.EdgeInsets.zero
-                    : pw.EdgeInsets.fromLTRB(
-                      isSmall ? 14 : 28, // left
-                      isSmall ? 80 : 110, // top to clear header graphics
-                      isSmall ? 14 : 28, // right
-                      isSmall ? 18 : 28, // bottom
-                    ),
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                // No logos here; template image contains them
-                // Title + date
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text(title, style: tsH1),
-                    pw.Text(_fmtHumanDate(now), style: tsCaption),
-                  ],
-                ),
-                pw.SizedBox(height: 2),
-                // Reporting period line
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text(
-                      'Reporting Period: ' + _fmtHumanRange(startDate, endDate),
-                      style: tsCaption,
-                    ),
-                    pw.SizedBox(),
-                  ],
-                ),
-                pw.Divider(thickness: 0.7),
-                // Info rows with bold labels
-                _labeledRow(
-                  'Location:',
-                  'Carmen, Davao del Norte',
-                  baseBody * scale,
-                  font: baseFont,
-                  boldFont: boldFont,
-                ),
-                _labeledRow(
-                  'Weather Summary:',
-                  weatherLabel,
-                  baseBody * scale,
-                  font: baseFont,
-                  boldFont: boldFont,
-                ),
-                _labeledRow(
-                  'Prepared By:',
-                  utilityName.isEmpty ? 'Admin' : utilityName,
-                  baseBody * scale,
-                  font: baseFont,
-                  boldFont: boldFont,
-                ),
-                pw.Divider(thickness: 0.7),
-                pw.SizedBox(height: isSmall ? 4 : 6),
-                // Overview bullets (more readable)
-                pw.Text('Overview', style: tsH2),
-                pw.SizedBox(height: 2),
-                pw.Bullet(
-                  text: 'Total Reports Reviewed: ' + completed.toString(),
-                  style: tsBody,
-                ),
-                // Pending is not shown in PDF per requirement
-                pw.Bullet(
-                  text: 'Average Response Time: ' + avgResponse,
-                  style: tsBody,
-                ),
-                pw.Bullet(text: 'SLA < 24h: ' + sla24Label, style: tsBody),
-                pw.Bullet(text: 'SLA < 48h: ' + sla48Label, style: tsBody),
-                pw.SizedBox(height: isSmall ? 6 : 8),
-                // Stacked large charts
-                pw.Text('Avg Expert Response (hrs)', style: tsH2),
-                pw.SizedBox(height: 3),
-                _buildResponseTrendChart(
-                  _buildResponseTrend(responseHoursByDay),
-                  height: chartHeight + 10,
-                ),
-                pw.SizedBox(height: isSmall ? 4 : 8),
-                pw.Text('Disease Distribution', style: tsH2),
-                pw.SizedBox(height: 3),
-                _buildTrendChart(
-                  displayLabels,
-                  diseaseSeries,
-                  healthySeries,
-                  height: chartHeight,
-                ),
-                pw.SizedBox(height: 3),
-                // Legend for disease vs healthy
-                pw.Row(
-                  children: [
-                    _legendSwatch(pdf.PdfColors.red, 'Disease'),
-                    pw.SizedBox(width: 10),
-                    _legendSwatch(pdf.PdfColors.green, 'Healthy'),
-                  ],
-                ),
-                pw.SizedBox(height: isSmall ? 6 : 8),
-                // Disease Distribution table - ensure it fits by allowing page break
-                pw.Text('Disease Distribution', style: tsH2),
-                pw.SizedBox(height: 3),
-                pw.Flexible(
-                  child: _buildDiseaseTable(
-                    diseaseStats,
-                    maxRows: tableRows,
-                    fontSize: baseTable * scale,
-                    font: baseFont,
-                    boldFont: boldFont,
-                  ),
-                ),
-                pw.SizedBox(height: isSmall ? 4 : 6),
-                // Removed recommendations section per request
-                pw.SizedBox(height: isSmall ? 4 : 6),
-                pw.Text(
-                  'This report summarizes detections within the selected time range. Tip burn/Unknown are excluded from disease counts.',
-                  style: tsCaption,
-                ),
-              ],
-            ),
-          );
-
-          if (bgImage == null) return content;
-          return pw.Stack(
-            children: [
-              pw.Positioned.fill(
-                child: pw.Image(bgImage, fit: pw.BoxFit.cover),
+    final pw.PageTheme pageTheme = pw.PageTheme(
+      pageFormat: _resolvePageFormat(pageSize),
+      margin:
+          bgImage == null
+              ? pw.EdgeInsets.all(margin)
+              : pw.EdgeInsets.fromLTRB(
+                isSmall ? 14 : 28,
+                isSmall ? 110 : 140,
+                isSmall ? 14 : 28,
+                isSmall ? 80 : 100,
               ),
-              content,
+      buildBackground: (context) {
+        if (bgImage == null) return pw.SizedBox();
+        return pw.FullPage(
+          ignoreMargins: true,
+          child: pw.Image(bgImage, fit: pw.BoxFit.cover),
+        );
+      },
+    );
+
+    // Build disease multi-series for top 4 diseases
+    final Map<String, List<double>> diseaseSeriesByName = {};
+    // Determine top 4 diseases by total counts
+    final List<MapEntry<String, int>> totals =
+        diseaseDayCounts.entries
+            .map(
+              (e) => MapEntry(
+                e.key,
+                e.value.values.fold<int>(0, (sum, v) => sum + v),
+              ),
+            )
+            .toList()
+          ..removeWhere(
+            (e) =>
+                e.key == 'healthy' ||
+                e.key.contains('tip burn') ||
+                e.key.contains('unknown'),
+          )
+          ..sort((a, b) => b.value.compareTo(a.value));
+    final topDiseases = totals.take(4).map((e) => e.key).toList();
+    for (final name in topDiseases) {
+      final perDay = diseaseDayCounts[name] ?? const <String, int>{};
+      final series = [for (final k in displayKeys) (perDay[k] ?? 0).toDouble()];
+      diseaseSeriesByName[name] = series;
+    }
+
+    doc.addPage(
+      pw.MultiPage(
+        pageTheme: pageTheme,
+        build:
+            (context) => [
+              // Header
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(title, style: tsH1),
+                  pw.Text(_fmtHumanDate(now), style: tsCaption),
+                ],
+              ),
+              pw.SizedBox(height: 2),
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(
+                    'Reporting Period: ' + _fmtHumanRange(startDate, endDate),
+                    style: tsCaption,
+                  ),
+                  pw.SizedBox(),
+                ],
+              ),
+              pw.Divider(thickness: 0.7),
+              _labeledRow(
+                'Location:',
+                'Carmen, Davao del Norte',
+                baseBody * scale,
+                font: baseFont,
+                boldFont: boldFont,
+              ),
+              _labeledRow(
+                'Weather Summary:',
+                weatherLabel,
+                baseBody * scale,
+                font: baseFont,
+                boldFont: boldFont,
+              ),
+              _labeledRow(
+                'Prepared By:',
+                utilityName.isEmpty ? 'Admin' : utilityName,
+                baseBody * scale,
+                font: baseFont,
+                boldFont: boldFont,
+              ),
+              pw.Divider(thickness: 0.7),
+              pw.SizedBox(height: isSmall ? 4 : 6),
+              pw.Text('Overview', style: tsH2),
+              pw.SizedBox(height: 2),
+              pw.Bullet(
+                text: 'Total Reports Reviewed: ' + completed.toString(),
+                style: tsBody,
+              ),
+
+              // Healthy Trend chart
+              pw.SizedBox(height: isSmall ? 6 : 8),
+              pw.Text('Healthy Trend', style: tsH2),
+              pw.SizedBox(height: 3),
+              _buildSingleLineChart(
+                displayLabels,
+                healthySeries,
+                color: pdf.PdfColors.blue,
+                height: chartHeight,
+              ),
+              pw.SizedBox(height: 10),
+              pw.Text(_healthyConclusion(healthySeries), style: tsCaption),
+
+              // Disease Trends chart (top 4 diseases)
+              pw.SizedBox(height: isSmall ? 6 : 10),
+              pw.Text('Disease Trends', style: tsH2),
+              pw.SizedBox(height: 3),
+              _buildMultiLineDiseaseChart(
+                displayLabels,
+                diseaseSeriesByName,
+                order: topDiseases,
+                height: chartHeight,
+              ),
+              pw.SizedBox(height: 3),
+              // Legend for diseases
+              pw.Wrap(
+                spacing: 10,
+                runSpacing: 6,
+                children: [
+                  for (int i = 0; i < topDiseases.length; i++)
+                    _legendSwatch(
+                      _colorForDisease(topDiseases[i]),
+                      _titleCase(topDiseases[i]),
+                    ),
+                ],
+              ),
+              pw.SizedBox(height: 10),
+              pw.Text(
+                _diseaseConclusion(diseaseSeriesByName),
+                style: tsCaption,
+              ),
+
+              // Healthy Distribution
+              pw.SizedBox(height: isSmall ? 6 : 10),
+              pw.Text('Healthy Distribution', style: tsH2),
+              pw.SizedBox(height: 3),
+              _buildStatsTable(
+                healthyOnlyStats,
+                firstColumnLabel: 'Category',
+                maxRows: 4,
+                fontSize: baseTable * scale,
+                font: baseFont,
+                boldFont: boldFont,
+              ),
+              pw.SizedBox(height: 10),
+              pw.Text(
+                _distributionConclusion(healthyOnlyStats, isHealthy: true),
+                style: tsCaption,
+              ),
+
+              // Disease Distribution (excludes Tip burn/Unknown)
+              pw.SizedBox(height: isSmall ? 6 : 10),
+              pw.Text('Disease Distribution', style: tsH2),
+              pw.SizedBox(height: 3),
+              _buildStatsTable(
+                diseaseOnlyStats,
+                firstColumnLabel: 'Disease',
+                maxRows: tableRows,
+                fontSize: baseTable * scale,
+                font: baseFont,
+                boldFont: boldFont,
+              ),
+              pw.SizedBox(height: 10),
+              pw.Text(
+                _distributionConclusion(diseaseOnlyStats, isHealthy: false),
+                style: tsCaption,
+              ),
+
+              // General notes
+              pw.SizedBox(height: isSmall ? 6 : 10),
+              pw.Text('Notes', style: tsH2),
+              pw.SizedBox(height: 2),
+              pw.Bullet(
+                text:
+                    'Charts are sampled to keep labels readable; underlying calculations use full data.',
+                style: tsCaption,
+              ),
+              pw.Bullet(
+                text:
+                    'Conclusions highlight simple start-to-end changes and may not reflect mid-period variability.',
+                style: tsCaption,
+              ),
             ],
-          );
-        },
       ),
     );
 
@@ -699,91 +670,35 @@ class ReportPdfService {
 
   // Removed statChip helper (not used in simplified layout)
 
-  static pw.Widget _buildTrendChart(
-    List<String> labels,
-    List<double> diseaseCounts,
-    List<double> healthyCounts, {
-    double height = 180,
+  static pw.Widget _buildStatsTable(
+    List<Map<String, dynamic>> stats, {
+    String firstColumnLabel = 'Disease',
+    int maxRows = 6,
+    double fontSize = 10,
+    pw.Font? font,
+    pw.Font? boldFont,
   }) {
-    if (labels.isEmpty || labels.length < 2) {
-      return pw.Text('No trend data');
-    }
-
-    int maxY = 1;
-    for (final v in [...diseaseCounts, ...healthyCounts]) {
-      final vv = v.isFinite ? v : 0.0;
-      if (vv.toInt() > maxY) maxY = vv.toInt();
-    }
-
-    // Simple Cartesian chart using pw.Chart
-    return pw.Container(
-      height: height,
-      child: pw.Chart(
-        grid: pw.CartesianGrid(
-          xAxis: pw.FixedAxis.fromStrings(
-            labels,
-            marginStart: 10,
-            marginEnd: 10,
-          ),
-          yAxis: pw.FixedAxis([
-            for (
-              int i = 0;
-              i <= maxY + _niceStepInt(maxY);
-              i += _niceStepInt(maxY)
+    final normalized =
+        stats
+            .map(
+              (e) => {
+                'name': (e['name'] ?? 'Unknown').toString(),
+                'count': (e['count'] as num? ?? 0).toInt(),
+                'percentage': (e['percentage'] as double? ?? 0.0),
+                'trend': (e['trend'] ?? 'N/A').toString(),
+              },
             )
-              i.toDouble(),
-          ], format: (v) => (v.isFinite ? v.toInt() : 0).toString()),
-        ),
-        datasets: [
-          pw.LineDataSet(
-            drawSurface: true,
-            isCurved: true,
-            color: pdf.PdfColors.red,
-            data: [
-              for (int i = 0; i < diseaseCounts.length; i++)
-                pw.PointChartValue(i.toDouble(), diseaseCounts[i]),
-            ],
-          ),
-          pw.LineDataSet(
-            drawSurface: false,
-            isCurved: true,
-            color: pdf.PdfColors.green,
-            data: [
-              for (int i = 0; i < healthyCounts.length; i++)
-                pw.PointChartValue(i.toDouble(), healthyCounts[i]),
-            ],
-          ),
-        ],
-      ),
+            .toList();
+    return _buildDiseaseTable(
+      normalized,
+      maxRows: maxRows,
+      fontSize: fontSize,
+      font: font,
+      boldFont: boldFont,
     );
   }
 
-  // Removed response trend chart (not used in simplified layout)
-  static List<MapEntry<String, double>> _buildResponseTrend(
-    Map<String, List<double>> responseHoursByDay,
-  ) {
-    final entries =
-        responseHoursByDay.entries
-            .map(
-              (e) => MapEntry(
-                e.key,
-                e.value.isEmpty
-                    ? 0.0
-                    : (e.value.reduce((a, b) => a + b) / e.value.length),
-              ),
-            )
-            .toList()
-          ..sort((a, b) => a.key.compareTo(b.key));
-    return entries;
-  }
-
-  static int _niceStepInt(int maxY) {
-    if (maxY <= 5) return 1;
-    if (maxY <= 10) return 2;
-    if (maxY <= 20) return 5;
-    if (maxY <= 50) return 10;
-    return 20;
-  }
+  // Removed old combined trend and response-time helpers
 
   static double _niceStepDouble(double maxY) {
     if (maxY <= 5) return 1;
@@ -791,50 +706,6 @@ class ReportPdfService {
     if (maxY <= 20) return 5;
     if (maxY <= 50) return 10;
     return 20;
-  }
-
-  static pw.Widget _buildResponseTrendChart(
-    List<MapEntry<String, double>> trend, {
-    double height = 180,
-  }) {
-    if (trend.isEmpty || trend.length < 2) {
-      return pw.Text('No response-time data');
-    }
-
-    final points = <pw.PointChartValue>[];
-    double maxY = 1.0;
-    for (int i = 0; i < trend.length; i++) {
-      final raw = trend[i].value;
-      final y = raw.isFinite ? raw : 0.0;
-      if (y > maxY) maxY = y;
-      points.add(pw.PointChartValue(i.toDouble(), y));
-    }
-
-    final step = _niceStepDouble(maxY);
-
-    return pw.Container(
-      height: height,
-      child: pw.Chart(
-        grid: pw.CartesianGrid(
-          xAxis: pw.FixedAxis.fromStrings(
-            List<String>.from(trend.map((e) => e.key.substring(5))),
-            marginStart: 10,
-            marginEnd: 10,
-          ),
-          yAxis: pw.FixedAxis([
-            for (double i = 0; i <= maxY + step; i += step) i.isFinite ? i : 0,
-          ], format: (v) => (v.isFinite ? v : 0).toStringAsFixed(1)),
-        ),
-        datasets: [
-          pw.LineDataSet(
-            drawSurface: false,
-            isCurved: true,
-            color: pdf.PdfColors.blue,
-            data: points,
-          ),
-        ],
-      ),
-    );
   }
 
   static pdf.PdfPageFormat _resolvePageFormat(String name) {
@@ -956,4 +827,219 @@ class ReportPdfService {
   // Frequency extraction removed (not used)
 
   // Recommendations section removed as per request
+  static pw.Widget _buildSingleLineChart(
+    List<String> labels,
+    List<double> values, {
+    pdf.PdfColor color = pdf.PdfColors.green,
+    double height = 180,
+  }) {
+    if (labels.isEmpty || labels.length < 2) {
+      return pw.Text('No trend data');
+    }
+    double maxY = 1.0;
+    for (final v in values) {
+      final vv = v.isFinite ? v : 0.0;
+      if (vv > maxY) maxY = vv;
+    }
+    final step = _niceStepDouble(maxY);
+    return pw.Container(
+      height: height,
+      child: pw.Chart(
+        grid: pw.CartesianGrid(
+          xAxis: pw.FixedAxis.fromStrings(
+            labels,
+            marginStart: 10,
+            marginEnd: 10,
+          ),
+          yAxis: pw.FixedAxis([
+            for (double i = 0; i <= maxY + step; i += step) i.isFinite ? i : 0,
+          ], format: (v) => (v.isFinite ? v : 0).toStringAsFixed(0)),
+        ),
+        datasets: [
+          pw.LineDataSet(
+            drawSurface: false,
+            isCurved: true,
+            color: color,
+            data: [
+              for (int i = 0; i < values.length; i++)
+                pw.PointChartValue(
+                  i.toDouble(),
+                  values[i].isFinite ? values[i] : 0.0,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _buildMultiLineDiseaseChart(
+    List<String> labels,
+    Map<String, List<double>> seriesByName, {
+    required List<String> order,
+    double height = 180,
+  }) {
+    if (labels.isEmpty || labels.length < 2 || seriesByName.isEmpty) {
+      return pw.Text('No disease trend data');
+    }
+    double maxY = 1.0;
+    for (final s in seriesByName.values) {
+      for (final v in s) {
+        final vv = v.isFinite ? v : 0.0;
+        if (vv > maxY) maxY = vv;
+      }
+    }
+    final step = _niceStepDouble(maxY);
+    final datasets = <pw.Dataset>[];
+    for (int idx = 0; idx < order.length; idx++) {
+      final String diseaseName = order[idx];
+      final series = seriesByName[diseaseName] ?? const <double>[];
+      datasets.add(
+        pw.LineDataSet(
+          drawSurface: false,
+          isCurved: true,
+          color: _colorForDisease(diseaseName),
+          data: [
+            for (int i = 0; i < series.length; i++)
+              pw.PointChartValue(
+                i.toDouble(),
+                series[i].isFinite ? series[i] : 0.0,
+              ),
+          ],
+        ),
+      );
+    }
+
+    return pw.Container(
+      height: height,
+      child: pw.Chart(
+        grid: pw.CartesianGrid(
+          xAxis: pw.FixedAxis.fromStrings(
+            labels,
+            marginStart: 10,
+            marginEnd: 10,
+          ),
+          yAxis: pw.FixedAxis([
+            for (double i = 0; i <= maxY + step; i += step) i.isFinite ? i : 0,
+          ], format: (v) => (v.isFinite ? v : 0).toStringAsFixed(0)),
+        ),
+        datasets: datasets,
+      ),
+    );
+  }
+
+  static pdf.PdfColor _colorForDisease(String name) {
+    final n = name.toLowerCase();
+    if (n.contains('powdery')) return pdf.PdfColors.green; // Powdery Mildew
+    if (n.contains('anthracnose')) return pdf.PdfColors.orange; // Anthracnose
+    if (n.contains('bacterial') && n.contains('black'))
+      return pdf.PdfColors.purple; // Bacterial black spot
+    if (n.contains('dieback')) return pdf.PdfColors.red; // Dieback
+    return pdf.PdfColors.red; // default for any other disease
+  }
+
+  static String _healthyConclusion(List<double> series) {
+    if (series.isEmpty) return 'No data shown.';
+    final first = series.first.isFinite ? series.first : 0.0;
+    final last = series.last.isFinite ? series.last : 0.0;
+    final delta = last - first;
+    const double eps = 1.0;
+    String direction;
+    if (delta > eps) {
+      direction = 'slightly uptrend overall';
+    } else if (delta < -eps) {
+      direction = 'slightly downtrend overall';
+    } else {
+      direction = 'relatively flat across the period';
+    }
+    final String summary =
+        'Healthy detections appear ' +
+        direction +
+        '. This view aggregates daily healthy classifications across the selected dates.';
+    final String context =
+        'Short-term fluctuations may occur day-to-day; the overall direction compares the beginning versus the end of the period.';
+    return summary + ' ' + context;
+  }
+
+  static String _diseaseConclusion(Map<String, List<double>> seriesByName) {
+    if (seriesByName.isEmpty) return 'No disease lines to summarize.';
+    String? rising;
+    double risingDelta = -1e9;
+    String? falling;
+    double fallingDelta = 1e9;
+    seriesByName.forEach((name, s) {
+      if (s.isEmpty) return;
+      final first = s.first.isFinite ? s.first : 0.0;
+      final last = s.last.isFinite ? s.last : 0.0;
+      final delta = last - first;
+      if (delta > risingDelta) {
+        risingDelta = delta;
+        rising = name;
+      }
+      if (delta < fallingDelta) {
+        fallingDelta = delta;
+        falling = name;
+      }
+    });
+    final bool hasUp = rising != null && risingDelta > 1.0;
+    final bool hasDown = falling != null && fallingDelta < -1.0;
+    final String opening =
+        hasUp
+            ? _titleCase(rising!) + ' shows the strongest increase'
+            : 'No clear increasing disease trends are observed';
+    final String middle =
+        hasDown
+            ? ', while ' + _titleCase(falling!) + ' shows the sharpest decline.'
+            : '.';
+    final String context =
+        ' Lines reflect daily detections per disease; comparing the start and end highlights the overall direction.';
+    final String guidance =
+        ' Consider both the magnitude of change and baseline counts when interpreting these movements.';
+    return opening + middle + context + ' ' + guidance;
+  }
+
+  static String _distributionConclusion(
+    List<Map<String, dynamic>> rows, {
+    required bool isHealthy,
+  }) {
+    if (rows.isEmpty) {
+      return isHealthy
+          ? 'No healthy detections recorded for the selected period.'
+          : 'No disease detections recorded for the selected period.';
+    }
+    Map<String, dynamic> top = rows.first;
+    for (final r in rows) {
+      if ((r['count'] as num? ?? 0).toInt() >
+          (top['count'] as num? ?? 0).toInt()) {
+        top = r;
+      }
+    }
+    final String topName = _titleCase((top['name'] ?? '').toString());
+    final String topPct =
+        (((top['percentage'] ?? 0.0) as double) * 100).toStringAsFixed(1) + '%';
+
+    if (isHealthy) {
+      return 'Healthy detections indicate instances without identified disease and serve as a baseline for field condition. '
+              'In this period, Healthy accounts for ' +
+          topPct +
+          ' of observations, suggesting overall field health across the sampled days. '
+              'Compare this share against disease categories to identify shifts toward or away from problematic conditions.';
+    }
+
+    return 'This table ranks the most frequent disease detections in the selected period. ' +
+        topName +
+        ' leads with ' +
+        topPct +
+        ' of total detections, providing a focal point for mitigation and monitoring. ' +
+        'Use the trend column alongside counts to see which issues are expanding versus stabilizing.';
+  }
+
+  static String _titleCase(String input) {
+    if (input.isEmpty) return input;
+    return input
+        .split(' ')
+        .where((p) => p.isNotEmpty)
+        .map((p) => p[0].toUpperCase() + p.substring(1))
+        .join(' ');
+  }
 }

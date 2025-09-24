@@ -913,7 +913,7 @@ class _ReportsState extends State<Reports> {
                               context: context,
                               timeRange: selectedRange,
                               pageSize: pageSize,
-                              backgroundAsset: 'assets/report_template_bg.png',
+                              backgroundAsset: 'assets/report_template_bg.jpg',
                               preparedBy: preparedBy,
                             );
                             Navigator.of(context, rootNavigator: true).pop();
