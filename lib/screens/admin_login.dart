@@ -65,6 +65,18 @@ class _AdminLoginState extends State<AdminLogin> {
             role: 'admin',
             lastLogin: DateTime.now(),
           );
+
+          // Log successful admin login
+          await FirebaseFirestore.instance.collection('activities').add({
+            'action': 'Admin logged in',
+            'user':
+                adminUser.username.isNotEmpty ? adminUser.username : 'Admin',
+            'type': 'login',
+            'color': Colors.green.value,
+            'icon': Icons.login.codePoint,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
@@ -72,17 +84,47 @@ class _AdminLoginState extends State<AdminLogin> {
             ),
           );
         } else {
+          // Log failed login attempt - not registered as admin
+          await FirebaseFirestore.instance.collection('activities').add({
+            'action': 'Failed login attempt - Not registered as admin',
+            'user': _emailController.text.trim(),
+            'type': 'failed_login',
+            'color': Colors.red.value,
+            'icon': Icons.block.codePoint,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+
           setState(() {
             _errorMessage = 'You are not registered as an admin.';
             _isLoading = false;
           });
         }
       } on FirebaseAuthException catch (e) {
+        // Log failed login attempt - authentication error
+        await FirebaseFirestore.instance.collection('activities').add({
+          'action': 'Failed login attempt - ${e.code}',
+          'user': _emailController.text.trim(),
+          'type': 'failed_login',
+          'color': Colors.red.value,
+          'icon': Icons.error.codePoint,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+
         setState(() {
           _errorMessage = e.message ?? 'Login failed.';
           _isLoading = false;
         });
       } catch (e) {
+        // Log failed login attempt - general error
+        await FirebaseFirestore.instance.collection('activities').add({
+          'action': 'Failed login attempt - Unknown error',
+          'user': _emailController.text.trim(),
+          'type': 'failed_login',
+          'color': Colors.red.value,
+          'icon': Icons.error.codePoint,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+
         setState(() {
           _errorMessage = 'Login failed.';
           _isLoading = false;

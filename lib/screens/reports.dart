@@ -87,6 +87,25 @@ class _ReportsState extends State<Reports> {
     return range;
   }
 
+  String _formatTimeRangeForActivity(String range) {
+    if (range.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        try {
+          final s = DateTime.parse(match.group(1)!);
+          final e = DateTime.parse(match.group(2)!);
+          String fmt(DateTime d) =>
+              '${_monthName(d.month)} ${d.day}, ${d.year}';
+          return '"${fmt(s)} to ${fmt(e)}"';
+        } catch (_) {}
+      }
+    }
+    return '"$range"';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -732,6 +751,23 @@ class _ReportsState extends State<Reports> {
     if (newTimeRange == _selectedTimeRange) {
       return;
     }
+
+    // Log report time range change
+    try {
+      final formattedRange = _formatTimeRangeForActivity(newTimeRange);
+      await FirebaseFirestore.instance.collection('activities').add({
+        'action': 'Report time range changed to $formattedRange',
+        'user':
+            'Admin', // You can get this from the current admin context if available
+        'type': 'report_change',
+        'color': Colors.indigo.value,
+        'icon': Icons.date_range.codePoint,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      print('Failed to log time range change: $e');
+    }
+
     setState(() {
       _selectedTimeRange = newTimeRange;
     });
@@ -2829,29 +2865,53 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                               reservedSize: 40,
                                               interval:
                                                   (() {
-                                                    final double maxVal =
+                                                    // Use the same maxY calculation as the chart
+                                                    final double chartMaxY =
                                                         diseaseData.isEmpty
-                                                            ? 100
+                                                            ? 100.0
                                                             : diseaseData
-                                                                .map(
-                                                                  (d) =>
-                                                                      (d['count']
-                                                                              as num)
-                                                                          .toDouble(),
-                                                                )
-                                                                .reduce(
-                                                                  (a, b) =>
-                                                                      a > b
-                                                                          ? a
-                                                                          : b,
-                                                                );
-                                                    if (maxVal <= 10)
+                                                                    .map(
+                                                                      (d) =>
+                                                                          (d['count']
+                                                                                  as num)
+                                                                              .toDouble(),
+                                                                    )
+                                                                    .reduce(
+                                                                      (a, b) =>
+                                                                          a > b
+                                                                              ? a
+                                                                              : b,
+                                                                    ) *
+                                                                1.2;
+
+                                                    // Calculate interval based on chart's actual maxY
+                                                    if (chartMaxY <= 12)
                                                       return 2.0;
-                                                    if (maxVal <= 20)
+                                                    if (chartMaxY <= 24)
                                                       return 5.0;
-                                                    if (maxVal <= 50)
+                                                    if (chartMaxY <= 60)
                                                       return 10.0;
-                                                    return 20.0;
+                                                    if (chartMaxY <= 120)
+                                                      return 25.0;
+                                                    if (chartMaxY <= 240)
+                                                      return 50.0;
+                                                    if (chartMaxY <= 600)
+                                                      return 100.0;
+                                                    if (chartMaxY <= 1200)
+                                                      return 200.0;
+                                                    if (chartMaxY <= 2400)
+                                                      return 500.0;
+                                                    if (chartMaxY <= 6000)
+                                                      return 1000.0;
+                                                    if (chartMaxY <= 12000)
+                                                      return 2000.0;
+                                                    if (chartMaxY <= 24000)
+                                                      return 5000.0;
+                                                    if (chartMaxY <= 60000)
+                                                      return 10000.0;
+                                                    // For extremely large numbers, use dynamic calculation
+                                                    return (chartMaxY / 5)
+                                                        .ceilToDouble();
                                                   })(),
                                               getTitlesWidget: (value, meta) {
                                                 return Text(
@@ -3145,29 +3205,53 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                               reservedSize: 40,
                                               interval:
                                                   (() {
-                                                    final double maxVal =
+                                                    // Use the same maxY calculation as the chart
+                                                    final double chartMaxY =
                                                         healthyData.isEmpty
-                                                            ? 100
+                                                            ? 100.0
                                                             : healthyData
-                                                                .map(
-                                                                  (d) =>
-                                                                      (d['count']
-                                                                              as num)
-                                                                          .toDouble(),
-                                                                )
-                                                                .reduce(
-                                                                  (a, b) =>
-                                                                      a > b
-                                                                          ? a
-                                                                          : b,
-                                                                );
-                                                    if (maxVal <= 10)
+                                                                    .map(
+                                                                      (d) =>
+                                                                          (d['count']
+                                                                                  as num)
+                                                                              .toDouble(),
+                                                                    )
+                                                                    .reduce(
+                                                                      (a, b) =>
+                                                                          a > b
+                                                                              ? a
+                                                                              : b,
+                                                                    ) *
+                                                                1.2;
+
+                                                    // Calculate interval based on chart's actual maxY
+                                                    if (chartMaxY <= 12)
                                                       return 2.0;
-                                                    if (maxVal <= 20)
+                                                    if (chartMaxY <= 24)
                                                       return 5.0;
-                                                    if (maxVal <= 50)
+                                                    if (chartMaxY <= 60)
                                                       return 10.0;
-                                                    return 20.0;
+                                                    if (chartMaxY <= 120)
+                                                      return 25.0;
+                                                    if (chartMaxY <= 240)
+                                                      return 50.0;
+                                                    if (chartMaxY <= 600)
+                                                      return 100.0;
+                                                    if (chartMaxY <= 1200)
+                                                      return 200.0;
+                                                    if (chartMaxY <= 2400)
+                                                      return 500.0;
+                                                    if (chartMaxY <= 6000)
+                                                      return 1000.0;
+                                                    if (chartMaxY <= 12000)
+                                                      return 2000.0;
+                                                    if (chartMaxY <= 24000)
+                                                      return 5000.0;
+                                                    if (chartMaxY <= 60000)
+                                                      return 10000.0;
+                                                    // For extremely large numbers, use dynamic calculation
+                                                    return (chartMaxY / 5)
+                                                        .ceilToDouble();
                                                   })(),
                                               getTitlesWidget: (value, meta) {
                                                 return Text(

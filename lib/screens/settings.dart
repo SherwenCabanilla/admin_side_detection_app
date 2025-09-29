@@ -25,6 +25,41 @@ class _SettingsState extends State<Settings> {
       await FirebaseFirestore.instance.collection('admins').doc(user.uid).set({
         'notificationPrefs': {'email': enabled},
       }, SetOptions(merge: true));
+
+      // Log notification settings change (with error handling)
+      try {
+        // Get current admin name if not loaded yet
+        String adminName = _adminName ?? 'Admin';
+        if (_adminName == null) {
+          final adminDoc =
+              await FirebaseFirestore.instance
+                  .collection('admins')
+                  .doc(user.uid)
+                  .get();
+          if (adminDoc.exists) {
+            adminName = adminDoc.data()?['adminName'] ?? 'Admin';
+          }
+        }
+
+        await FirebaseFirestore.instance.collection('activities').add({
+          'action':
+              enabled
+                  ? 'Email notifications enabled'
+                  : 'Email notifications disabled',
+          'user': adminName,
+          'type': 'settings_change',
+          'color': Colors.blue.value,
+          'icon':
+              enabled
+                  ? Icons.notifications_active.codePoint
+                  : Icons.notifications_off.codePoint,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        // Don't fail the notification update if activity logging fails
+        print('Failed to log notification activity: $e');
+      }
+
       setState(() => _emailNotifications = enabled);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -46,104 +81,194 @@ class _SettingsState extends State<Settings> {
     }
   }
 
-  Future<void> _sendTestEmail() async {
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-      final adminDoc =
-          await FirebaseFirestore.instance
-              .collection('admins')
-              .doc(user.uid)
-              .get();
-      final dynamic adminRaw = adminDoc.data();
-      final Map<String, dynamic> adminData =
-          adminRaw is Map
-              ? Map<String, dynamic>.from(adminRaw)
-              : <String, dynamic>{};
-      final String adminEmail = (adminData['email'] as String?) ?? _email ?? '';
-      if (adminEmail.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No admin email found to send test message.'),
-            backgroundColor: Colors.red,
-          ),
+  Future<void> _editAdminName() async {
+    final controller = TextEditingController(text: _adminName ?? 'Admin');
+    bool isLoading = false;
+    String? errorMessage;
+
+    final newName = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Edit Admin Name'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: controller,
+                    decoration: const InputDecoration(
+                      labelText: 'Admin Name',
+                      hintText: 'Enter your display name',
+                    ),
+                    enabled: !isLoading,
+                  ),
+                  if (errorMessage != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      errorMessage!,
+                      style: const TextStyle(color: Colors.red, fontSize: 13),
+                    ),
+                  ],
+                  if (isLoading) ...[
+                    const SizedBox(height: 16),
+                    const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 12),
+                        Text('Updating name...'),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed:
+                      isLoading
+                          ? null
+                          : () async {
+                            final newNameText = controller.text.trim();
+                            if (newNameText.isEmpty) {
+                              setState(() {
+                                errorMessage = 'Admin name cannot be empty.';
+                              });
+                              return;
+                            }
+                            if (newNameText == (_adminName ?? 'Admin')) {
+                              Navigator.pop(context); // No change needed
+                              return;
+                            }
+
+                            // Start loading
+                            setState(() {
+                              isLoading = true;
+                              errorMessage = null;
+                            });
+
+                            try {
+                              final user = FirebaseAuth.instance.currentUser;
+                              if (user != null) {
+                                final oldName = _adminName ?? 'Admin';
+                                await FirebaseFirestore.instance
+                                    .collection('admins')
+                                    .doc(user.uid)
+                                    .update({'adminName': newNameText});
+
+                                // Log admin profile update (with error handling)
+                                try {
+                                  await FirebaseFirestore.instance
+                                      .collection('activities')
+                                      .add({
+                                        'action':
+                                            'Admin name updated from "$oldName" to "$newNameText"',
+                                        'user': newNameText,
+                                        'type': 'profile_update',
+                                        'color': Colors.purple.value,
+                                        'icon': Icons.person_outline.codePoint,
+                                        'timestamp':
+                                            FieldValue.serverTimestamp(),
+                                      });
+                                } catch (e) {
+                                  print(
+                                    'Failed to log profile update activity: $e',
+                                  );
+                                }
+
+                                Navigator.pop(context, newNameText);
+                              } else {
+                                setState(() {
+                                  isLoading = false;
+                                  errorMessage = 'User not authenticated.';
+                                });
+                              }
+                            } catch (e) {
+                              setState(() {
+                                isLoading = false;
+                                errorMessage =
+                                    'Failed to update name. Please try again.';
+                              });
+                            }
+                          },
+                  child:
+                      isLoading
+                          ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                          : const Text('Save'),
+                ),
+              ],
+            );
+          },
         );
-        return;
-      }
-      // Create a document compatible with Firebase Trigger Email extension
-      await FirebaseFirestore.instance.collection('mail').add({
-        'to': [adminEmail],
-        'message': {
-          'subject': 'Test notification from Admin Web',
-          'text': 'This is a test email to confirm notifications are working.',
-          'html':
-              '<p>This is a test email to confirm notifications are working.</p><p>You can disable these in Settings → Notification Settings.</p>',
-        },
-      });
+      },
+    );
+    if (newName != null && newName.isNotEmpty) {
+      setState(() => _adminName = newName);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Test email queued. Check your inbox.'),
+          content: Text('Admin name updated!'),
           backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to send test email: $e'),
-          backgroundColor: Colors.red,
         ),
       );
     }
   }
 
-  Future<void> _editAdminName() async {
-    final controller = TextEditingController(text: _adminName ?? 'Admin');
-    final newName = await showDialog<String>(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('Edit Admin Name'),
-            content: TextField(
-              controller: controller,
-              decoration: const InputDecoration(labelText: 'Admin Name'),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, controller.text.trim()),
-                child: const Text('Save'),
-              ),
-            ],
-          ),
-    );
-    if (newName != null && newName.isNotEmpty) {
-      try {
-        final user = FirebaseAuth.instance.currentUser;
-        if (user != null) {
-          await FirebaseFirestore.instance
-              .collection('admins')
-              .doc(user.uid)
-              .update({'adminName': newName});
-          setState(() => _adminName = newName);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Admin name updated!'),
-              backgroundColor: Colors.green,
-            ),
-          );
+  // Refresh admin data from Firestore
+  Future<void> _refreshAdminData() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        // Reload user data to get updated email
+        await user.reload();
+        final updatedUser = FirebaseAuth.instance.currentUser;
+
+        // Get admin data from Firestore
+        final adminDoc =
+            await FirebaseFirestore.instance
+                .collection('admins')
+                .doc(user.uid)
+                .get();
+
+        if (adminDoc.exists && mounted) {
+          final data = adminDoc.data() as Map<String, dynamic>;
+          setState(() {
+            _adminName = data['adminName'] ?? 'Admin';
+            _email = updatedUser?.email ?? data['email'];
+            _emailNotifications = data['notificationPrefs']?['email'] ?? true;
+          });
         }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to update name: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
       }
+    } catch (e) {
+      print('Failed to refresh admin data: $e');
     }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // Load admin data asynchronously
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshAdminData();
+    });
   }
 
   @override
@@ -203,6 +328,20 @@ class _SettingsState extends State<Settings> {
                   leading: const Icon(Icons.email),
                   title: const Text('Edit Email'),
                   subtitle: Text(_email ?? 'admin@example.com'),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.refresh),
+                    tooltip: 'Refresh email status',
+                    onPressed: () async {
+                      await _refreshAdminData();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Email status refreshed'),
+                          backgroundColor: Colors.green,
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                  ),
                   onTap: () async {
                     final controller = TextEditingController(
                       text: _email ?? 'admin@example.com',
@@ -241,32 +380,75 @@ class _SettingsState extends State<Settings> {
                       try {
                         final user = FirebaseAuth.instance.currentUser;
                         if (user != null) {
-                          await user.updateEmail(newEmail);
-                          await FirebaseFirestore.instance
-                              .collection('admins')
-                              .doc(user.uid)
-                              .update({'email': newEmail});
-                          setState(() => _email = newEmail);
+                          // Use verifyBeforeUpdateEmail instead of updateEmail
+                          // This sends a verification email to the new address first
+                          await user.verifyBeforeUpdateEmail(newEmail);
+
+                          // Show success message explaining the verification process
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Email updated!'),
-                              backgroundColor: Colors.green,
+                            SnackBar(
+                              content: Text(
+                                'Verification email sent to $newEmail. Please check your inbox and click the link to complete the email change.',
+                              ),
+                              backgroundColor: Colors.blue,
+                              duration: const Duration(seconds: 6),
                             ),
                           );
+
+                          // Log email change attempt (with error handling)
+                          try {
+                            await FirebaseFirestore.instance
+                                .collection('activities')
+                                .add({
+                                  'action':
+                                      'Email change verification sent to "$newEmail"',
+                                  'user': _adminName ?? 'Admin',
+                                  'type': 'profile_update',
+                                  'color': Colors.purple.value,
+                                  'icon': Icons.email.codePoint,
+                                  'timestamp': FieldValue.serverTimestamp(),
+                                });
+                          } catch (e) {
+                            print('Failed to log email change activity: $e');
+                          }
+
+                          // Note: We don't update the local email state here since the change
+                          // isn't complete until the user clicks the verification link
                         }
                       } on FirebaseAuthException catch (e) {
+                        String errorMessage =
+                            'Failed to send verification email.';
+                        switch (e.code) {
+                          case 'invalid-email':
+                            errorMessage =
+                                'Please enter a valid email address.';
+                            break;
+                          case 'email-already-in-use':
+                            errorMessage =
+                                'This email is already in use by another account.';
+                            break;
+                          case 'requires-recent-login':
+                            errorMessage =
+                                'Please log out and log back in, then try again.';
+                            break;
+                          default:
+                            errorMessage =
+                                e.message ??
+                                'Failed to send verification email.';
+                        }
+
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text(
-                              'Failed to update email: ${e.message}',
-                            ),
+                            content: Text(errorMessage),
                             backgroundColor: Colors.red,
                           ),
                         );
                       } catch (e) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text('Failed to update email: $e'),
+                            content: Text(
+                              'Failed to send verification email: $e',
+                            ),
                             backgroundColor: Colors.red,
                           ),
                         );
@@ -300,6 +482,10 @@ class _SettingsState extends State<Settings> {
                             final confirmPasswordController =
                                 TextEditingController();
                             String? errorMessage;
+                            bool isLoading = false;
+                            bool showCurrentPassword = false;
+                            bool showNewPassword = false;
+                            bool showConfirmPassword = false;
                             final result = await showDialog<bool>(
                               context: context,
                               barrierDismissible: false,
@@ -314,26 +500,65 @@ class _SettingsState extends State<Settings> {
                                           TextField(
                                             controller:
                                                 currentPasswordController,
-                                            obscureText: true,
-                                            decoration: const InputDecoration(
+                                            obscureText: !showCurrentPassword,
+                                            decoration: InputDecoration(
                                               labelText: 'Current Password',
+                                              suffixIcon: IconButton(
+                                                icon: Icon(
+                                                  showCurrentPassword
+                                                      ? Icons.visibility_off
+                                                      : Icons.visibility,
+                                                ),
+                                                onPressed: () {
+                                                  setState(() {
+                                                    showCurrentPassword =
+                                                        !showCurrentPassword;
+                                                  });
+                                                },
+                                              ),
                                             ),
                                           ),
                                           const SizedBox(height: 12),
                                           TextField(
                                             controller: newPasswordController,
-                                            obscureText: true,
-                                            decoration: const InputDecoration(
+                                            obscureText: !showNewPassword,
+                                            decoration: InputDecoration(
                                               labelText: 'New Password',
+                                              suffixIcon: IconButton(
+                                                icon: Icon(
+                                                  showNewPassword
+                                                      ? Icons.visibility_off
+                                                      : Icons.visibility,
+                                                ),
+                                                onPressed: () {
+                                                  setState(() {
+                                                    showNewPassword =
+                                                        !showNewPassword;
+                                                  });
+                                                },
+                                              ),
                                             ),
                                           ),
                                           const SizedBox(height: 12),
                                           TextField(
                                             controller:
                                                 confirmPasswordController,
-                                            obscureText: true,
-                                            decoration: const InputDecoration(
+                                            obscureText: !showConfirmPassword,
+                                            decoration: InputDecoration(
                                               labelText: 'Confirm New Password',
+                                              suffixIcon: IconButton(
+                                                icon: Icon(
+                                                  showConfirmPassword
+                                                      ? Icons.visibility_off
+                                                      : Icons.visibility,
+                                                ),
+                                                onPressed: () {
+                                                  setState(() {
+                                                    showConfirmPassword =
+                                                        !showConfirmPassword;
+                                                  });
+                                                },
+                                              ),
                                             ),
                                           ),
                                           if (errorMessage != null) ...[
@@ -346,94 +571,189 @@ class _SettingsState extends State<Settings> {
                                               ),
                                             ),
                                           ],
+                                          if (isLoading) ...[
+                                            const SizedBox(height: 16),
+                                            const Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                SizedBox(
+                                                  width: 20,
+                                                  height: 20,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                      ),
+                                                ),
+                                                SizedBox(width: 12),
+                                                Text('Changing password...'),
+                                              ],
+                                            ),
+                                          ],
                                         ],
                                       ),
                                       actions: [
                                         TextButton(
                                           onPressed:
-                                              () =>
-                                                  Navigator.pop(context, false),
+                                              isLoading
+                                                  ? null
+                                                  : () => Navigator.pop(
+                                                    context,
+                                                    false,
+                                                  ),
                                           child: const Text('Cancel'),
                                         ),
                                         ElevatedButton(
-                                          onPressed: () async {
-                                            final current =
-                                                currentPasswordController.text
-                                                    .trim();
-                                            final newPass =
-                                                newPasswordController.text
-                                                    .trim();
-                                            final confirm =
-                                                confirmPasswordController.text
-                                                    .trim();
-                                            if (current.isEmpty ||
-                                                newPass.isEmpty ||
-                                                confirm.isEmpty) {
-                                              setState(
-                                                () =>
-                                                    errorMessage =
-                                                        'All fields are required.',
-                                              );
-                                              return;
-                                            }
-                                            if (newPass != confirm) {
-                                              setState(
-                                                () =>
-                                                    errorMessage =
-                                                        'New passwords do not match.',
-                                              );
-                                              return;
-                                            }
-                                            try {
-                                              final user =
-                                                  FirebaseAuth
-                                                      .instance
-                                                      .currentUser;
-                                              if (user != null &&
-                                                  user.email != null) {
-                                                final cred =
-                                                    EmailAuthProvider.credential(
-                                                      email: user.email!,
-                                                      password: current,
-                                                    );
-                                                await user
-                                                    .reauthenticateWithCredential(
-                                                      cred,
-                                                    );
-                                                await user.updatePassword(
-                                                  newPass,
-                                                );
-                                                Navigator.pop(context, true);
-                                                ScaffoldMessenger.of(
-                                                  context,
-                                                ).showSnackBar(
-                                                  const SnackBar(
-                                                    content: Text(
-                                                      'Password changed successfully!',
+                                          onPressed:
+                                              isLoading
+                                                  ? null
+                                                  : () async {
+                                                    final current =
+                                                        currentPasswordController
+                                                            .text
+                                                            .trim();
+                                                    final newPass =
+                                                        newPasswordController
+                                                            .text
+                                                            .trim();
+                                                    final confirm =
+                                                        confirmPasswordController
+                                                            .text
+                                                            .trim();
+                                                    if (current.isEmpty ||
+                                                        newPass.isEmpty ||
+                                                        confirm.isEmpty) {
+                                                      setState(
+                                                        () =>
+                                                            errorMessage =
+                                                                'All fields are required.',
+                                                      );
+                                                      return;
+                                                    }
+                                                    if (newPass != confirm) {
+                                                      setState(
+                                                        () =>
+                                                            errorMessage =
+                                                                'New passwords do not match.',
+                                                      );
+                                                      return;
+                                                    }
+                                                    if (newPass.length < 6) {
+                                                      setState(
+                                                        () =>
+                                                            errorMessage =
+                                                                'New password must be at least 6 characters long.',
+                                                      );
+                                                      return;
+                                                    }
+
+                                                    // Start loading
+                                                    setState(() {
+                                                      isLoading = true;
+                                                      errorMessage = null;
+                                                    });
+
+                                                    try {
+                                                      final user =
+                                                          FirebaseAuth
+                                                              .instance
+                                                              .currentUser;
+                                                      if (user != null &&
+                                                          user.email != null) {
+                                                        final cred =
+                                                            EmailAuthProvider.credential(
+                                                              email:
+                                                                  user.email!,
+                                                              password: current,
+                                                            );
+                                                        await user
+                                                            .reauthenticateWithCredential(
+                                                              cred,
+                                                            );
+                                                        await user
+                                                            .updatePassword(
+                                                              newPass,
+                                                            );
+
+                                                        // Log password change (with error handling)
+                                                        try {
+                                                          await FirebaseFirestore
+                                                              .instance
+                                                              .collection(
+                                                                'activities',
+                                                              )
+                                                              .add({
+                                                                'action':
+                                                                    'Admin password changed',
+                                                                'user':
+                                                                    _adminName ??
+                                                                    'Admin',
+                                                                'type':
+                                                                    'password_change',
+                                                                'color':
+                                                                    Colors
+                                                                        .amber
+                                                                        .value,
+                                                                'icon':
+                                                                    Icons
+                                                                        .security
+                                                                        .codePoint,
+                                                                'timestamp':
+                                                                    FieldValue.serverTimestamp(),
+                                                              });
+                                                        } catch (e) {
+                                                          print(
+                                                            'Failed to log password change activity: $e',
+                                                          );
+                                                        }
+
+                                                        Navigator.pop(
+                                                          context,
+                                                          true,
+                                                        );
+                                                        ScaffoldMessenger.of(
+                                                          context,
+                                                        ).showSnackBar(
+                                                          const SnackBar(
+                                                            content: Text(
+                                                              'Password changed successfully!',
+                                                            ),
+                                                            backgroundColor:
+                                                                Colors.green,
+                                                          ),
+                                                        );
+                                                      }
+                                                    } on FirebaseAuthException catch (
+                                                      e
+                                                    ) {
+                                                      setState(() {
+                                                        isLoading = false;
+                                                        errorMessage =
+                                                            e.message ??
+                                                            'Failed to change password.';
+                                                      });
+                                                    } catch (e) {
+                                                      setState(() {
+                                                        isLoading = false;
+                                                        errorMessage =
+                                                            'Failed to change password.';
+                                                      });
+                                                    }
+                                                  },
+                                          child:
+                                              isLoading
+                                                  ? const SizedBox(
+                                                    width: 16,
+                                                    height: 16,
+                                                    child: CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      valueColor:
+                                                          AlwaysStoppedAnimation<
+                                                            Color
+                                                          >(Colors.white),
                                                     ),
-                                                    backgroundColor:
-                                                        Colors.green,
-                                                  ),
-                                                );
-                                              }
-                                            } on FirebaseAuthException catch (
-                                              e
-                                            ) {
-                                              setState(
-                                                () =>
-                                                    errorMessage =
-                                                        e.message ??
-                                                        'Failed to change password.',
-                                              );
-                                            } catch (e) {
-                                              setState(
-                                                () =>
-                                                    errorMessage =
-                                                        'Failed to change password.',
-                                              );
-                                            }
-                                          },
-                                          child: const Text('Save'),
+                                                  )
+                                                  : const Text('Save'),
                                         ),
                                       ],
                                     );
@@ -505,12 +825,6 @@ class _SettingsState extends State<Settings> {
                     );
                   },
                 ),
-                ListTile(
-                  leading: const Icon(Icons.send),
-                  title: const Text('Send test email'),
-                  subtitle: const Text('Verify email notification setup'),
-                  onTap: _sendTestEmail,
-                ),
               ],
             ),
           ),
@@ -576,6 +890,23 @@ class _SettingsState extends State<Settings> {
                                   ),
                             );
                             if (shouldLogout == true) {
+                              // Log admin logout before signing out
+                              try {
+                                await FirebaseFirestore.instance
+                                    .collection('activities')
+                                    .add({
+                                      'action': 'Admin logged out',
+                                      'user': _adminName ?? 'Admin',
+                                      'type': 'logout',
+                                      'color': Colors.orange.value,
+                                      'icon': Icons.logout.codePoint,
+                                      'timestamp': FieldValue.serverTimestamp(),
+                                    });
+                              } catch (e) {
+                                // Continue with logout even if logging fails
+                                print('Failed to log logout activity: $e');
+                              }
+
                               await FirebaseAuth.instance.signOut();
                               Navigator.of(context).pushAndRemoveUntil(
                                 MaterialPageRoute(

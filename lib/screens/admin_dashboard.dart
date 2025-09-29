@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import '../models/admin_user.dart';
 import 'user_management.dart';
 // import 'expert_management.dart';
-import 'reports.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
-import 'reports.dart' show DiseaseDistributionChart;
+import 'package:firebase_auth/firebase_auth.dart';
+import 'reports.dart';
 import '../models/user_store.dart';
 import '../shared/total_users_card.dart';
 import '../shared/pending_approvals_card.dart';
@@ -79,6 +79,9 @@ class _AdminDashboardState extends State<AdminDashboard>
   // Add selected time range for disease distribution
   String _selectedTimeRange = 'Last 7 Days';
 
+  // Dynamic admin name that updates from Firestore
+  String _currentAdminName = '';
+
   // Helper function to format timestamp
   String _formatTimestamp(cf.Timestamp timestamp) {
     final now = DateTime.now();
@@ -143,6 +146,22 @@ class _AdminDashboardState extends State<AdminDashboard>
         return Icons.assignment_turned_in;
       case 'export':
         return Icons.picture_as_pdf;
+      case 'login':
+        return Icons.login;
+      case 'logout':
+        return Icons.logout;
+      case 'failed_login':
+        return Icons.error;
+      case 'settings_change':
+        return Icons.settings;
+      case 'profile_update':
+        return Icons.person_outline;
+      case 'password_change':
+        return Icons.security;
+      case 'report_change':
+        return Icons.date_range;
+      case 'dashboard_change':
+        return Icons.dashboard;
     }
     final dynamic iconCode = data['icon'];
     if (iconCode is int) return _getIconFromCode(iconCode);
@@ -162,6 +181,22 @@ class _AdminDashboardState extends State<AdminDashboard>
         return Colors.red;
       case 'pending':
         return Colors.amber;
+      case 'login':
+        return Colors.green;
+      case 'logout':
+        return Colors.orange;
+      case 'failed_login':
+        return Colors.red;
+      case 'settings_change':
+        return Colors.blue;
+      case 'profile_update':
+        return Colors.purple;
+      case 'password_change':
+        return Colors.amber;
+      case 'report_change':
+        return Colors.indigo;
+      case 'dashboard_change':
+        return Colors.teal;
       default:
         return Colors.grey;
     }
@@ -219,7 +254,33 @@ class _AdminDashboardState extends State<AdminDashboard>
   @override
   void initState() {
     super.initState();
+    _currentAdminName =
+        widget.adminUser.username; // Initialize with current name
     _loadData();
+    _listenToAdminNameChanges(); // Listen for real-time updates
+  }
+
+  // Listen for real-time admin name changes
+  void _listenToAdminNameChanges() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      cf.FirebaseFirestore.instance
+          .collection('admins')
+          .doc(user.uid)
+          .snapshots()
+          .listen((snapshot) {
+            if (snapshot.exists && mounted) {
+              final data = snapshot.data() as Map<String, dynamic>?;
+              final newAdminName =
+                  data?['adminName'] ?? widget.adminUser.username;
+              if (newAdminName != _currentAdminName) {
+                setState(() {
+                  _currentAdminName = newAdminName;
+                });
+              }
+            }
+          });
+    }
   }
 
   Future<void> _loadData() async {
@@ -316,7 +377,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Welcome, ${widget.adminUser.username}',
+                      'Welcome, ${_currentAdminName.isNotEmpty ? _currentAdminName : widget.adminUser.username}',
                       style: const TextStyle(
                         fontSize: 26,
                         fontWeight: FontWeight.bold,
@@ -434,7 +495,27 @@ class _AdminDashboardState extends State<AdminDashboard>
             DiseaseDistributionChart(
               diseaseStats: _diseaseStats,
               selectedTimeRange: _selectedTimeRange,
-              onTimeRangeChanged: (String newTimeRange) {
+              onTimeRangeChanged: (String newTimeRange) async {
+                // Log dashboard time range change
+                try {
+                  await cf.FirebaseFirestore.instance.collection('activities').add({
+                    'action':
+                        'Dashboard time range changed to ${_formatTimeRangeForActivity(newTimeRange)}',
+                    'user':
+                        _currentAdminName.isNotEmpty
+                            ? _currentAdminName
+                            : (widget.adminUser.username.isNotEmpty
+                                ? widget.adminUser.username
+                                : 'Admin'),
+                    'type': 'dashboard_change',
+                    'color': Colors.teal.value,
+                    'icon': Icons.dashboard.codePoint,
+                    'timestamp': cf.FieldValue.serverTimestamp(),
+                  });
+                } catch (e) {
+                  print('Failed to log dashboard time range change: $e');
+                }
+
                 setState(() {
                   _selectedTimeRange = newTimeRange;
                 });
@@ -579,6 +660,42 @@ class _AdminDashboardState extends State<AdminDashboard>
       default:
         return _buildDashboard();
     }
+  }
+
+  String _formatTimeRangeForActivity(String range) {
+    if (range.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        try {
+          final s = DateTime.parse(match.group(1)!);
+          final e = DateTime.parse(match.group(2)!);
+          String fmt(DateTime d) {
+            const months = [
+              '',
+              'Jan',
+              'Feb',
+              'Mar',
+              'Apr',
+              'May',
+              'Jun',
+              'Jul',
+              'Aug',
+              'Sep',
+              'Oct',
+              'Nov',
+              'Dec',
+            ];
+            return '${months[d.month]} ${d.day}, ${d.year}';
+          }
+
+          return '"${fmt(s)} to ${fmt(e)}"';
+        } catch (_) {}
+      }
+    }
+    return '"$range"';
   }
 
   @override
