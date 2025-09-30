@@ -66,7 +66,7 @@ class _AdminLoginState extends State<AdminLogin> {
             lastLogin: DateTime.now(),
           );
 
-          // Log successful admin login
+          // Log successful admin login BEFORE navigation
           await FirebaseFirestore.instance.collection('activities').add({
             'action': 'Admin logged in',
             'user':
@@ -84,49 +84,45 @@ class _AdminLoginState extends State<AdminLogin> {
             ),
           );
         } else {
-          // Log failed login attempt - not registered as admin
-          await FirebaseFirestore.instance.collection('activities').add({
-            'action': 'Failed login attempt - Not registered as admin',
-            'user': _emailController.text.trim(),
-            'type': 'failed_login',
-            'color': Colors.red.value,
-            'icon': Icons.block.codePoint,
-            'timestamp': FieldValue.serverTimestamp(),
-          });
-
           setState(() {
             _errorMessage = 'You are not registered as an admin.';
             _isLoading = false;
           });
         }
       } on FirebaseAuthException catch (e) {
-        // Log failed login attempt - authentication error
-        await FirebaseFirestore.instance.collection('activities').add({
-          'action': 'Failed login attempt - ${e.code}',
-          'user': _emailController.text.trim(),
-          'type': 'failed_login',
-          'color': Colors.red.value,
-          'icon': Icons.error.codePoint,
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-
+        String errorMsg;
+        switch (e.code) {
+          case 'user-not-found':
+            errorMsg = 'No account found with this email address.';
+            break;
+          case 'wrong-password':
+            errorMsg = 'Incorrect password. Please try again.';
+            break;
+          case 'invalid-email':
+            errorMsg = 'Please enter a valid email address.';
+            break;
+          case 'user-disabled':
+            errorMsg = 'This account has been disabled.';
+            break;
+          case 'too-many-requests':
+            errorMsg = 'Too many failed attempts. Please try again later.';
+            break;
+          case 'invalid-credential':
+            errorMsg = 'Invalid email or password. Please check and try again.';
+            break;
+          case 'network-request-failed':
+            errorMsg = 'Network error. Please check your connection.';
+            break;
+          default:
+            errorMsg = e.message ?? 'Login failed. Please try again.';
+        }
         setState(() {
-          _errorMessage = e.message ?? 'Login failed.';
+          _errorMessage = errorMsg;
           _isLoading = false;
         });
       } catch (e) {
-        // Log failed login attempt - general error
-        await FirebaseFirestore.instance.collection('activities').add({
-          'action': 'Failed login attempt - Unknown error',
-          'user': _emailController.text.trim(),
-          'type': 'failed_login',
-          'color': Colors.red.value,
-          'icon': Icons.error.codePoint,
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-
         setState(() {
-          _errorMessage = 'Login failed.';
+          _errorMessage = 'An unexpected error occurred. Please try again.';
           _isLoading = false;
         });
       }

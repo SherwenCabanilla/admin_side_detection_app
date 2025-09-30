@@ -68,6 +68,19 @@ class _ReportsState extends State<Reports> {
   }
 
   String _displayRangeLabel(String range) {
+    if (range.startsWith('Monthly (')) {
+      final regex = RegExp(
+        r'Monthly \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        try {
+          final s = DateTime.parse(match.group(1)!);
+          return '${_fullMonthName(s.month)} ${s.year}';
+        } catch (_) {}
+      }
+      return range;
+    }
     if (range.startsWith('Custom (')) {
       final regex = RegExp(
         r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
@@ -85,6 +98,25 @@ class _ReportsState extends State<Reports> {
       return range.substring(8, range.length - 1);
     }
     return range;
+  }
+
+  String _fullMonthName(int m) {
+    const names = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    if (m < 1 || m > 12) return '';
+    return names[m - 1];
   }
 
   String _formatTimeRangeForActivity(String range) {
@@ -164,9 +196,10 @@ class _ReportsState extends State<Reports> {
     final DateTime now = DateTime.now();
     DateTime? startInclusive;
     DateTime? endExclusive;
-    if (_selectedTimeRange.startsWith('Custom (')) {
+    if (_selectedTimeRange.startsWith('Custom (') ||
+        _selectedTimeRange.startsWith('Monthly (')) {
       final regex = RegExp(
-        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
       );
       final match = regex.firstMatch(_selectedTimeRange);
       if (match != null) {
@@ -453,9 +486,10 @@ class _ReportsState extends State<Reports> {
       final DateTime now = DateTime.now();
       DateTime? startInclusive;
       DateTime? endExclusive;
-      if (_selectedTimeRange.startsWith('Custom (')) {
+      if (_selectedTimeRange.startsWith('Custom (') ||
+          _selectedTimeRange.startsWith('Monthly (')) {
         final regex = RegExp(
-          r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+          r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
         );
         final match = regex.firstMatch(_selectedTimeRange);
         if (match != null) {
@@ -633,9 +667,10 @@ class _ReportsState extends State<Reports> {
       final DateTime now = DateTime.now();
       DateTime? startInclusive;
       DateTime? endExclusive;
-      if (_selectedTimeRange.startsWith('Custom (')) {
+      if (_selectedTimeRange.startsWith('Custom (') ||
+          _selectedTimeRange.startsWith('Monthly (')) {
         final regex = RegExp(
-          r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+          r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
         );
         final match = regex.firstMatch(_selectedTimeRange);
         if (match != null) {
@@ -707,7 +742,8 @@ class _ReportsState extends State<Reports> {
           final bool inWindow;
           if (_selectedTimeRange == '1 Day') {
             inWindow = reviewed.isAfter(startInclusive);
-          } else if (_selectedTimeRange.startsWith('Custom (')) {
+          } else if (_selectedTimeRange.startsWith('Custom (') ||
+              _selectedTimeRange.startsWith('Monthly (')) {
             inWindow =
                 !reviewed.isBefore(startInclusive) &&
                 reviewed.isBefore(endExclusive);
@@ -833,11 +869,15 @@ class _ReportsState extends State<Reports> {
                         value: _selectedTimeRange,
                         underline: const SizedBox.shrink(),
                         items:
-                            (<String>['Last 7 Days', 'Custom…']..addAll(
-                                  _selectedTimeRange.startsWith('Custom (')
-                                      ? <String>[_selectedTimeRange]
-                                      : const <String>[],
-                                ))
+                            (<String>['Last 7 Days', 'Monthly…', 'Custom…']
+                                  ..addAll(
+                                    _selectedTimeRange.startsWith('Custom (') ||
+                                            _selectedTimeRange.startsWith(
+                                              'Monthly (',
+                                            )
+                                        ? <String>[_selectedTimeRange]
+                                        : const <String>[],
+                                  ))
                                 .map(
                                   (range) => DropdownMenuItem(
                                     value: range,
@@ -850,7 +890,33 @@ class _ReportsState extends State<Reports> {
                                 .toList(),
                         onChanged: (value) async {
                           if (value == null) return;
-                          if (value == 'Custom…') {
+                          if (value == 'Monthly…') {
+                            final now = DateTime.now();
+                            final picked = await _showMonthYearPicker(
+                              context: context,
+                              initialDate: now,
+                              firstDate: DateTime(2020),
+                              lastDate: now,
+                            );
+                            if (picked != null) {
+                              final firstDay = DateTime(
+                                picked.year,
+                                picked.month,
+                                1,
+                              );
+                              final lastDay = DateTime(
+                                picked.year,
+                                picked.month + 1,
+                                0,
+                              );
+                              final start =
+                                  '${firstDay.year}-${firstDay.month.toString().padLeft(2, '0')}-${firstDay.day.toString().padLeft(2, '0')}';
+                              final end =
+                                  '${lastDay.year}-${lastDay.month.toString().padLeft(2, '0')}-${lastDay.day.toString().padLeft(2, '0')}';
+                              final label = 'Monthly ($start to $end)';
+                              await _onTimeRangeChanged(label);
+                            }
+                          } else if (value == 'Custom…') {
                             final picked = await pickDateRangeWithSf(
                               context,
                               initial: DateTimeRange(
@@ -1223,9 +1289,10 @@ class _ReportsState extends State<Reports> {
                     final DateTime now = DateTime.now();
                     DateTime? startInclusive;
                     DateTime? endExclusive;
-                    if (_selectedTimeRange.startsWith('Custom (')) {
+                    if (_selectedTimeRange.startsWith('Custom (') ||
+                        _selectedTimeRange.startsWith('Monthly (')) {
                       final regex = RegExp(
-                        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+                        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
                       );
                       final match = regex.firstMatch(_selectedTimeRange);
                       if (match != null) {
@@ -1412,9 +1479,10 @@ class _ReportsState extends State<Reports> {
                     final DateTime now = DateTime.now();
                     DateTime? startInclusive;
                     DateTime? endExclusive;
-                    if (_selectedTimeRange.startsWith('Custom (')) {
+                    if (_selectedTimeRange.startsWith('Custom (') ||
+                        _selectedTimeRange.startsWith('Monthly (')) {
                       final regex = RegExp(
-                        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+                        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
                       );
                       final match = regex.firstMatch(_selectedTimeRange);
                       if (match != null) {
@@ -1719,6 +1787,180 @@ class _ReportsState extends State<Reports> {
       });
     } catch (_) {}
   }
+
+  Future<DateTime?> _showMonthYearPicker({
+    required BuildContext context,
+    required DateTime initialDate,
+    required DateTime firstDate,
+    required DateTime lastDate,
+  }) async {
+    DateTime selectedDate = initialDate;
+
+    return await showDialog<DateTime>(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Select Month and Year'),
+              content: SizedBox(
+                width: 300,
+                height: 400,
+                child: Column(
+                  children: [
+                    // Year selector
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back_ios),
+                          onPressed:
+                              selectedDate.year > firstDate.year
+                                  ? () {
+                                    setState(() {
+                                      selectedDate = DateTime(
+                                        selectedDate.year - 1,
+                                        selectedDate.month,
+                                      );
+                                    });
+                                  }
+                                  : null,
+                        ),
+                        Text(
+                          '${selectedDate.year}',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.arrow_forward_ios),
+                          onPressed:
+                              selectedDate.year < lastDate.year
+                                  ? () {
+                                    setState(() {
+                                      selectedDate = DateTime(
+                                        selectedDate.year + 1,
+                                        selectedDate.month,
+                                      );
+                                    });
+                                  }
+                                  : null,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    // Month grid
+                    Expanded(
+                      child: GridView.builder(
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              crossAxisSpacing: 8,
+                              mainAxisSpacing: 8,
+                              childAspectRatio: 2,
+                            ),
+                        itemCount: 12,
+                        itemBuilder: (context, index) {
+                          final month = index + 1;
+                          final isSelected = selectedDate.month == month;
+                          final monthDate = DateTime(selectedDate.year, month);
+                          final isDisabled =
+                              monthDate.isBefore(
+                                DateTime(firstDate.year, firstDate.month),
+                              ) ||
+                              monthDate.isAfter(
+                                DateTime(lastDate.year, lastDate.month),
+                              );
+
+                          const monthNames = [
+                            'Jan',
+                            'Feb',
+                            'Mar',
+                            'Apr',
+                            'May',
+                            'Jun',
+                            'Jul',
+                            'Aug',
+                            'Sep',
+                            'Oct',
+                            'Nov',
+                            'Dec',
+                          ];
+
+                          return InkWell(
+                            onTap:
+                                isDisabled
+                                    ? null
+                                    : () {
+                                      setState(() {
+                                        selectedDate = DateTime(
+                                          selectedDate.year,
+                                          month,
+                                        );
+                                      });
+                                    },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color:
+                                    isSelected
+                                        ? const Color(0xFF2D7204)
+                                        : isDisabled
+                                        ? Colors.grey.shade200
+                                        : Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color:
+                                      isSelected
+                                          ? const Color(0xFF2D7204)
+                                          : Colors.grey.shade300,
+                                  width: isSelected ? 2 : 1,
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                monthNames[index],
+                                style: TextStyle(
+                                  color:
+                                      isDisabled
+                                          ? Colors.grey.shade400
+                                          : isSelected
+                                          ? Colors.white
+                                          : Colors.black87,
+                                  fontWeight:
+                                      isSelected
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, selectedDate),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2D7204),
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('OK'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
 }
 
 class AvgResponseTrendChart extends StatelessWidget {
@@ -1753,6 +1995,33 @@ class AvgResponseTrendChart extends StatelessWidget {
     }
 
     String _displayRangeLabel(String range) {
+      if (range.startsWith('Monthly (')) {
+        final regex = RegExp(
+          r'Monthly \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        );
+        final match = regex.firstMatch(range);
+        if (match != null) {
+          try {
+            final s = DateTime.parse(match.group(1)!);
+            const months = [
+              'January',
+              'February',
+              'March',
+              'April',
+              'May',
+              'June',
+              'July',
+              'August',
+              'September',
+              'October',
+              'November',
+              'December',
+            ];
+            return '${months[s.month - 1]} ${s.year}';
+          } catch (_) {}
+        }
+        return range;
+      }
       if (range.startsWith('Custom (')) {
         final regex = RegExp(
           r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
@@ -2384,6 +2653,33 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   }
 
   String _displayRangeLabel(String range) {
+    if (range.startsWith('Monthly (')) {
+      final regex = RegExp(
+        r'Monthly \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        try {
+          final s = DateTime.parse(match.group(1)!);
+          const months = [
+            'January',
+            'February',
+            'March',
+            'April',
+            'May',
+            'June',
+            'July',
+            'August',
+            'September',
+            'October',
+            'November',
+            'December',
+          ];
+          return '${months[s.month - 1]} ${s.year}';
+        } catch (_) {}
+      }
+      return range;
+    }
     if (range.startsWith('Custom (')) {
       final regex = RegExp(
         r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
@@ -2405,9 +2701,13 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
 
   DateTimeRange _resolveDateRange(String range) {
     final now = DateTime.now();
-    if (range.startsWith('Custom (')) {
+    if (range.startsWith('Custom (') || range.startsWith('Monthly (')) {
       try {
-        final inner = range.substring('Custom ('.length, range.length - 1);
+        final prefixLength =
+            range.startsWith('Custom (')
+                ? 'Custom ('.length
+                : 'Monthly ('.length;
+        final inner = range.substring(prefixLength, range.length - 1);
         final parts = inner.split(' to ');
         if (parts.length == 2) {
           final start = DateTime.parse(parts[0]);
@@ -3764,6 +4064,33 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
   }
 
   String _displayRangeLabel(String range) {
+    if (range.startsWith('Monthly (')) {
+      final regex = RegExp(
+        r'Monthly \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        try {
+          final s = DateTime.parse(match.group(1)!);
+          const months = [
+            'January',
+            'February',
+            'March',
+            'April',
+            'May',
+            'June',
+            'July',
+            'August',
+            'September',
+            'October',
+            'November',
+            'December',
+          ];
+          return '${months[s.month - 1]} ${s.year}';
+        } catch (_) {}
+      }
+      return range;
+    }
     if (range.startsWith('Custom (')) {
       final regex = RegExp(
         r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
@@ -3800,9 +4127,10 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
     final DateTime now = DateTime.now();
     DateTime? startInclusive;
     DateTime? endExclusive;
-    if (_selectedRange.startsWith('Custom (')) {
+    if (_selectedRange.startsWith('Custom (') ||
+        _selectedRange.startsWith('Monthly (')) {
       final regex = RegExp(
-        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
       );
       final match = regex.firstMatch(_selectedRange);
       if (match != null) {
@@ -3878,7 +4206,8 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       bool inWindow;
       if (_selectedRange == '1 Day') {
         inWindow = reviewed.isAfter(startInclusive);
-      } else if (_selectedRange.startsWith('Custom (')) {
+      } else if (_selectedRange.startsWith('Custom (') ||
+          _selectedRange.startsWith('Monthly (')) {
         inWindow =
             !reviewed.isBefore(startInclusive) &&
             reviewed.isBefore(endExclusive);
@@ -4291,6 +4620,11 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
       'desc': 'Reports from the last 12 months.',
     },
     {
+      'label': 'Monthly…',
+      'icon': Icons.calendar_month_outlined,
+      'desc': 'Pick a specific month for the report.',
+    },
+    {
       'label': 'Custom…',
       'icon': Icons.date_range_outlined,
       'desc': 'Pick a date range for the report.',
@@ -4299,6 +4633,61 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
 
   Map<String, dynamic> get _selectedRangeData =>
       _ranges.firstWhere((r) => r['label'] == _selectedRange);
+
+  String _formatMonthYear(DateTime date) {
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    return '${months[date.month - 1]} ${date.year}';
+  }
+
+  String _formatDateRange(DateTime start, DateTime end) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+
+    final startMonth = months[start.month - 1];
+    final endMonth = months[end.month - 1];
+    final startDay = start.day;
+    final endDay = end.day;
+    final startYear = start.year;
+    final endYear = end.year;
+
+    // Same month and year: "Aug 8 to 19, 2025"
+    if (start.month == end.month && start.year == end.year) {
+      return '$startMonth $startDay to $endDay, $startYear';
+    }
+    // Same year, different months: "Aug 8 to Sep 19, 2025"
+    else if (start.year == end.year) {
+      return '$startMonth $startDay to $endMonth $endDay, $startYear';
+    }
+    // Different years: "Dec 25, 2024 to Jan 5, 2025"
+    else {
+      return '$startMonth $startDay, $startYear to $endMonth $endDay, $endYear';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4337,6 +4726,7 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
                       .where(
                         (r) =>
                             r['label'] == 'Last 7 Days' ||
+                            r['label'] == 'Monthly…' ||
                             r['label'] == 'Custom…',
                       )
                       .map((range) {
@@ -4369,12 +4759,40 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
             ),
           ),
           const SizedBox(height: 16),
+          if (_selectedRange == 'Monthly…') ...[
+            OutlinedButton.icon(
+              icon: const Icon(Icons.calendar_month),
+              label: Text(
+                _customStart != null
+                    ? _formatMonthYear(_customStart!)
+                    : 'Pick month',
+              ),
+              onPressed: () async {
+                final now = DateTime.now();
+                final picked = await _showMonthYearPicker(
+                  context: context,
+                  initialDate: _customStart ?? now,
+                  firstDate: DateTime(2020),
+                  lastDate: now,
+                );
+                if (picked != null) {
+                  // Set to first and last day of the month
+                  final firstDay = DateTime(picked.year, picked.month, 1);
+                  final lastDay = DateTime(picked.year, picked.month + 1, 0);
+                  setState(() {
+                    _customStart = firstDay;
+                    _customEnd = lastDay;
+                  });
+                }
+              },
+            ),
+          ],
           if (_selectedRange == 'Custom…') ...[
             OutlinedButton.icon(
               icon: const Icon(Icons.date_range),
               label: Text(
                 _customStart != null && _customEnd != null
-                    ? '${_customStart!.toIso8601String().substring(0, 10)} to ${_customEnd!.toIso8601String().substring(0, 10)}'
+                    ? _formatDateRange(_customStart!, _customEnd!)
                     : 'Pick date range',
               ),
               onPressed: () async {
@@ -4435,7 +4853,7 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          'Includes: Disease Distribution, Response Times',
+                          'Includes: Disease Distribution, Healthy Trends, Weather Summary',
                           style: TextStyle(
                             fontSize: 13,
                             color: Colors.teal,
@@ -4465,7 +4883,14 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
           ),
           onPressed: () {
             String range = _selectedRange;
-            if (_selectedRange == 'Custom…') {
+            if (_selectedRange == 'Monthly…') {
+              if (_customStart == null || _customEnd == null) return;
+              final start = _customStart!;
+              final end = _customEnd!;
+              final startStr = start.toIso8601String().substring(0, 10);
+              final endStr = end.toIso8601String().substring(0, 10);
+              range = 'Custom ($startStr to $endStr)';
+            } else if (_selectedRange == 'Custom…') {
               if (_customStart == null || _customEnd == null) return;
               final start = _customStart!;
               final end = _customEnd!;
@@ -4477,6 +4902,180 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
           },
         ),
       ],
+    );
+  }
+
+  Future<DateTime?> _showMonthYearPicker({
+    required BuildContext context,
+    required DateTime initialDate,
+    required DateTime firstDate,
+    required DateTime lastDate,
+  }) async {
+    DateTime selectedDate = initialDate;
+
+    return await showDialog<DateTime>(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Select Month and Year'),
+              content: SizedBox(
+                width: 300,
+                height: 400,
+                child: Column(
+                  children: [
+                    // Year selector
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back_ios),
+                          onPressed:
+                              selectedDate.year > firstDate.year
+                                  ? () {
+                                    setState(() {
+                                      selectedDate = DateTime(
+                                        selectedDate.year - 1,
+                                        selectedDate.month,
+                                      );
+                                    });
+                                  }
+                                  : null,
+                        ),
+                        Text(
+                          '${selectedDate.year}',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.arrow_forward_ios),
+                          onPressed:
+                              selectedDate.year < lastDate.year
+                                  ? () {
+                                    setState(() {
+                                      selectedDate = DateTime(
+                                        selectedDate.year + 1,
+                                        selectedDate.month,
+                                      );
+                                    });
+                                  }
+                                  : null,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    // Month grid
+                    Expanded(
+                      child: GridView.builder(
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              crossAxisSpacing: 8,
+                              mainAxisSpacing: 8,
+                              childAspectRatio: 2,
+                            ),
+                        itemCount: 12,
+                        itemBuilder: (context, index) {
+                          final month = index + 1;
+                          final isSelected = selectedDate.month == month;
+                          final monthDate = DateTime(selectedDate.year, month);
+                          final isDisabled =
+                              monthDate.isBefore(
+                                DateTime(firstDate.year, firstDate.month),
+                              ) ||
+                              monthDate.isAfter(
+                                DateTime(lastDate.year, lastDate.month),
+                              );
+
+                          const monthNames = [
+                            'Jan',
+                            'Feb',
+                            'Mar',
+                            'Apr',
+                            'May',
+                            'Jun',
+                            'Jul',
+                            'Aug',
+                            'Sep',
+                            'Oct',
+                            'Nov',
+                            'Dec',
+                          ];
+
+                          return InkWell(
+                            onTap:
+                                isDisabled
+                                    ? null
+                                    : () {
+                                      setState(() {
+                                        selectedDate = DateTime(
+                                          selectedDate.year,
+                                          month,
+                                        );
+                                      });
+                                    },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color:
+                                    isSelected
+                                        ? const Color(0xFF2D7204)
+                                        : isDisabled
+                                        ? Colors.grey.shade200
+                                        : Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color:
+                                      isSelected
+                                          ? const Color(0xFF2D7204)
+                                          : Colors.grey.shade300,
+                                  width: isSelected ? 2 : 1,
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                monthNames[index],
+                                style: TextStyle(
+                                  color:
+                                      isDisabled
+                                          ? Colors.grey.shade400
+                                          : isSelected
+                                          ? Colors.white
+                                          : Colors.black87,
+                                  fontWeight:
+                                      isSelected
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, selectedDate),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2D7204),
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('OK'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

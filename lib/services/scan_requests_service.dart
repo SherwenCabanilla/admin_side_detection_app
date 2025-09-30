@@ -47,9 +47,10 @@ class ScanRequestsService {
       final DateTime now = DateTime.now();
       DateTime? startInclusive;
       DateTime? endExclusive;
-      if (timeRange.startsWith('Custom (')) {
+      if (timeRange.startsWith('Custom (') ||
+          timeRange.startsWith('Monthly (')) {
         final regex = RegExp(
-          r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+          r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
         );
         final match = regex.firstMatch(timeRange);
         if (match != null) {
@@ -295,20 +296,24 @@ class ScanRequestsService {
     final now = DateTime.now();
     DateTime startDate;
 
-    // Handle custom date range
-    if (timeRange.startsWith('Custom (')) {
-      // Extract dates from "Custom (2025-08-01 to 2025-08-07)"
+    // Handle custom date range and monthly range
+    if (timeRange.startsWith('Custom (') || timeRange.startsWith('Monthly (')) {
+      print('==== FILTERING Custom/Monthly Range ====');
+      print('Time Range String: $timeRange');
+      // Extract dates from "Custom (2025-08-01 to 2025-08-07)" or "Monthly (2025-08-01 to 2025-08-31)"
       final regex = RegExp(
-        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
       );
       final match = regex.firstMatch(timeRange);
 
       if (match != null) {
         final startDateStr = match.group(1)!;
         final endDateStr = match.group(2)!;
+        print('Extracted Start: $startDateStr, End: $endDateStr');
 
         final customStartDate = DateTime.parse(startDateStr);
         final customEndDate = DateTime.parse(endDateStr);
+        print('Parsed Start: $customStartDate, End: $customEndDate');
 
         // For custom ranges, we'll use the provided dates
         return _filterByCustomDateRange(
@@ -316,6 +321,8 @@ class ScanRequestsService {
           customStartDate,
           customEndDate,
         );
+      } else {
+        print('REGEX DID NOT MATCH!');
       }
     }
 
@@ -495,9 +502,10 @@ class ScanRequestsService {
       final DateTime now = DateTime.now();
       DateTime? startInclusive;
       DateTime? endExclusive;
-      if (timeRange.startsWith('Custom (')) {
+      if (timeRange.startsWith('Custom (') ||
+          timeRange.startsWith('Monthly (')) {
         final regex = RegExp(
-          r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+          r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
         );
         final match = regex.firstMatch(timeRange);
         if (match != null) {
@@ -585,7 +593,8 @@ class ScanRequestsService {
         final bool inWindow;
         if (timeRange == '1 Day') {
           inWindow = reviewedAt.isAfter(startInclusive);
-        } else if (timeRange.startsWith('Custom (')) {
+        } else if (timeRange.startsWith('Custom (') ||
+            timeRange.startsWith('Monthly (')) {
           inWindow =
               !reviewedAt.isBefore(startInclusive) &&
               reviewedAt.isBefore(endExclusive);

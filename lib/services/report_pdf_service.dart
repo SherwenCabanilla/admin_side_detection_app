@@ -287,24 +287,8 @@ class ReportPdfService {
     final String utilityName = preparedBy.trim();
 
     final now = DateTime.now();
-    // Human-readable title: if Custom (YYYY-MM-DD to YYYY-MM-DD), format nicely
-    String titleRangeLabel = timeRange;
-    if (timeRange.startsWith('Custom (')) {
-      final regex = RegExp(
-        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
-      );
-      final match = regex.firstMatch(timeRange);
-      if (match != null) {
-        try {
-          final start = DateTime.parse(match.group(1)!);
-          final end = DateTime.parse(match.group(2)!);
-          titleRangeLabel = _fmtHumanRange(start, end);
-        } catch (_) {
-          // keep original label on parse error
-        }
-      }
-    }
-    final String title = 'Mango Disease Summary ($titleRangeLabel)';
+    // Title without date range (moved to Reporting Period line)
+    final String title = 'Mango Disease Summary';
 
     // Layout + unified typography
     final bool isSmall = pageSize.toLowerCase() == 'a5';
@@ -407,7 +391,11 @@ class ReportPdfService {
                 children: [
                   pw.Text(
                     'Reporting Period: ' + _fmtHumanRange(startDate, endDate),
-                    style: tsCaption,
+                    style: pw.TextStyle(
+                      font: baseFont,
+                      fontSize: (baseBody * scale) * 1.15,
+                      color: pdf.PdfColors.black,
+                    ),
                   ),
                   pw.SizedBox(),
                 ],
@@ -427,13 +415,6 @@ class ReportPdfService {
                 font: baseFont,
                 boldFont: boldFont,
               ),
-              _labeledRow(
-                'Prepared By:',
-                utilityName.isEmpty ? 'Admin' : utilityName,
-                baseBody * scale,
-                font: baseFont,
-                boldFont: boldFont,
-              ),
               pw.Divider(thickness: 0.7),
               pw.SizedBox(height: isSmall ? 4 : 6),
               pw.Text('Overview', style: tsH2),
@@ -443,9 +424,10 @@ class ReportPdfService {
                 style: tsBody,
               ),
 
+              // === HEALTHY SECTION ===
               // Healthy Trend chart
               pw.SizedBox(height: isSmall ? 6 : 8),
-              pw.Text('Healthy Trend', style: tsH2),
+              pw.Text('Healthy Trend (Daily Counts)', style: tsH2),
               pw.SizedBox(height: 3),
               _buildSingleLineChart(
                 displayLabels,
@@ -456,9 +438,31 @@ class ReportPdfService {
               pw.SizedBox(height: 10),
               pw.Text(_healthyConclusion(healthySeries), style: tsCaption),
 
+              // Healthy Distribution (paired with chart above)
+              pw.SizedBox(height: isSmall ? 6 : 10),
+              pw.Text('Healthy Distribution (Total Counts)', style: tsH2),
+              pw.SizedBox(height: 3),
+              _buildStatsTable(
+                healthyOnlyStats,
+                firstColumnLabel: 'Category',
+                maxRows: 4,
+                fontSize: baseTable * scale,
+                font: baseFont,
+                boldFont: boldFont,
+              ),
+              pw.SizedBox(height: 10),
+              pw.Text(
+                _distributionConclusion(healthyOnlyStats, isHealthy: true),
+                style: tsCaption,
+              ),
+
+              // === SECTION SEPARATOR - FORCE PAGE BREAK ===
+              pw.NewPage(),
+
+              // === DISEASE SECTION ===
               // Disease Trends chart (top 4 diseases)
               pw.SizedBox(height: isSmall ? 6 : 10),
-              pw.Text('Disease Trends', style: tsH2),
+              pw.Text('Disease Trends (Daily Counts)', style: tsH2),
               pw.SizedBox(height: 3),
               _buildMultiLineDiseaseChart(
                 displayLabels,
@@ -485,27 +489,9 @@ class ReportPdfService {
                 style: tsCaption,
               ),
 
-              // Healthy Distribution
+              // Disease Distribution (paired with chart above - excludes Tip burn/Unknown)
               pw.SizedBox(height: isSmall ? 6 : 10),
-              pw.Text('Healthy Distribution', style: tsH2),
-              pw.SizedBox(height: 3),
-              _buildStatsTable(
-                healthyOnlyStats,
-                firstColumnLabel: 'Category',
-                maxRows: 4,
-                fontSize: baseTable * scale,
-                font: baseFont,
-                boldFont: boldFont,
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                _distributionConclusion(healthyOnlyStats, isHealthy: true),
-                style: tsCaption,
-              ),
-
-              // Disease Distribution (excludes Tip burn/Unknown)
-              pw.SizedBox(height: isSmall ? 6 : 10),
-              pw.Text('Disease Distribution', style: tsH2),
+              pw.Text('Disease Distribution (Total Counts)', style: tsH2),
               pw.SizedBox(height: 3),
               _buildStatsTable(
                 diseaseOnlyStats,
@@ -534,6 +520,55 @@ class ReportPdfService {
                 text:
                     'Conclusions highlight simple start-to-end changes and may not reflect mid-period variability.',
                 style: tsCaption,
+              ),
+
+              // Signature Section
+              pw.SizedBox(height: isSmall ? 40 : 60),
+              pw.Padding(
+                padding: pw.EdgeInsets.symmetric(horizontal: isSmall ? 20 : 40),
+                child: pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    // Left side - Prepared By
+                    pw.Expanded(
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: [
+                          pw.Text(
+                            'Prepared By: _________________',
+                            style: tsBody,
+                          ),
+                          pw.SizedBox(height: 4),
+                          pw.Text(
+                            'Agricultural Technologist',
+                            style: tsCaption,
+                          ),
+                        ],
+                      ),
+                    ),
+                    pw.SizedBox(width: 20),
+                    // Right side - Certified Correct By
+                    pw.Expanded(
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.end,
+                        children: [
+                          pw.Text(
+                            'Certified Correct By: ${utilityName.isEmpty ? 'Admin name' : utilityName}',
+                            style: tsBody,
+                            textAlign: pw.TextAlign.right,
+                          ),
+                          pw.SizedBox(height: 4),
+                          pw.Text(
+                            'Municipal Agriculturist',
+                            style: tsCaption,
+                            textAlign: pw.TextAlign.right,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
       ),

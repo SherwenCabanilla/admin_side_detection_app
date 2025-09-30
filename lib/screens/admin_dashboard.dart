@@ -566,6 +566,13 @@ class _AdminDashboardState extends State<AdminDashboard>
                             itemBuilder: (context, index) {
                               final data =
                                   docs[index].data() as Map<String, dynamic>;
+                              final timestamp = data['timestamp'];
+                              final timeStr =
+                                  timestamp != null
+                                      ? _formatTimestamp(
+                                        timestamp as cf.Timestamp,
+                                      )
+                                      : 'Just now';
                               return ListTile(
                                 leading: CircleAvatar(
                                   backgroundColor: _resolveActivityColor(data),
@@ -576,8 +583,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                                 ),
                                 title: Text(data['action'] ?? ''),
                                 subtitle: Text(
-                                  '${data['user'] ?? ''} • '
-                                  '${_formatTimestamp(data['timestamp'] as cf.Timestamp)}',
+                                  '${data['user'] ?? ''} • $timeStr',
                                 ),
                               );
                             },
