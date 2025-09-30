@@ -12,6 +12,7 @@ import '../services/scan_requests_service.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'settings.dart' as admin_settings;
+import 'package:shared_preferences/shared_preferences.dart';
 
 // --- Custom snapshot wrappers ---
 class UsersSnapshot {
@@ -256,8 +257,58 @@ class _AdminDashboardState extends State<AdminDashboard>
     super.initState();
     _currentAdminName =
         widget.adminUser.username; // Initialize with current name
+    _loadSavedTimeRange();
     _loadData();
     _listenToAdminNameChanges(); // Listen for real-time updates
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Reload time range when navigating back to dashboard
+    _checkAndUpdateTimeRange();
+  }
+
+  Future<void> _checkAndUpdateTimeRange() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedRange = prefs.getString('selected_time_range');
+      if (savedRange != null &&
+          savedRange.isNotEmpty &&
+          savedRange != _selectedTimeRange) {
+        setState(() {
+          _selectedTimeRange = savedRange;
+        });
+        // Reload data with new time range
+        _loadDiseaseStats();
+        _loadReportsTrend();
+      }
+    } catch (e) {
+      print('Error checking time range in dashboard: $e');
+    }
+  }
+
+  Future<void> _loadSavedTimeRange() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedRange = prefs.getString('selected_time_range');
+      if (savedRange != null && savedRange.isNotEmpty) {
+        setState(() {
+          _selectedTimeRange = savedRange;
+        });
+      }
+    } catch (e) {
+      print('Error loading saved time range in dashboard: $e');
+    }
+  }
+
+  Future<void> _saveTimeRange(String timeRange) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('selected_time_range', timeRange);
+    } catch (e) {
+      print('Error saving time range in dashboard: $e');
+    }
   }
 
   // Listen for real-time admin name changes
@@ -363,6 +414,9 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Widget _buildDashboard() {
+    // Check if time range changed when building dashboard
+    _checkAndUpdateTimeRange();
+
     return SingleChildScrollView(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -496,6 +550,9 @@ class _AdminDashboardState extends State<AdminDashboard>
               diseaseStats: _diseaseStats,
               selectedTimeRange: _selectedTimeRange,
               onTimeRangeChanged: (String newTimeRange) async {
+                // Save the time range
+                await _saveTimeRange(newTimeRange);
+
                 // Log dashboard time range change
                 try {
                   await cf.FirebaseFirestore.instance.collection('activities').add({

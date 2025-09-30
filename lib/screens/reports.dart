@@ -14,6 +14,7 @@ import 'dart:async';
 // syncfusion date picker is imported in shared/date_range_picker.dart
 import '../shared/date_range_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // picker moved to lib/shared/date_range_picker.dart
 
@@ -141,17 +142,68 @@ class _ReportsState extends State<Reports> {
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _initializeData();
   }
+
+  Future<void> _initializeData() async {
+    await _loadSavedTimeRange();
+    print('[DEBUG] Saved time range loaded: $_selectedTimeRange');
+
+    // Mark as initialized before loading data
+    setState(() {
+      _hasInitialized = true;
+    });
+
+    // Wait for all data to load
+    await _loadData();
+
+    // Now update stats with the correct saved time range
+    print(
+      '[DEBUG] Calling _updateStatsFromSnapshot after loadData with range: $_selectedTimeRange',
+    );
+    _updateStatsFromSnapshot();
+  }
+
+  Future<void> _loadSavedTimeRange() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedRange = prefs.getString('selected_time_range');
+      if (savedRange != null && savedRange.isNotEmpty) {
+        setState(() {
+          _selectedTimeRange = savedRange;
+        });
+      }
+    } catch (e) {
+      print('Error loading saved time range: $e');
+    }
+  }
+
+  Future<void> _saveTimeRange(String timeRange) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('selected_time_range', timeRange);
+    } catch (e) {
+      print('Error saving time range: $e');
+    }
+  }
+
+  bool _hasInitialized = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Only update on first call, after that updates are triggered by data loading
+    if (!_hasInitialized) {
+      return; // Skip initial call, let _initializeData handle it
+    }
     _updateStatsFromSnapshot();
   }
 
   void _updateStatsFromSnapshot() async {
-    final scanRequestsProvider = Provider.of<ScanRequestsSnapshot?>(context);
+    final scanRequestsProvider = Provider.of<ScanRequestsSnapshot?>(
+      context,
+      listen: false,
+    );
     final snapshot = scanRequestsProvider?.snapshot;
     if (snapshot == null) {
       // Fallback: update card KPIs using service when realtime snapshot is unavailable
@@ -328,9 +380,13 @@ class _ReportsState extends State<Reports> {
 
     // Align completion rate and overdue pending with modal logic and dataset
     // Use shared helper to match counts exactly
+    print(
+      '[DEBUG _updateStatsFromSnapshot] About to call getCountsForTimeRange with: $_selectedTimeRange',
+    );
     final counts = await ScanRequestsService.getCountsForTimeRange(
       timeRange: _selectedTimeRange,
     );
+    print('[DEBUG _updateStatsFromSnapshot] Received counts: $counts');
     final int completedByCreated = counts['completed'] ?? 0;
     final int pendingByCreated = counts['pending'] ?? 0;
     final int totalForCompletion = completedByCreated + pendingByCreated;
@@ -342,7 +398,7 @@ class _ReportsState extends State<Reports> {
     final int overduePendingCreated = counts['overduePending'] ?? 0;
 
     print(
-      '[CARD] range=$_selectedTimeRange completed=$completedByCreated pending=$pendingByCreated overdue>$overduePendingCreated',
+      '[CARD] range=$_selectedTimeRange completed=$completedByCreated pending=$pendingByCreated overdue=$overduePendingCreated completionRate=$completionRateStr',
     );
     setState(() {
       _stats['totalReportsReviewed'] = completedInWindow;
@@ -787,6 +843,9 @@ class _ReportsState extends State<Reports> {
     if (newTimeRange == _selectedTimeRange) {
       return;
     }
+
+    // Save the selected time range
+    await _saveTimeRange(newTimeRange);
 
     // Log report time range change
     try {

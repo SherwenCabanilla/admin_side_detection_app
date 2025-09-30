@@ -22,6 +22,7 @@ dependencies:
   printing: ^5.13.1
   http: ^1.2.2
   syncfusion_flutter_datepicker: ^28.1.38
+  shared_preferences: ^2.2.2
 
 dev_dependencies:
   flutter_test:
