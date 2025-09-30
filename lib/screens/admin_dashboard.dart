@@ -148,7 +148,7 @@ class _AdminDashboardState extends State<AdminDashboard>
       case 'export':
         return Icons.picture_as_pdf;
       case 'login':
-        return Icons.login;
+        return Icons.login_rounded;
       case 'logout':
         return Icons.logout;
       case 'failed_login':

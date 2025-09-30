@@ -121,6 +121,20 @@ class _ReportsState extends State<Reports> {
   }
 
   String _formatTimeRangeForActivity(String range) {
+    // Handle Monthly ranges
+    if (range.startsWith('Monthly (')) {
+      final regex = RegExp(
+        r'Monthly \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        try {
+          final s = DateTime.parse(match.group(1)!);
+          return '"${_fullMonthName(s.month)} ${s.year}"';
+        } catch (_) {}
+      }
+    }
+    // Handle Custom ranges
     if (range.startsWith('Custom (')) {
       final regex = RegExp(
         r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
@@ -135,6 +149,10 @@ class _ReportsState extends State<Reports> {
           return '"${fmt(s)} to ${fmt(e)}"';
         } catch (_) {}
       }
+    }
+    // Handle "Last 7 Days"
+    if (range == 'Last 7 Days') {
+      return '"Last 7 Days"';
     }
     return '"$range"';
   }
