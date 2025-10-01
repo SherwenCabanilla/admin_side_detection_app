@@ -13,10 +13,9 @@ class Settings extends StatefulWidget {
 
 class _SettingsState extends State<Settings> {
   bool _emailNotifications = true;
-  String _selectedLanguage = 'English';
   String? _adminName;
-  String? _email =
-      FirebaseAuth.instance.currentUser?.email ?? 'admin@example.com';
+  String? _email; // Initialize as null, load from Firestore
+  bool _isLoadingData = true; // Track loading state
 
   Future<void> _updateEmailNotificationPref(bool enabled) async {
     try {
@@ -250,16 +249,580 @@ class _SettingsState extends State<Settings> {
 
         if (adminDoc.exists && mounted) {
           final data = adminDoc.data() as Map<String, dynamic>;
+
+          // If email was successfully changed, update Firestore collections
+          if (updatedUser?.email != null &&
+              updatedUser!.email != data['email'] &&
+              data['pendingEmail'] == updatedUser.email) {
+            // Email verification completed! Sync to Firestore
+            try {
+              await FirebaseFirestore.instance
+                  .collection('admins')
+                  .doc(user.uid)
+                  .update({
+                    'email': updatedUser.email,
+                    'emailUpdatedAt': FieldValue.serverTimestamp(),
+                  });
+
+              // Also update users collection if it exists
+              final userDoc =
+                  await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(user.uid)
+                      .get();
+
+              if (userDoc.exists) {
+                await FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(user.uid)
+                    .update({
+                      'email': updatedUser.email,
+                      'emailUpdatedAt': FieldValue.serverTimestamp(),
+                    });
+                print('✅ Email synced to both admins and users collections');
+              }
+
+              // Log the successful email change
+              await FirebaseFirestore.instance.collection('activities').add({
+                'action':
+                    'Email successfully changed to "${updatedUser.email}"',
+                'user': data['adminName'] ?? 'Admin',
+                'type': 'profile_update',
+                'color': Colors.green.value,
+                'icon': Icons.check_circle.codePoint,
+                'timestamp': FieldValue.serverTimestamp(),
+              });
+            } catch (e) {
+              print('Failed to sync email to Firestore: $e');
+            }
+          }
+
           setState(() {
             _adminName = data['adminName'] ?? 'Admin';
+            // Prioritize Firebase Auth email, fallback to Firestore only if auth email is null
             _email = updatedUser?.email ?? data['email'];
             _emailNotifications = data['notificationPrefs']?['email'] ?? true;
+            _isLoadingData = false; // Data loaded successfully
+          });
+        } else if (mounted) {
+          setState(() {
+            _isLoadingData = false; // No data found but stop loading
           });
         }
       }
     } catch (e) {
       print('Failed to refresh admin data: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingData = false; // Error occurred but stop loading
+        });
+      }
     }
+  }
+
+  // Comprehensive email change dialog with validation and confirmation
+  Future<void> _showChangeEmailDialog() async {
+    // Safety check: ensure email is loaded
+    if (_email == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please wait for email to load or refresh'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final controller = TextEditingController();
+    final passwordController = TextEditingController();
+    bool isLoading = false;
+    String? errorMessage;
+    bool showPassword = false;
+
+    await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Change Email Address'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Show current email
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.info_outline,
+                            color: Colors.blue,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Current Email:',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                                Text(
+                                  _email!,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // New email input
+                    TextField(
+                      controller: controller,
+                      decoration: const InputDecoration(
+                        labelText: 'New Email Address',
+                        hintText: 'Enter new email',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.email),
+                      ),
+                      keyboardType: TextInputType.emailAddress,
+                      enabled: !isLoading,
+                      autofocus: true,
+                    ),
+                    const SizedBox(height: 12),
+                    // Password for re-authentication
+                    TextField(
+                      controller: passwordController,
+                      obscureText: !showPassword,
+                      decoration: InputDecoration(
+                        labelText: 'Current Password',
+                        hintText: 'Confirm your password',
+                        border: const OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.lock),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            showPassword
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              showPassword = !showPassword;
+                            });
+                          },
+                        ),
+                      ),
+                      enabled: !isLoading,
+                    ),
+                    const SizedBox(height: 12),
+                    // Warning message
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.orange.withOpacity(0.3),
+                        ),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(
+                            Icons.warning_amber,
+                            color: Colors.orange,
+                            size: 20,
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'A verification email will be sent to your new address. You must click the link to complete the change.',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (errorMessage != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: Colors.red.withOpacity(0.3),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline,
+                              color: Colors.red,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                errorMessage!,
+                                style: const TextStyle(
+                                  color: Colors.red,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (isLoading) ...[
+                      const SizedBox(height: 16),
+                      const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          SizedBox(width: 12),
+                          Text('Processing email change...'),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed:
+                      isLoading ? null : () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed:
+                      isLoading
+                          ? null
+                          : () async {
+                            final newEmail = controller.text.trim();
+                            final password = passwordController.text.trim();
+
+                            // Validation
+                            if (newEmail.isEmpty) {
+                              setState(() {
+                                errorMessage =
+                                    'Please enter a new email address.';
+                              });
+                              return;
+                            }
+
+                            // Email format validation
+                            final emailRegex = RegExp(
+                              r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
+                            );
+                            if (!emailRegex.hasMatch(newEmail)) {
+                              setState(() {
+                                errorMessage =
+                                    'Please enter a valid email address.';
+                              });
+                              return;
+                            }
+
+                            // Check if same as current
+                            if (newEmail == _email) {
+                              setState(() {
+                                errorMessage =
+                                    'New email is the same as current email.';
+                              });
+                              return;
+                            }
+
+                            // Check password provided
+                            if (password.isEmpty) {
+                              setState(() {
+                                errorMessage =
+                                    'Please enter your current password to continue.';
+                              });
+                              return;
+                            }
+
+                            // Show confirmation dialog
+                            final confirmed = await showDialog<bool>(
+                              context: context,
+                              builder:
+                                  (context) => AlertDialog(
+                                    title: const Text('Confirm Email Change'),
+                                    content: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Are you sure you want to change your email?',
+                                        ),
+                                        const SizedBox(height: 16),
+                                        Container(
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey.withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  const Text(
+                                                    'From: ',
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                  Expanded(
+                                                    child: Text(_email!),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Row(
+                                                children: [
+                                                  const Text(
+                                                    'To:   ',
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                  Expanded(
+                                                    child: Text(
+                                                      newEmail,
+                                                      style: const TextStyle(
+                                                        color: Colors.blue,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed:
+                                            () => Navigator.pop(context, false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      ElevatedButton(
+                                        onPressed:
+                                            () => Navigator.pop(context, true),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.blue,
+                                        ),
+                                        child: const Text('Confirm Change'),
+                                      ),
+                                    ],
+                                  ),
+                            );
+
+                            if (confirmed != true) return;
+
+                            // Start loading
+                            setState(() {
+                              isLoading = true;
+                              errorMessage = null;
+                            });
+
+                            try {
+                              final user = FirebaseAuth.instance.currentUser;
+                              if (user != null && user.email != null) {
+                                // Re-authenticate first
+                                final cred = EmailAuthProvider.credential(
+                                  email: user.email!,
+                                  password: password,
+                                );
+                                await user.reauthenticateWithCredential(cred);
+
+                                // Get the current web URL for continuation
+                                String? continueUrl;
+                                try {
+                                  // For web, use current origin
+                                  continueUrl = Uri.base.origin;
+                                } catch (e) {
+                                  print('Could not get current URL: $e');
+                                }
+
+                                // Send verification email with action code settings
+                                if (continueUrl != null) {
+                                  final actionCodeSettings = ActionCodeSettings(
+                                    url: continueUrl,
+                                    handleCodeInApp: true,
+                                  );
+                                  await user.verifyBeforeUpdateEmail(
+                                    newEmail,
+                                    actionCodeSettings,
+                                  );
+                                } else {
+                                  // Fallback without continuation URL
+                                  await user.verifyBeforeUpdateEmail(newEmail);
+                                }
+
+                                // Update Firestore email in admins collection
+                                await FirebaseFirestore.instance
+                                    .collection('admins')
+                                    .doc(user.uid)
+                                    .update({
+                                      'pendingEmail': newEmail,
+                                      'pendingEmailTimestamp':
+                                          FieldValue.serverTimestamp(),
+                                    });
+
+                                // Also update users collection if it exists (for dual accounts)
+                                try {
+                                  final userDoc =
+                                      await FirebaseFirestore.instance
+                                          .collection('users')
+                                          .doc(user.uid)
+                                          .get();
+
+                                  if (userDoc.exists) {
+                                    await FirebaseFirestore.instance
+                                        .collection('users')
+                                        .doc(user.uid)
+                                        .update({
+                                          'pendingEmail': newEmail,
+                                          'pendingEmailTimestamp':
+                                              FieldValue.serverTimestamp(),
+                                        });
+                                    print(
+                                      '✅ Updated users collection with pending email',
+                                    );
+                                  } else {
+                                    print(
+                                      'ℹ️ No users document found - admin-only account',
+                                    );
+                                  }
+                                } catch (e) {
+                                  print(
+                                    '⚠️ Failed to update users collection: $e',
+                                  );
+                                  // Continue anyway - not critical
+                                }
+
+                                // Log email change attempt
+                                try {
+                                  await FirebaseFirestore.instance
+                                      .collection('activities')
+                                      .add({
+                                        'action':
+                                            'Email change verification sent from "${_email}" to "$newEmail"',
+                                        'user': _adminName ?? 'Admin',
+                                        'type': 'profile_update',
+                                        'color': Colors.purple.value,
+                                        'icon': Icons.email.codePoint,
+                                        'timestamp':
+                                            FieldValue.serverTimestamp(),
+                                      });
+                                } catch (e) {
+                                  print(
+                                    'Failed to log email change activity: $e',
+                                  );
+                                }
+
+                                Navigator.pop(context, true);
+
+                                // Show success message
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Verification email sent to $newEmail.\n\nIMPORTANT: Check your inbox and click the verification link to complete the email change. After verifying, click the refresh button to update your email here.',
+                                      ),
+                                      backgroundColor: Colors.blue,
+                                      duration: const Duration(seconds: 10),
+                                      action: SnackBarAction(
+                                        label: 'OK',
+                                        textColor: Colors.white,
+                                        onPressed: () {},
+                                      ),
+                                    ),
+                                  );
+                                }
+                              }
+                            } on FirebaseAuthException catch (e) {
+                              setState(() {
+                                isLoading = false;
+                                switch (e.code) {
+                                  case 'invalid-email':
+                                    errorMessage =
+                                        'Invalid email address format.';
+                                    break;
+                                  case 'email-already-in-use':
+                                    errorMessage =
+                                        'This email is already in use.';
+                                    break;
+                                  case 'wrong-password':
+                                    errorMessage = 'Incorrect password.';
+                                    break;
+                                  case 'requires-recent-login':
+                                    errorMessage =
+                                        'Session expired. Please log out and log back in.';
+                                    break;
+                                  default:
+                                    errorMessage =
+                                        e.message ?? 'Failed to change email.';
+                                }
+                              });
+                            } catch (e) {
+                              setState(() {
+                                isLoading = false;
+                                errorMessage =
+                                    'An unexpected error occurred: $e';
+                              });
+                            }
+                          },
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                  child:
+                      isLoading
+                          ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                          : const Text('Send Verification'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -327,134 +890,30 @@ class _SettingsState extends State<Settings> {
                 ListTile(
                   leading: const Icon(Icons.email),
                   title: const Text('Edit Email'),
-                  subtitle: Text(_email ?? 'admin@example.com'),
+                  subtitle:
+                      _isLoadingData
+                          ? const Text('Loading...')
+                          : Text(_email ?? 'No email found'),
                   trailing: IconButton(
                     icon: const Icon(Icons.refresh),
                     tooltip: 'Refresh email status',
                     onPressed: () async {
                       await _refreshAdminData();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Email status refreshed'),
-                          backgroundColor: Colors.green,
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                  ),
-                  onTap: () async {
-                    final controller = TextEditingController(
-                      text: _email ?? 'admin@example.com',
-                    );
-                    final newEmail = await showDialog<String>(
-                      context: context,
-                      builder:
-                          (context) => AlertDialog(
-                            title: const Text('Edit Email'),
-                            content: TextField(
-                              controller: controller,
-                              decoration: const InputDecoration(
-                                labelText: 'Email',
-                              ),
-                              keyboardType: TextInputType.emailAddress,
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Cancel'),
-                              ),
-                              ElevatedButton(
-                                onPressed:
-                                    () => Navigator.pop(
-                                      context,
-                                      controller.text.trim(),
-                                    ),
-                                child: const Text('Save'),
-                              ),
-                            ],
-                          ),
-                    );
-                    if (newEmail != null &&
-                        newEmail.isNotEmpty &&
-                        newEmail != _email) {
-                      try {
-                        final user = FirebaseAuth.instance.currentUser;
-                        if (user != null) {
-                          // Use verifyBeforeUpdateEmail instead of updateEmail
-                          // This sends a verification email to the new address first
-                          await user.verifyBeforeUpdateEmail(newEmail);
-
-                          // Show success message explaining the verification process
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Verification email sent to $newEmail. Please check your inbox and click the link to complete the email change.',
-                              ),
-                              backgroundColor: Colors.blue,
-                              duration: const Duration(seconds: 6),
-                            ),
-                          );
-
-                          // Log email change attempt (with error handling)
-                          try {
-                            await FirebaseFirestore.instance
-                                .collection('activities')
-                                .add({
-                                  'action':
-                                      'Email change verification sent to "$newEmail"',
-                                  'user': _adminName ?? 'Admin',
-                                  'type': 'profile_update',
-                                  'color': Colors.purple.value,
-                                  'icon': Icons.email.codePoint,
-                                  'timestamp': FieldValue.serverTimestamp(),
-                                });
-                          } catch (e) {
-                            print('Failed to log email change activity: $e');
-                          }
-
-                          // Note: We don't update the local email state here since the change
-                          // isn't complete until the user clicks the verification link
-                        }
-                      } on FirebaseAuthException catch (e) {
-                        String errorMessage =
-                            'Failed to send verification email.';
-                        switch (e.code) {
-                          case 'invalid-email':
-                            errorMessage =
-                                'Please enter a valid email address.';
-                            break;
-                          case 'email-already-in-use':
-                            errorMessage =
-                                'This email is already in use by another account.';
-                            break;
-                          case 'requires-recent-login':
-                            errorMessage =
-                                'Please log out and log back in, then try again.';
-                            break;
-                          default:
-                            errorMessage =
-                                e.message ??
-                                'Failed to send verification email.';
-                        }
-
+                      if (mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(errorMessage),
-                            backgroundColor: Colors.red,
-                          ),
-                        );
-                      } catch (e) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Failed to send verification email: $e',
-                            ),
-                            backgroundColor: Colors.red,
+                          const SnackBar(
+                            content: Text('Email status refreshed'),
+                            backgroundColor: Colors.green,
+                            duration: Duration(seconds: 2),
                           ),
                         );
                       }
-                    }
-                  },
+                    },
+                  ),
+                  onTap:
+                      _isLoadingData || _email == null
+                          ? null // Disable if data is still loading or email is null
+                          : () => _showChangeEmailDialog(),
                 ),
                 StatefulBuilder(
                   builder: (context, setState) {
@@ -486,7 +945,7 @@ class _SettingsState extends State<Settings> {
                             bool showCurrentPassword = false;
                             bool showNewPassword = false;
                             bool showConfirmPassword = false;
-                            final result = await showDialog<bool>(
+                            await showDialog<bool>(
                               context: context,
                               barrierDismissible: false,
                               builder: (context) {
