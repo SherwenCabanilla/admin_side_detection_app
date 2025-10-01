@@ -132,6 +132,9 @@ class _AdminDashboardState extends State<AdminDashboard>
   // Falls back to stored 'icon' codepoint when available.
   IconData _resolveActivityIcon(Map<String, dynamic> data) {
     final String type = (data['type'] ?? '').toString();
+    print('[ICON DEBUG] Activity type: "$type", action: "${data['action']}"');
+
+    // Always use type-based icon resolution for web compatibility
     switch (type) {
       case 'accept':
         return Icons.person_add;
@@ -163,10 +166,12 @@ class _AdminDashboardState extends State<AdminDashboard>
         return Icons.date_range;
       case 'dashboard_change':
         return Icons.dashboard;
+      default:
+        // For web compatibility, try icon codepoint as fallback
+        final dynamic iconCode = data['icon'];
+        if (iconCode is int) return _getIconFromCode(iconCode);
+        return Icons.info;
     }
-    final dynamic iconCode = data['icon'];
-    if (iconCode is int) return _getIconFromCode(iconCode);
-    return Icons.info;
   }
 
   // Resolve color with a sensible default if missing

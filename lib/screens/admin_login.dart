@@ -73,7 +73,7 @@ class _AdminLoginState extends State<AdminLogin> {
                 adminUser.username.isNotEmpty ? adminUser.username : 'Admin',
             'type': 'login',
             'color': Colors.green.value,
-            'icon': Icons.login.codePoint,
+            'icon': Icons.login_rounded.codePoint,
             'timestamp': FieldValue.serverTimestamp(),
           });
 
