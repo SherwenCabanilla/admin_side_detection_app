@@ -672,4 +672,113 @@ class ScanRequestsService {
       'overduePending': overduePending,
     };
   }
+
+  // Get ongoing completion status for scans submitted in a time range
+  // Returns current status of all scans from that period (completed anytime + still pending)
+  static Future<Map<String, dynamic>> getOngoingCompletionStatus({
+    required String timeRange,
+  }) async {
+    final List<Map<String, dynamic>> all = await getScanRequests();
+
+    // Get all scans submitted in the time range (by createdAt)
+    final List<Map<String, dynamic>> submittedInPeriod = filterByTimeRange(
+      all,
+      timeRange,
+    );
+
+    // Parse time range to get period boundaries
+    final now = DateTime.now();
+    DateTime? periodStart;
+    DateTime? periodEnd;
+
+    if (timeRange.startsWith('Custom (') || timeRange.startsWith('Monthly (')) {
+      final regex = RegExp(
+        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(timeRange);
+      if (match != null) {
+        final startDateStr = match.group(1)!;
+        final endDateStr = match.group(2)!;
+        periodStart = DateTime.parse(startDateStr);
+        periodEnd = DateTime.parse(endDateStr).add(const Duration(days: 1));
+      }
+    } else {
+      switch (timeRange) {
+        case '1 Day':
+          periodStart = now.subtract(const Duration(days: 1));
+          periodEnd = now;
+          break;
+        case 'Last 7 Days':
+          periodStart = now.subtract(const Duration(days: 7));
+          periodEnd = now;
+          break;
+        case 'Last 30 Days':
+          periodStart = now.subtract(const Duration(days: 30));
+          periodEnd = now;
+          break;
+        case 'Last 60 Days':
+          periodStart = now.subtract(const Duration(days: 60));
+          periodEnd = now;
+          break;
+        case 'Last 90 Days':
+          periodStart = now.subtract(const Duration(days: 90));
+          periodEnd = now;
+          break;
+        case 'Last Year':
+          periodStart = now.subtract(const Duration(days: 365));
+          periodEnd = now;
+          break;
+        default:
+          periodStart = now.subtract(const Duration(days: 7));
+          periodEnd = now;
+      }
+    }
+
+    int totalSubmitted = submittedInPeriod.length;
+    int completedInPeriod = 0; // Completed within the period
+    int completedAfterPeriod = 0; // Completed after the period ended
+    int stillPending = 0; // Still pending today
+
+    for (final scan in submittedInPeriod) {
+      final status = (scan['status'] ?? '').toString();
+
+      if (status == 'completed') {
+        final reviewedAtRaw = scan['reviewedAt'];
+        DateTime? reviewedAt;
+
+        if (reviewedAtRaw is Timestamp) {
+          reviewedAt = reviewedAtRaw.toDate();
+        } else if (reviewedAtRaw is String) {
+          reviewedAt = DateTime.tryParse(reviewedAtRaw);
+        }
+
+        if (reviewedAt != null && periodStart != null && periodEnd != null) {
+          // Check if completed within or after the period
+          if (reviewedAt.isBefore(periodEnd)) {
+            completedInPeriod++;
+          } else {
+            completedAfterPeriod++;
+          }
+        } else {
+          // If we can't determine, assume it's completed
+          completedInPeriod++;
+        }
+      } else if (status == 'pending') {
+        stillPending++;
+      }
+    }
+
+    int totalCompleted = completedInPeriod + completedAfterPeriod;
+    double currentCompletionRate =
+        totalSubmitted > 0 ? (totalCompleted / totalSubmitted) * 100 : 0.0;
+
+    return {
+      'totalSubmitted': totalSubmitted,
+      'completedInPeriod': completedInPeriod,
+      'completedAfterPeriod': completedAfterPeriod,
+      'stillPending': stillPending,
+      'totalCompleted': totalCompleted,
+      'currentCompletionRate': currentCompletionRate,
+    };
+  }
 }

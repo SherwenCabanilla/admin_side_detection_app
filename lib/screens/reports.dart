@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../services/report_pdf_service.dart';
 // import '../services/settings_service.dart';
-import '../shared/total_users_card.dart';
-import '../shared/pending_approvals_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/scan_requests_service.dart';
 // CSV export removed
@@ -48,6 +46,15 @@ class _ReportsState extends State<Reports> {
   String? _slaWithin48h;
   String? _completionRate;
   int? _overduePendingCount;
+
+  // New metrics for time-filtered cards
+  int _reviewsCompleted = 0; // Reviews done in period (reviewedAt-based)
+  int _totalScansSubmitted = 0; // Scans submitted in period
+  int _scansCompletedFromPeriod =
+      0; // Scans submitted in period that got reviewed
+  String _healthyRate = '—';
+  int _healthyScansCount = 0;
+  int _diseasedScansCount = 0;
 
   String _monthName(int m) {
     const names = [
@@ -225,22 +232,16 @@ class _ReportsState extends State<Reports> {
     final snapshot = scanRequestsProvider?.snapshot;
     if (snapshot == null) {
       // Fallback: update card KPIs using service when realtime snapshot is unavailable
+      // Note: In fallback mode, we don't have real-time reviewsCompleted count
+      // so completion rate will be approximate
       try {
         final counts = await ScanRequestsService.getCountsForTimeRange(
           timeRange: _selectedTimeRange,
         );
-        final int completedByCreated = counts['completed'] ?? 0;
-        final int pendingByCreated = counts['pending'] ?? 0;
-        final int totalForCompletion = completedByCreated + pendingByCreated;
-        final String completionRateStr =
-            totalForCompletion == 0
-                ? '—'
-                : '${((completedByCreated / totalForCompletion) * 100).toStringAsFixed(0)}%';
-
         final int overduePendingCreated = counts['overduePending'] ?? 0;
 
         setState(() {
-          _completionRate = completionRateStr;
+          _completionRate = '—'; // Unable to calculate without reviewedAt data
           _overduePendingCount = overduePendingCreated;
         });
       } catch (_) {}
@@ -408,15 +409,123 @@ class _ReportsState extends State<Reports> {
     final int completedByCreated = counts['completed'] ?? 0;
     final int pendingByCreated = counts['pending'] ?? 0;
     final int totalForCompletion = completedByCreated + pendingByCreated;
-    final String completionRateStr =
-        totalForCompletion == 0
-            ? '—'
-            : '${((completedByCreated / totalForCompletion) * 100).toStringAsFixed(0)}%';
 
     final int overduePendingCreated = counts['overduePending'] ?? 0;
 
+    // Calculate new metrics for time-filtered cards
+    // 1. Reviews Completed (reviewedAt-based)
+    final int reviewsCompletedCount = completedInWindow;
+
+    // 2. Total Scans Submitted (createdAt-based)
+    final int totalScansCount = totalForCompletion;
+
+    // 3. TRUE Completion Rate - scans submitted AND completed within the period
+    // Count scans that were submitted in period AND reviewed in period
+    int scansSubmittedAndCompletedInPeriod = 0;
+    for (final r in scanRequests) {
+      final status = (r['status'] ?? '').toString();
+      if (status != 'completed') continue;
+
+      // Check if submitted in period
+      final createdAtRaw = r['createdAt'];
+      DateTime? createdAt;
+      if (createdAtRaw is Timestamp) createdAt = createdAtRaw.toDate();
+      if (createdAtRaw is String) createdAt = DateTime.tryParse(createdAtRaw);
+
+      // Check if reviewed in period
+      final reviewedAtRaw = r['reviewedAt'];
+      DateTime? reviewedAt;
+      if (reviewedAtRaw is Timestamp) reviewedAt = reviewedAtRaw.toDate();
+      if (reviewedAtRaw is String)
+        reviewedAt = DateTime.tryParse(reviewedAtRaw);
+
+      if (createdAt != null && reviewedAt != null) {
+        // Check if BOTH createdAt and reviewedAt are in the period
+        final createdInPeriod =
+            _selectedTimeRange == '1 Day'
+                ? createdAt.isAfter(startInclusive)
+                : (!createdAt.isBefore(startInclusive) &&
+                    createdAt.isBefore(endExclusive));
+
+        final reviewedInPeriod =
+            _selectedTimeRange == '1 Day'
+                ? reviewedAt.isAfter(startInclusive)
+                : (!reviewedAt.isBefore(startInclusive) &&
+                    reviewedAt.isBefore(endExclusive));
+
+        if (createdInPeriod && reviewedInPeriod) {
+          scansSubmittedAndCompletedInPeriod++;
+        }
+      }
+    }
+
+    // Card shows TRUE completion rate: scans submitted AND completed in period
+    final String completionRateStr =
+        totalScansCount == 0
+            ? '—'
+            : '${((scansSubmittedAndCompletedInPeriod / totalScansCount) * 100).toStringAsFixed(0)}%';
+
+    // 3. Healthy Rate - calculate from disease stats in the time window
+    int healthyScans = 0;
+    int diseaseScans = 0;
+    for (final r in scanRequests) {
+      final status = (r['status'] ?? '').toString();
+      if (status != 'completed') continue;
+
+      final reviewedAtRaw = r['reviewedAt'];
+      DateTime? reviewedAt;
+      if (reviewedAtRaw is Timestamp) reviewedAt = reviewedAtRaw.toDate();
+      if (reviewedAtRaw is String)
+        reviewedAt = DateTime.tryParse(reviewedAtRaw);
+
+      if (reviewedAt != null) {
+        final inWindow =
+            _selectedTimeRange == '1 Day'
+                ? reviewedAt.isAfter(startInclusive)
+                : (!reviewedAt.isBefore(startInclusive) &&
+                    reviewedAt.isBefore(endExclusive));
+
+        if (inWindow) {
+          final List<dynamic> diseaseSummary =
+              (r['diseaseSummary'] as List<dynamic>?) ?? [];
+          if (diseaseSummary.isEmpty) {
+            healthyScans++;
+          } else {
+            // Check if it contains disease detections (excluding tip burn)
+            bool hasDisease = false;
+            for (final d in diseaseSummary) {
+              String name = 'Unknown';
+              if (d is Map<String, dynamic>) {
+                name = d['name'] ?? d['label'] ?? d['disease'] ?? 'Unknown';
+              } else if (d is String) {
+                name = d;
+              }
+              final lower = name.toLowerCase();
+              if (!lower.contains('tip burn') &&
+                  !lower.contains('unknown') &&
+                  lower != 'healthy') {
+                hasDisease = true;
+                break;
+              }
+              if (lower == 'healthy') {
+                healthyScans++;
+                break;
+              }
+            }
+            if (hasDisease) diseaseScans++;
+          }
+        }
+      }
+    }
+
+    final int totalHealthyCheck = healthyScans + diseaseScans;
+    final String healthyRateStr =
+        totalHealthyCheck == 0
+            ? '—'
+            : '${((healthyScans / totalHealthyCheck) * 100).toStringAsFixed(1)}%';
+
     print(
-      '[CARD] range=$_selectedTimeRange completed=$completedByCreated pending=$pendingByCreated overdue=$overduePendingCreated completionRate=$completionRateStr',
+      '[CARD] range=$_selectedTimeRange withinPeriod=$scansSubmittedAndCompletedInPeriod total=$totalScansCount cardRate=$completionRateStr lifetimeCompleted=$completedByCreated',
     );
     setState(() {
       _stats['totalReportsReviewed'] = completedInWindow;
@@ -425,8 +534,18 @@ class _ReportsState extends State<Reports> {
       _stats['averageResponseTime'] = averageResponseTimeStr;
       _slaWithin24h = sla24Str;
       _slaWithin48h = sla48Str;
-      _completionRate = completionRateStr;
+      _completionRate =
+          completionRateStr; // TRUE rate: submitted AND completed in period
       _overduePendingCount = overduePendingCreated;
+
+      // Update new metrics
+      _reviewsCompleted = reviewsCompletedCount;
+      _totalScansSubmitted = totalScansCount;
+      _scansCompletedFromPeriod =
+          completedByCreated; // Lifetime completion (for modal)
+      _healthyRate = healthyRateStr;
+      _healthyScansCount = healthyScans;
+      _diseasedScansCount = diseaseScans;
     });
   }
 
@@ -1135,7 +1254,7 @@ class _ReportsState extends State<Reports> {
             ),
             const SizedBox(height: 24),
 
-            // Stats Grid
+            // Stats Grid - Time-filtered metrics only
             GridView.count(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -1144,56 +1263,37 @@ class _ReportsState extends State<Reports> {
               mainAxisSpacing: 16,
               childAspectRatio: 1.2,
               children: [
-                TotalUsersCard(onTap: widget.onGoToUsers),
-                TotalReportsReviewedCard(
-                  totalReports: _stats['totalReportsReviewed'] ?? 0,
-                  reportsTrend: _reportsTrend,
-                  onTap: () {
-                    showDialog(
-                      context: context,
-                      builder: (context) {
-                        final ValueNotifier<bool> fullscreen =
-                            ValueNotifier<bool>(false);
-                        return ValueListenableBuilder<bool>(
-                          valueListenable: fullscreen,
-                          builder:
-                              (context, isFull, _) => Dialog(
-                                insetPadding:
-                                    isFull
-                                        ? EdgeInsets.zero
-                                        : const EdgeInsets.symmetric(
-                                          horizontal: 40,
-                                          vertical: 40,
-                                        ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius:
-                                      isFull
-                                          ? BorderRadius.zero
-                                          : BorderRadius.circular(16),
-                                ),
-                                child: Container(
-                                  width:
-                                      isFull
-                                          ? MediaQuery.of(context).size.width
-                                          : MediaQuery.of(context).size.width *
-                                              0.9,
-                                  height:
-                                      isFull
-                                          ? MediaQuery.of(context).size.height
-                                          : MediaQuery.of(context).size.height *
-                                              0.8,
-                                  padding: const EdgeInsets.all(20),
-                                  child: ReportsModalContent(
-                                    fullscreenNotifier: fullscreen,
-                                  ),
-                                ),
-                              ),
-                        );
-                      },
-                    );
-                  },
+                // Row 1: Volume & Health metrics
+                _buildStatCard(
+                  'Reviews Completed',
+                  _reviewsCompleted.toString(),
+                  Icons.check_circle,
+                  Colors.green,
+                  onTap: () => _showReviewsCompletedModal(context),
                 ),
-                PendingApprovalsCard(),
+                _buildStatCard(
+                  'Total Scans Submitted',
+                  _totalScansSubmitted.toString(),
+                  Icons.upload_file,
+                  Colors.blue,
+                  onTap: () => _showTotalScansSubmittedModal(context),
+                ),
+                _buildStatCard(
+                  'Healthy Rate',
+                  _healthyRate,
+                  Icons.verified,
+                  Colors.lightGreen,
+                  onTap: () => _showHealthyRateModal(context),
+                ),
+                _buildStatCard(
+                  'Completion Rate',
+                  _completionRate ?? '—',
+                  Icons.task_alt,
+                  Colors.blueGrey,
+                  onTap: () => _showCompletionRateModal(context),
+                  showWarning: _hasCompletionRateMismatch(),
+                ),
+                // Row 2: Performance & SLA metrics
                 _buildStatCard(
                   'Avg. Response Time',
                   _stats['averageResponseTime'] ?? '0 hours',
@@ -1214,13 +1314,6 @@ class _ReportsState extends State<Reports> {
                   Icons.speed_outlined,
                   Colors.deepPurple,
                   onTap: () => _showSla48Modal(context),
-                ),
-                _buildStatCard(
-                  'Completion Rate',
-                  _completionRate ?? '—',
-                  Icons.task_alt,
-                  Colors.blueGrey,
-                  onTap: () => _showCompletionRateModal(context),
                 ),
                 _buildStatCard(
                   'Overdue Pending >24h',
@@ -1261,58 +1354,64 @@ class _ReportsState extends State<Reports> {
     );
   }
 
+  bool _isCompletionRateOver100() {
+    if (_completionRate == null || _completionRate == '—') return false;
+    try {
+      final rateStr = _completionRate!.replaceAll('%', '').trim();
+      final rate = double.tryParse(rateStr);
+      return rate != null && rate > 100;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _hasCompletionRateMismatch() {
+    // Show warning if reviews completed doesn't match what you'd expect
+    // from the completion rate (indicates backlog or future reviews)
+    if (_completionRate == null ||
+        _completionRate == '—' ||
+        _reviewsCompleted == 0 ||
+        _totalScansSubmitted == 0) {
+      return false;
+    }
+
+    // If over 100%, definitely show warning
+    if (_isCompletionRateOver100()) return true;
+
+    // If the simple math doesn't match (due to old submissions being reviewed),
+    // show warning. Allow 2% tolerance for rounding.
+    try {
+      final rateStr = _completionRate!.replaceAll('%', '').trim();
+      final displayedRate = double.tryParse(rateStr);
+      final expectedRate = (_reviewsCompleted / _totalScansSubmitted) * 100;
+
+      if (displayedRate != null && (displayedRate - expectedRate).abs() > 2) {
+        return true;
+      }
+    } catch (_) {}
+
+    return false;
+  }
+
   Widget _buildStatCard(
     String title,
     String value,
     IconData icon,
     Color color, {
     VoidCallback? onTap,
+    bool showWarning = false,
   }) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(icon, size: 24, color: color),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey,
-                  fontWeight: FontWeight.w500,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      ),
+    return _StatCardWithWarning(
+      title: title,
+      value: value,
+      icon: icon,
+      color: color,
+      onTap: onTap,
+      showWarning: showWarning,
     );
   }
 
+  // Modal methods (moved from below to inside _ReportsState class)
   void _showSlaModal(BuildContext context) {
     showDialog(
       context: context,
@@ -1669,67 +1768,836 @@ class _ReportsState extends State<Reports> {
       context: context,
       builder: (context) {
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 40,
-            vertical: 40,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
           ),
-          child: Container(
-            width: 700,
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Completion Rate',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 600,
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            child: Container(
+              width:
+                  MediaQuery.of(context).size.width > 700
+                      ? 600
+                      : MediaQuery.of(context).size.width * 0.9,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Fixed header with close button
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Completion Rate',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Scrollable content with FutureBuilder for ongoing status
+                  Expanded(
+                    child: FutureBuilder<Map<String, dynamic>>(
+                      future: ScanRequestsService.getOngoingCompletionStatus(
+                        timeRange: _selectedTimeRange,
                       ),
+                      builder: (context, snapshot) {
+                        final ongoingData = snapshot.data;
+                        final hasOngoingData =
+                            snapshot.connectionState == ConnectionState.done &&
+                            ongoingData != null;
+
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'What does this show?',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blueGrey,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Percentage of scans submitted that were successfully reviewed within the selected time range.',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.calendar_today,
+                                    color: Colors.blueGrey.shade700,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Expanded(
+                                    child: Text(
+                                      'Period Completion Rate (What\'s on the Card)',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.blueGrey,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Scans submitted AND completed within the selected time range.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey[600],
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.blueGrey.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.blueGrey.shade200,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          'Completion Rate:',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.grey[700],
+                                          ),
+                                        ),
+                                        Text(
+                                          _completionRate ?? '—',
+                                          style: TextStyle(
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.blueGrey.shade900,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Divider(
+                                      color: Colors.blueGrey.shade300,
+                                      thickness: 1.5,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      'How is this calculated?',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.blueGrey.shade800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Container(
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color: Colors.blueGrey.shade300,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.blue.shade100,
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  'TOTAL SUBMITTED',
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.blue.shade900,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Scans Submitted in Selected Period: $_totalScansSubmitted',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.blue.shade900,
+                                              fontFamily: 'monospace',
+                                            ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Row(
+                                            children: [
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.green.shade100,
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  'COMPLETED WITHIN PERIOD',
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.bold,
+                                                    color:
+                                                        Colors.green.shade900,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Scans Submitted & Completed in Period: ${_completionRate != null && _completionRate != '—' ? ((_totalScansSubmitted * double.parse(_completionRate!.replaceAll('%', ''))) ~/ 100) : 0}',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.green.shade900,
+                                              fontFamily: 'monospace',
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            '(Both submitted AND reviewed within the time range)',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontStyle: FontStyle.italic,
+                                              color: Colors.green.shade700,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Container(
+                                            padding: const EdgeInsets.all(12),
+                                            decoration: BoxDecoration(
+                                              color: Colors.blueGrey.shade100,
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'Formula:',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.bold,
+                                                    color:
+                                                        Colors
+                                                            .blueGrey
+                                                            .shade900,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 8),
+                                                Text(
+                                                  'Scans Within Period = ${_completionRate != null && _completionRate != '—' ? ((_totalScansSubmitted * double.parse(_completionRate!.replaceAll('%', ''))) ~/ 100) : 0}',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    fontFamily: 'monospace',
+                                                    color:
+                                                        Colors
+                                                            .blueGrey
+                                                            .shade700,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  'Total Submitted = $_totalScansSubmitted',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    fontFamily: 'monospace',
+                                                    color:
+                                                        Colors
+                                                            .blueGrey
+                                                            .shade700,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 8),
+                                                Text(
+                                                  'Period Completion Rate = ${_completionRate ?? "—"}',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.bold,
+                                                    color:
+                                                        Colors
+                                                            .blueGrey
+                                                            .shade900,
+                                                    fontFamily: 'monospace',
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.blue.shade200,
+                                  ),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                      Icons.info_outline,
+                                      color: Colors.blue.shade700,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: RichText(
+                                        text: TextSpan(
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.blue.shade900,
+                                          ),
+                                          children: [
+                                            const TextSpan(
+                                              text: 'Key Point: ',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            TextSpan(
+                                              text:
+                                                  'This is the TRUE completion rate for the selected period - it only counts scans that were BOTH submitted AND reviewed within the time range. This gives you an accurate picture of performance during that specific period.',
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // Ongoing Status Section
+                              if (hasOngoingData) ...[
+                                const SizedBox(height: 24),
+                                const Divider(thickness: 2),
+                                const SizedBox(height: 24),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.timeline,
+                                      color: Colors.teal.shade700,
+                                      size: 24,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Text(
+                                      'Ongoing Status (As of Today)',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.teal,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'This section shows what happened to the scans submitted during ${_displayRangeLabel(_selectedTimeRange)}, including reviews completed after the period ended.',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey[700],
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.teal.shade50,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Colors.teal.shade200,
+                                      width: 2,
+                                    ),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(
+                                            'Current Overall Completion:',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.teal.shade900,
+                                            ),
+                                          ),
+                                          Text(
+                                            '${ongoingData['currentCompletionRate'].toStringAsFixed(0)}%',
+                                            style: TextStyle(
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.teal.shade900,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 16),
+                                      Divider(color: Colors.teal.shade300),
+                                      const SizedBox(height: 16),
+                                      Text(
+                                        'Breakdown:',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.teal.shade800,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.teal.shade300,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Total Scans Submitted: ${ongoingData['totalSubmitted']}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey.shade700,
+                                                fontFamily: 'monospace',
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              '├─ Completed within Period: ${ongoingData['completedInPeriod']}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.green.shade700,
+                                                fontFamily: 'monospace',
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              '├─ Completed after Period: ${ongoingData['completedAfterPeriod']}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.blue.shade700,
+                                                fontFamily: 'monospace',
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              '└─ Still Pending Today: ${ongoingData['stillPending']}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.orange.shade700,
+                                                fontFamily: 'monospace',
+                                              ),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Divider(
+                                              color: Colors.teal.shade200,
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              'Total Completed (${ongoingData['totalCompleted']}) = ${ongoingData['currentCompletionRate'].toStringAsFixed(0)}%',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.teal.shade900,
+                                                fontFamily: 'monospace',
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.shade50,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        Icons.lightbulb_outline,
+                                        color: Colors.green.shade700,
+                                        size: 20,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: RichText(
+                                          text: TextSpan(
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.green.shade900,
+                                            ),
+                                            children: [
+                                              const TextSpan(
+                                                text: 'Professional Insight: ',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                              TextSpan(
+                                                text:
+                                                    ongoingData['completedAfterPeriod'] >
+                                                            0
+                                                        ? 'Of the ${ongoingData['totalSubmitted']} scans submitted during this period, ${ongoingData['completedAfterPeriod']} were reviewed after the period ended. This indicates backlog processing. The current completion rate of ${ongoingData['currentCompletionRate'].toStringAsFixed(0)}% reflects the real-time status of all submissions from this period.'
+                                                        : ongoingData['stillPending'] >
+                                                            0
+                                                        ? 'All completed reviews from this period were processed within the timeframe. However, ${ongoingData['stillPending']} scans remain pending and require attention.'
+                                                        : 'Excellent! All scans submitted during this period have been successfully reviewed, achieving 100% completion.',
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ] else if (snapshot.connectionState ==
+                                  ConnectionState.waiting) ...[
+                                const SizedBox(height: 24),
+                                const Center(
+                                  child: CircularProgressIndicator(),
+                                ),
+                              ],
+                              if (_hasCompletionRateMismatch()) ...[
+                                const SizedBox(height: 16),
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.shade50,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Colors.orange.shade300,
+                                      width: 2,
+                                    ),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(
+                                            Icons.warning_amber,
+                                            color: Colors.orange.shade700,
+                                            size: 24,
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              _isCompletionRateOver100()
+                                                  ? 'Why is this over 100%?'
+                                                  : 'Notice: Backlog Reviews Detected',
+                                              style: TextStyle(
+                                                fontSize: 15,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.orange.shade900,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.orange.shade300,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              _reviewsCompleted >
+                                                      _totalScansSubmitted
+                                                  ? Icons.trending_up
+                                                  : Icons.info_outline,
+                                              color: Colors.orange.shade700,
+                                              size: 20,
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: RichText(
+                                                text: TextSpan(
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    color:
+                                                        Colors.orange.shade900,
+                                                  ),
+                                                  children: [
+                                                    TextSpan(
+                                                      text:
+                                                          '${(_reviewsCompleted - _scansCompletedFromPeriod).abs()} ',
+                                                      style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 18,
+                                                      ),
+                                                    ),
+                                                    TextSpan(
+                                                      text:
+                                                          _reviewsCompleted >
+                                                                  _scansCompletedFromPeriod
+                                                              ? 'reviews were completed from previous submissions'
+                                                              : 'reviews completed, but some are from backlog',
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'This happens because:',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.orange.shade900,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.orange.shade200,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Container(
+                                                  margin: const EdgeInsets.only(
+                                                    top: 6,
+                                                    right: 8,
+                                                  ),
+                                                  width: 6,
+                                                  height: 6,
+                                                  decoration: BoxDecoration(
+                                                    color:
+                                                        Colors.orange.shade700,
+                                                    shape: BoxShape.circle,
+                                                  ),
+                                                ),
+                                                Expanded(
+                                                  child: RichText(
+                                                    text: TextSpan(
+                                                      style: TextStyle(
+                                                        fontSize: 13,
+                                                        color:
+                                                            Colors
+                                                                .orange
+                                                                .shade900,
+                                                      ),
+                                                      children: [
+                                                        const TextSpan(
+                                                          text:
+                                                              'Reviews Completed',
+                                                          style: TextStyle(
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                          ),
+                                                        ),
+                                                        const TextSpan(
+                                                          text:
+                                                              ' counts scans that were ',
+                                                        ),
+                                                        const TextSpan(
+                                                          text:
+                                                              'reviewed (completed)',
+                                                          style: TextStyle(
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                          ),
+                                                        ),
+                                                        const TextSpan(
+                                                          text:
+                                                              ' within the selected time range, regardless of when they were submitted.',
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Container(
+                                                  margin: const EdgeInsets.only(
+                                                    top: 6,
+                                                    right: 8,
+                                                  ),
+                                                  width: 6,
+                                                  height: 6,
+                                                  decoration: BoxDecoration(
+                                                    color:
+                                                        Colors.orange.shade700,
+                                                    shape: BoxShape.circle,
+                                                  ),
+                                                ),
+                                                Expanded(
+                                                  child: RichText(
+                                                    text: TextSpan(
+                                                      style: TextStyle(
+                                                        fontSize: 13,
+                                                        color:
+                                                            Colors
+                                                                .orange
+                                                                .shade900,
+                                                      ),
+                                                      children: [
+                                                        const TextSpan(
+                                                          text:
+                                                              'Total Scans Submitted',
+                                                          style: TextStyle(
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                          ),
+                                                        ),
+                                                        const TextSpan(
+                                                          text:
+                                                              ' only counts scans that were ',
+                                                        ),
+                                                        const TextSpan(
+                                                          text: 'submitted',
+                                                          style: TextStyle(
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                          ),
+                                                        ),
+                                                        const TextSpan(
+                                                          text:
+                                                              ' within the selected time range.',
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.orange.shade100,
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          '💡 Example: If you select "Last Month", you might have reviewed 47 scans (including old ones from previous months), but only 44 new scans were submitted last month.',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontStyle: FontStyle.italic,
+                                            color: Colors.orange.shade900,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                FutureBuilder<List<Map<String, dynamic>>>(
-                  future: ScanRequestsService.getScanRequests(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(child: CircularProgressIndicator()),
-                      );
-                    }
-                    final all = snapshot.data ?? [];
-                    final filtered = ScanRequestsService.filterByTimeRange(
-                      all,
-                      _selectedTimeRange,
-                    );
-                    int completed = 0;
-                    int pending = 0;
-                    for (final r in filtered) {
-                      final status = (r['status'] ?? '').toString();
-                      if (status == 'completed') completed++;
-                      if (status == 'pending') pending++;
-                    }
-                    final total = completed + pending;
-                    final text =
-                        total == 0
-                            ? '—'
-                            : '${((completed / total) * 100).toStringAsFixed(0)}% completed';
-                    return Text(
-                      text,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    );
-                  },
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -1814,6 +2682,829 @@ class _ReportsState extends State<Reports> {
         );
       },
     );
+  }
+
+  void _showReviewsCompletedModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 600,
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            child: Container(
+              width:
+                  MediaQuery.of(context).size.width > 700
+                      ? 600
+                      : MediaQuery.of(context).size.width * 0.9,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Fixed header with close button
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Reviews Completed',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Scrollable content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'What does this show?',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Total number of scan reports reviewed by experts within the selected time range.',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Calculation Details',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.green.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Reviews Completed:',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    Text(
+                                      '$_reviewsCompleted',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green.shade900,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Divider(color: Colors.green.shade200),
+                                const SizedBox(height: 8),
+                                _buildDetailRow(
+                                  'Time Range:',
+                                  _displayRangeLabel(_selectedTimeRange),
+                                ),
+                                _buildDetailRow(
+                                  'Filters by:',
+                                  'When review was completed',
+                                ),
+                                _buildDetailRow(
+                                  'Status:',
+                                  'Completed reports only',
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  color: Colors.blue.shade700,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'This counts when reports were REVIEWED, not when they were submitted.',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.blue.shade900,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          _buildInsightBox(
+                            'Insight',
+                            _getReviewsCompletedInsight(),
+                            Icons.lightbulb_outline,
+                            Colors.amber,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showTotalScansSubmittedModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 600,
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            child: Container(
+              width:
+                  MediaQuery.of(context).size.width > 700
+                      ? 600
+                      : MediaQuery.of(context).size.width * 0.9,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Fixed header with close button
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Total Scans Submitted',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Scrollable content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'What does this show?',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Total number of scan requests submitted by farmers within the selected time range.',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Calculation Details',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.blue.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Total Scans Submitted:',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    Text(
+                                      '$_totalScansSubmitted',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.blue.shade900,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Divider(color: Colors.blue.shade200),
+                                const SizedBox(height: 8),
+                                _buildDetailRow(
+                                  'Time Range:',
+                                  _displayRangeLabel(_selectedTimeRange),
+                                ),
+                                _buildDetailRow(
+                                  'Filters by:',
+                                  'When scan was submitted',
+                                ),
+                                _buildDetailRow(
+                                  'Includes:',
+                                  'All submitted scans (pending + completed)',
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Comparing with Reviews',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _buildDetailRow(
+                                  'Scans Submitted:',
+                                  '$_totalScansSubmitted',
+                                ),
+                                _buildDetailRow(
+                                  'Reviews Completed:',
+                                  '$_reviewsCompleted',
+                                ),
+                                const SizedBox(height: 8),
+                                Divider(color: Colors.grey.shade400),
+                                const SizedBox(height: 8),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Gap:',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    Text(
+                                      '${_totalScansSubmitted - _reviewsCompleted}',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color:
+                                            (_totalScansSubmitted -
+                                                        _reviewsCompleted) >
+                                                    0
+                                                ? Colors.orange.shade700
+                                                : Colors.green.shade700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'This gap represents scans still pending or reviewed outside the time range.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          _buildInsightBox(
+                            'Insight',
+                            _getTotalScansSubmittedInsight(),
+                            Icons.analytics_outlined,
+                            Colors.blue,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showHealthyRateModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 600,
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            child: Container(
+              width:
+                  MediaQuery.of(context).size.width > 700
+                      ? 600
+                      : MediaQuery.of(context).size.width * 0.9,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Fixed header with close button
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Healthy Rate',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Scrollable content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'What does this show?',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.lightGreen,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Percentage of reviewed scans that came back as healthy (no disease detected).',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Calculation Details',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.lightGreen,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.green.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Healthy Rate:',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    Text(
+                                      _healthyRate,
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green.shade900,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Divider(color: Colors.green.shade300),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'Breakdown:',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.green.shade800,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                _buildDetailRow(
+                                  'Healthy Scans:',
+                                  '$_healthyScansCount',
+                                ),
+                                _buildDetailRow(
+                                  'Diseased Scans:',
+                                  '$_diseasedScansCount',
+                                ),
+                                const SizedBox(height: 4),
+                                Divider(color: Colors.green.shade200),
+                                const SizedBox(height: 4),
+                                _buildDetailRow(
+                                  'Total Reviewed:',
+                                  '${_healthyScansCount + _diseasedScansCount}',
+                                ),
+                                const SizedBox(height: 12),
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: Colors.green.shade300,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    'Formula: ($_healthyScansCount ÷ ${_healthyScansCount + _diseasedScansCount}) × 100% = $_healthyRate',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.green.shade900,
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Data Filters',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.lightGreen,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _buildDetailRow(
+                                  'Time Range:',
+                                  _displayRangeLabel(_selectedTimeRange),
+                                ),
+                                _buildDetailRow(
+                                  'Filters by:',
+                                  'When review was completed',
+                                ),
+                                _buildDetailRow(
+                                  'Status:',
+                                  'Completed scans only',
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'Excluded:',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey[700],
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '• Tip Burn/Unknown (not considered a disease)\n'
+                                  '• Pending/unreviewed scans',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Interpreting the results:',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.lightGreen,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          _buildHealthIndicator(
+                            '80-100%',
+                            'Excellent field health',
+                            Colors.green,
+                          ),
+                          const SizedBox(height: 4),
+                          _buildHealthIndicator(
+                            '50-79%',
+                            'Moderate disease presence',
+                            Colors.orange,
+                          ),
+                          const SizedBox(height: 4),
+                          _buildHealthIndicator(
+                            '0-49%',
+                            'High disease pressure',
+                            Colors.red,
+                          ),
+                          const SizedBox(height: 16),
+                          _buildInsightBox(
+                            'Insight',
+                            _getHealthyRateInsight(),
+                            Icons.eco_outlined,
+                            Colors.green,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHealthIndicator(String range, String label, Color color) {
+    return Row(
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          '$range: ',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: Colors.grey[800],
+          ),
+        ),
+        Text(label, style: TextStyle(fontSize: 13, color: Colors.grey[700])),
+      ],
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+          Flexible(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[800],
+              ),
+              textAlign: TextAlign.right,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInsightBox(
+    String title,
+    String message,
+    IconData icon,
+    Color color,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey[800],
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getReviewsCompletedInsight() {
+    if (_reviewsCompleted == 0) {
+      return 'No reviews completed in this period. Check if experts are actively reviewing reports or if there are system issues.';
+    }
+
+    final avgPerDay = _reviewsCompleted / _getSelectedRangeDays();
+
+    if (avgPerDay < 5) {
+      return 'Low review activity detected (${avgPerDay.toStringAsFixed(1)} per day). Consider checking expert workload distribution or if additional support is needed.';
+    } else if (avgPerDay >= 10) {
+      return 'High productivity period! ${avgPerDay.toStringAsFixed(1)} reviews per day. This indicates strong expert engagement and efficient workflow.';
+    } else {
+      return 'Moderate review activity at ${avgPerDay.toStringAsFixed(1)} reviews per day. Monitor trends in the Avg. Response Time chart to ensure consistent service levels.';
+    }
+  }
+
+  String _getTotalScansSubmittedInsight() {
+    final gap = _totalScansSubmitted - _reviewsCompleted;
+
+    if (gap <= 0) {
+      return 'Excellent! All submitted scans have been reviewed. Your team is keeping up with demand effectively.';
+    }
+
+    final gapPercentage = (gap / _totalScansSubmitted) * 100;
+
+    if (gapPercentage > 30) {
+      return 'Significant backlog detected: $gap scans (${gapPercentage.toStringAsFixed(0)}%) are pending or reviewed outside the time range. Check "Overdue Pending >24h" and consider redistributing workload.';
+    } else if (gapPercentage > 15) {
+      return 'Moderate gap of $gap scans (${gapPercentage.toStringAsFixed(0)}%). Some reports may still be in review. Monitor the "Avg. Response Time" to ensure timely processing.';
+    } else {
+      return 'Small gap of $gap scans (${gapPercentage.toStringAsFixed(0)}%). This is normal as some scans may have been reviewed just outside the time window or are newly submitted.';
+    }
+  }
+
+  String _getHealthyRateInsight() {
+    final total = _healthyScansCount + _diseasedScansCount;
+
+    if (total == 0) {
+      return 'No data available for this period. Ensure scans are being submitted and reviewed.';
+    }
+
+    final rate = (_healthyScansCount / total) * 100;
+
+    if (rate >= 80) {
+      return 'Excellent field health! ${rate.toStringAsFixed(1)}% healthy rate indicates minimal disease pressure. Continue current management practices and monitor for any changes.';
+    } else if (rate >= 50) {
+      return 'Moderate disease presence at ${rate.toStringAsFixed(1)}% healthy. Review the Disease Distribution chart to identify primary threats. Consider targeted interventions for affected areas.';
+    } else if (rate >= 30) {
+      return 'Elevated disease pressure detected (${rate.toStringAsFixed(1)}% healthy). Check Disease Trends for patterns. Immediate attention may be needed for disease management.';
+    } else {
+      return 'Critical: High disease pressure with only ${rate.toStringAsFixed(1)}% healthy scans. Review Disease Distribution urgently and consider implementing comprehensive treatment interventions.';
+    }
+  }
+
+  int _getSelectedRangeDays() {
+    if (_selectedTimeRange.startsWith('Custom (') ||
+        _selectedTimeRange.startsWith('Monthly (')) {
+      final regex = RegExp(
+        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(_selectedTimeRange);
+      if (match != null) {
+        final start = DateTime.parse(match.group(1)!);
+        final end = DateTime.parse(match.group(2)!);
+        return end.difference(start).inDays + 1;
+      }
+    }
+
+    switch (_selectedTimeRange) {
+      case '1 Day':
+        return 1;
+      case 'Last 7 Days':
+        return 7;
+      case 'Last 30 Days':
+        return 30;
+      case 'Last 60 Days':
+        return 60;
+      case 'Last 90 Days':
+        return 90;
+      case 'Last Year':
+        return 365;
+      default:
+        return 7;
+    }
   }
 
   void _showAvgResponseTimeModal(BuildContext context) {
@@ -2036,6 +3727,200 @@ class _ReportsState extends State<Reports> {
           },
         );
       },
+    );
+  }
+}
+
+class _StatCardWithWarning extends StatefulWidget {
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onTap;
+  final bool showWarning;
+
+  const _StatCardWithWarning({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+    this.onTap,
+    required this.showWarning,
+  });
+
+  @override
+  State<_StatCardWithWarning> createState() => _StatCardWithWarningState();
+}
+
+class _StatCardWithWarningState extends State<_StatCardWithWarning>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scaleAnimation;
+  late Animation<Color?> _colorAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 1500),
+      vsync: this,
+    );
+
+    _scaleAnimation = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween<double>(
+          begin: 1.0,
+          end: 1.02,
+        ).chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 50,
+      ),
+      TweenSequenceItem(
+        tween: Tween<double>(
+          begin: 1.02,
+          end: 1.0,
+        ).chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 50,
+      ),
+    ]).animate(_controller);
+
+    _colorAnimation = ColorTween(
+      begin: Colors.transparent,
+      end: Colors.orange.withOpacity(0.1),
+    ).animate(_controller);
+
+    if (widget.showWarning) {
+      _controller.repeat();
+    }
+  }
+
+  @override
+  void didUpdateWidget(_StatCardWithWarning oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.showWarning && !oldWidget.showWarning) {
+      _controller.repeat();
+    } else if (!widget.showWarning && oldWidget.showWarning) {
+      _controller.stop();
+      _controller.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.showWarning) {
+      return _buildCard();
+    }
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Transform.scale(
+          scale: _scaleAnimation.value,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.orange.withOpacity(0.3 * _controller.value),
+                  blurRadius: 12,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: _buildCard(borderColor: _colorAnimation.value),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCard({Color? borderColor}) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side:
+            borderColor != null
+                ? BorderSide(color: borderColor, width: 2)
+                : BorderSide.none,
+      ),
+      child: InkWell(
+        onTap: widget.onTap,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // Main content - always centered
+            SizedBox.expand(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: widget.color.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(widget.icon, size: 24, color: widget.color),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      widget.value,
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      widget.title,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Warning badge - positioned absolutely
+            if (widget.showWarning)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.orange,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.orange.withOpacity(0.3),
+                        blurRadius: 8,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.warning,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
