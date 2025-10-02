@@ -1119,31 +1119,48 @@ class _ReportsState extends State<Reports> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    return SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Reports',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                ),
-                Row(
-                  children: [
-                    // Global time filter
-                    Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: DropdownButton<String>(
-                        value: _selectedTimeRange,
-                        underline: const SizedBox.shrink(),
-                        items:
-                            (<String>['Last 7 Days', 'Monthly…', 'Custom…']
-                                  ..addAll(
+    return Consumer<ScanRequestsSnapshot?>(
+      builder: (context, scanRequestsSnapshot, child) {
+        // Trigger update when snapshot changes (real-time)
+        if (_hasInitialized && scanRequestsSnapshot?.snapshot != null) {
+          // Use addPostFrameCallback to avoid calling setState during build
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _updateStatsFromSnapshot();
+            }
+          });
+        }
+
+        return child!;
+      },
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Reports',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                  Row(
+                    children: [
+                      // Global time filter
+                      Padding(
+                        padding: const EdgeInsets.only(right: 12),
+                        child: DropdownButton<String>(
+                          value: _selectedTimeRange,
+                          underline: const SizedBox.shrink(),
+                          items:
+                              (<String>[
+                                    'Last 7 Days',
+                                    'Monthly…',
+                                    'Custom…',
+                                  ]..addAll(
                                     _selectedTimeRange.startsWith('Custom (') ||
                                             _selectedTimeRange.startsWith(
                                               'Monthly (',
@@ -1151,281 +1168,283 @@ class _ReportsState extends State<Reports> {
                                         ? <String>[_selectedTimeRange]
                                         : const <String>[],
                                   ))
-                                .map(
-                                  (range) => DropdownMenuItem(
-                                    value: range,
-                                    child: Text(
-                                      _displayRangeLabel(range),
-                                      overflow: TextOverflow.ellipsis,
+                                  .map(
+                                    (range) => DropdownMenuItem(
+                                      value: range,
+                                      child: Text(
+                                        _displayRangeLabel(range),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
                                     ),
+                                  )
+                                  .toList(),
+                          onChanged: (value) async {
+                            if (value == null) return;
+                            if (value == 'Monthly…') {
+                              final now = DateTime.now();
+                              final picked = await _showMonthYearPicker(
+                                context: context,
+                                initialDate: now,
+                                firstDate: DateTime(2020),
+                                lastDate: now,
+                              );
+                              if (picked != null) {
+                                final firstDay = DateTime(
+                                  picked.year,
+                                  picked.month,
+                                  1,
+                                );
+                                final lastDay = DateTime(
+                                  picked.year,
+                                  picked.month + 1,
+                                  0,
+                                );
+                                final start =
+                                    '${firstDay.year}-${firstDay.month.toString().padLeft(2, '0')}-${firstDay.day.toString().padLeft(2, '0')}';
+                                final end =
+                                    '${lastDay.year}-${lastDay.month.toString().padLeft(2, '0')}-${lastDay.day.toString().padLeft(2, '0')}';
+                                final label = 'Monthly ($start to $end)';
+                                await _onTimeRangeChanged(label);
+                              }
+                            } else if (value == 'Custom…') {
+                              final picked = await pickDateRangeWithSf(
+                                context,
+                                initial: DateTimeRange(
+                                  start: DateTime.now().subtract(
+                                    const Duration(days: 7),
                                   ),
-                                )
-                                .toList(),
-                        onChanged: (value) async {
-                          if (value == null) return;
-                          if (value == 'Monthly…') {
-                            final now = DateTime.now();
-                            final picked = await _showMonthYearPicker(
-                              context: context,
-                              initialDate: now,
-                              firstDate: DateTime(2020),
-                              lastDate: now,
-                            );
-                            if (picked != null) {
-                              final firstDay = DateTime(
-                                picked.year,
-                                picked.month,
-                                1,
-                              );
-                              final lastDay = DateTime(
-                                picked.year,
-                                picked.month + 1,
-                                0,
-                              );
-                              final start =
-                                  '${firstDay.year}-${firstDay.month.toString().padLeft(2, '0')}-${firstDay.day.toString().padLeft(2, '0')}';
-                              final end =
-                                  '${lastDay.year}-${lastDay.month.toString().padLeft(2, '0')}-${lastDay.day.toString().padLeft(2, '0')}';
-                              final label = 'Monthly ($start to $end)';
-                              await _onTimeRangeChanged(label);
-                            }
-                          } else if (value == 'Custom…') {
-                            final picked = await pickDateRangeWithSf(
-                              context,
-                              initial: DateTimeRange(
-                                start: DateTime.now().subtract(
-                                  const Duration(days: 7),
+                                  end: DateTime.now(),
                                 ),
-                                end: DateTime.now(),
-                              ),
-                            );
-                            if (picked != null) {
-                              final start =
-                                  '${picked.start.year}-${picked.start.month.toString().padLeft(2, '0')}-${picked.start.day.toString().padLeft(2, '0')}';
-                              final end =
-                                  '${picked.end.year}-${picked.end.month.toString().padLeft(2, '0')}-${picked.end.day.toString().padLeft(2, '0')}';
-                              final label = 'Custom ($start to $end)';
-                              await _onTimeRangeChanged(label);
+                              );
+                              if (picked != null) {
+                                final start =
+                                    '${picked.start.year}-${picked.start.month.toString().padLeft(2, '0')}-${picked.start.day.toString().padLeft(2, '0')}';
+                                final end =
+                                    '${picked.end.year}-${picked.end.month.toString().padLeft(2, '0')}-${picked.end.day.toString().padLeft(2, '0')}';
+                                final label = 'Custom ($start to $end)';
+                                await _onTimeRangeChanged(label);
+                              }
+                            } else {
+                              _onTimeRangeChanged(value);
                             }
-                          } else {
-                            _onTimeRangeChanged(value);
+                          },
+                        ),
+                      ),
+                      // Removed Utility name editor; prepared-by now uses admin profile name
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.picture_as_pdf),
+                        label: const Text('Export PDF'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2D7204),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                        ),
+                        onPressed: () async {
+                          final result = await showDialog<Map<String, String>>(
+                            context: context,
+                            builder: (context) => const GenerateReportDialog(),
+                          );
+                          if (result != null) {
+                            final selectedRange =
+                                result['range'] ?? _selectedTimeRange;
+                            final pageSize = result['pageSize'] ?? 'A4';
+                            try {
+                              showDialog(
+                                context: context,
+                                barrierDismissible: false,
+                                builder:
+                                    (_) => const AlertDialog(
+                                      content: SizedBox(
+                                        height: 56,
+                                        child: Row(
+                                          children: [
+                                            SizedBox(
+                                              height: 24,
+                                              width: 24,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            ),
+                                            SizedBox(width: 16),
+                                            Expanded(
+                                              child: Text(
+                                                'Generating PDF report...',
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                              );
+                              // Fetch admin profile name for Prepared By
+                              String preparedBy = 'Admin';
+                              try {
+                                final user = FirebaseAuth.instance.currentUser;
+                                if (user != null) {
+                                  final snap =
+                                      await FirebaseFirestore.instance
+                                          .collection('admins')
+                                          .doc(user.uid)
+                                          .get();
+                                  final data = snap.data();
+                                  if (data != null) {
+                                    final dynamic v = data['adminName'];
+                                    final String n =
+                                        (v == null ? '' : v.toString()).trim();
+                                    if (n.isNotEmpty) preparedBy = n;
+                                  }
+                                }
+                              } catch (_) {}
+                              await ReportPdfService.generateAndShareReport(
+                                context: context,
+                                timeRange: selectedRange,
+                                pageSize: pageSize,
+                                backgroundAsset:
+                                    'assets/report_template_bg.jpg',
+                                preparedBy: preparedBy,
+                              );
+                              Navigator.of(context, rootNavigator: true).pop();
+                              // Log activity: PDF generated
+                              try {
+                                await FirebaseFirestore.instance
+                                    .collection('activities')
+                                    .add({
+                                      'action': 'Generated PDF report',
+                                      'user':
+                                          preparedBy.isEmpty
+                                              ? 'Admin'
+                                              : preparedBy,
+                                      'type': 'export',
+                                      'color': Colors.purple.value,
+                                      'icon': Icons.picture_as_pdf.codePoint,
+                                      'timestamp': FieldValue.serverTimestamp(),
+                                    });
+                              } catch (_) {
+                                // ignore logging failures
+                              }
+                            } catch (e) {
+                              Navigator.of(
+                                context,
+                                rootNavigator: true,
+                              ).maybePop();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Failed to generate PDF: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
                           }
                         },
                       ),
-                    ),
-                    // Removed Utility name editor; prepared-by now uses admin profile name
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.picture_as_pdf),
-                      label: const Text('Export PDF'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF2D7204),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
-                        ),
-                      ),
-                      onPressed: () async {
-                        final result = await showDialog<Map<String, String>>(
-                          context: context,
-                          builder: (context) => const GenerateReportDialog(),
-                        );
-                        if (result != null) {
-                          final selectedRange =
-                              result['range'] ?? _selectedTimeRange;
-                          final pageSize = result['pageSize'] ?? 'A4';
-                          try {
-                            showDialog(
-                              context: context,
-                              barrierDismissible: false,
-                              builder:
-                                  (_) => const AlertDialog(
-                                    content: SizedBox(
-                                      height: 56,
-                                      child: Row(
-                                        children: [
-                                          SizedBox(
-                                            height: 24,
-                                            width: 24,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                            ),
-                                          ),
-                                          SizedBox(width: 16),
-                                          Expanded(
-                                            child: Text(
-                                              'Generating PDF report...',
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                            );
-                            // Fetch admin profile name for Prepared By
-                            String preparedBy = 'Admin';
-                            try {
-                              final user = FirebaseAuth.instance.currentUser;
-                              if (user != null) {
-                                final snap =
-                                    await FirebaseFirestore.instance
-                                        .collection('admins')
-                                        .doc(user.uid)
-                                        .get();
-                                final data = snap.data();
-                                if (data != null) {
-                                  final dynamic v = data['adminName'];
-                                  final String n =
-                                      (v == null ? '' : v.toString()).trim();
-                                  if (n.isNotEmpty) preparedBy = n;
-                                }
-                              }
-                            } catch (_) {}
-                            await ReportPdfService.generateAndShareReport(
-                              context: context,
-                              timeRange: selectedRange,
-                              pageSize: pageSize,
-                              backgroundAsset: 'assets/report_template_bg.jpg',
-                              preparedBy: preparedBy,
-                            );
-                            Navigator.of(context, rootNavigator: true).pop();
-                            // Log activity: PDF generated
-                            try {
-                              await FirebaseFirestore.instance
-                                  .collection('activities')
-                                  .add({
-                                    'action': 'Generated PDF report',
-                                    'user':
-                                        preparedBy.isEmpty
-                                            ? 'Admin'
-                                            : preparedBy,
-                                    'type': 'export',
-                                    'color': Colors.purple.value,
-                                    'icon': Icons.picture_as_pdf.codePoint,
-                                    'timestamp': FieldValue.serverTimestamp(),
-                                  });
-                            } catch (_) {
-                              // ignore logging failures
-                            }
-                          } catch (e) {
-                            Navigator.of(
-                              context,
-                              rootNavigator: true,
-                            ).maybePop();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Failed to generate PDF: $e'),
-                                backgroundColor: Colors.red,
-                              ),
-                            );
-                          }
-                        }
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+
+              // Stats Grid - Time-filtered metrics only
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 4,
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
+                childAspectRatio: 1.2,
+                children: [
+                  // Row 1: Volume & Health metrics
+                  _buildStatCard(
+                    'Reviews Completed',
+                    _reviewsCompleted.toString(),
+                    Icons.check_circle,
+                    Colors.green,
+                    onTap: () => _showReviewsCompletedModal(context),
+                  ),
+                  _buildStatCard(
+                    'Total Scans Submitted',
+                    _totalScansSubmitted.toString(),
+                    Icons.upload_file,
+                    Colors.blue,
+                    onTap: () => _showTotalScansSubmittedModal(context),
+                  ),
+                  _buildStatCard(
+                    'Healthy Rate',
+                    _healthyRate,
+                    Icons.verified,
+                    Colors.lightGreen,
+                    onTap: () => _showHealthyRateModal(context),
+                  ),
+                  _buildStatCard(
+                    'Completion Rate',
+                    _completionRate ?? '—',
+                    Icons.task_alt,
+                    Colors.blueGrey,
+                    onTap: () => _showCompletionRateModal(context),
+                    showWarning: _hasCompletionRateMismatch(),
+                  ),
+                  // Row 2: Performance & SLA metrics
+                  _buildStatCard(
+                    'Avg. Response Time',
+                    _stats['averageResponseTime'] ?? '0 hours',
+                    Icons.timer,
+                    Colors.teal,
+                    onTap: () => _showAvgResponseTimeModal(context),
+                  ),
+                  _buildStatCard(
+                    'SLA ≤ 24h',
+                    _slaWithin24h ?? '—',
+                    Icons.speed,
+                    Colors.indigo,
+                    onTap: () => _showSlaModal(context),
+                  ),
+                  _buildStatCard(
+                    'Avg Temperature',
+                    _avgTemperature ?? '—',
+                    Icons.thermostat,
+                    Colors.deepPurple,
+                    onTap: () => _showAvgTemperatureModal(context),
+                  ),
+                  _buildStatCard(
+                    'Overdue Pending >24h',
+                    (_overduePendingCount ?? 0).toString(),
+                    Icons.warning_amber,
+                    Colors.orange,
+                    onTap: () => _showOverduePendingModal(context),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+
+              // Charts Row
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Disease Distribution Chart
+                  Expanded(
+                    child: DiseaseDistributionChart(
+                      diseaseStats: _diseaseStats,
+                      selectedTimeRange: _selectedTimeRange,
+                      onTimeRangeChanged: (String newTimeRange) async {
+                        await _onTimeRangeChanged(newTimeRange);
                       },
                     ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-
-            // Stats Grid - Time-filtered metrics only
-            GridView.count(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: 4,
-              crossAxisSpacing: 16,
-              mainAxisSpacing: 16,
-              childAspectRatio: 1.2,
-              children: [
-                // Row 1: Volume & Health metrics
-                _buildStatCard(
-                  'Reviews Completed',
-                  _reviewsCompleted.toString(),
-                  Icons.check_circle,
-                  Colors.green,
-                  onTap: () => _showReviewsCompletedModal(context),
-                ),
-                _buildStatCard(
-                  'Total Scans Submitted',
-                  _totalScansSubmitted.toString(),
-                  Icons.upload_file,
-                  Colors.blue,
-                  onTap: () => _showTotalScansSubmittedModal(context),
-                ),
-                _buildStatCard(
-                  'Healthy Rate',
-                  _healthyRate,
-                  Icons.verified,
-                  Colors.lightGreen,
-                  onTap: () => _showHealthyRateModal(context),
-                ),
-                _buildStatCard(
-                  'Completion Rate',
-                  _completionRate ?? '—',
-                  Icons.task_alt,
-                  Colors.blueGrey,
-                  onTap: () => _showCompletionRateModal(context),
-                  showWarning: _hasCompletionRateMismatch(),
-                ),
-                // Row 2: Performance & SLA metrics
-                _buildStatCard(
-                  'Avg. Response Time',
-                  _stats['averageResponseTime'] ?? '0 hours',
-                  Icons.timer,
-                  Colors.teal,
-                  onTap: () => _showAvgResponseTimeModal(context),
-                ),
-                _buildStatCard(
-                  'SLA ≤ 24h',
-                  _slaWithin24h ?? '—',
-                  Icons.speed,
-                  Colors.indigo,
-                  onTap: () => _showSlaModal(context),
-                ),
-                _buildStatCard(
-                  'Avg Temperature',
-                  _avgTemperature ?? '—',
-                  Icons.thermostat,
-                  Colors.deepPurple,
-                  onTap: () => _showAvgTemperatureModal(context),
-                ),
-                _buildStatCard(
-                  'Overdue Pending >24h',
-                  (_overduePendingCount ?? 0).toString(),
-                  Icons.warning_amber,
-                  Colors.orange,
-                  onTap: () => _showOverduePendingModal(context),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-
-            // Charts Row
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Disease Distribution Chart
-                Expanded(
-                  child: DiseaseDistributionChart(
-                    diseaseStats: _diseaseStats,
-                    selectedTimeRange: _selectedTimeRange,
-                    onTimeRangeChanged: (String newTimeRange) async {
-                      await _onTimeRangeChanged(newTimeRange);
-                    },
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            AvgResponseTrendChart(
-              trend: _avgResponseTrend,
-              selectedTimeRange: _selectedTimeRange,
-            ),
-            const SizedBox(height: 32),
-          ],
+                ],
+              ),
+              const SizedBox(height: 16),
+              AvgResponseTrendChart(
+                trend: _avgResponseTrend,
+                selectedTimeRange: _selectedTimeRange,
+              ),
+              const SizedBox(height: 32),
+            ],
+          ),
         ),
       ),
     );
@@ -2790,7 +2809,7 @@ class _ReportsState extends State<Reports> {
                                           ),
                                           const SizedBox(height: 6),
                                           Text(
-                                            '(Both submitted AND reviewed within the time range)',
+                                            '(Both submitted and reviewed within the time range)',
                                             style: TextStyle(
                                               fontSize: 11,
                                               fontStyle: FontStyle.italic,
@@ -3363,7 +3382,7 @@ class _ReportsState extends State<Reports> {
                                           ),
                                         ),
                                         child: Text(
-                                          '💡 Example: If you select "Last Month", you might have reviewed 47 scans (including old ones from previous months), but only 44 new scans were submitted last month.',
+                                          '💡 Example: For "Last Month", you might have completed 200 reviews in total, while only 150 scans were submitted during that month — the extra 50 came from earlier backlog.',
                                           style: TextStyle(
                                             fontSize: 13,
                                             fontStyle: FontStyle.italic,
