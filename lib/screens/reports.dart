@@ -4,6 +4,7 @@ import '../services/report_pdf_service.dart';
 // import '../services/settings_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/scan_requests_service.dart';
+import '../services/weather_service.dart';
 // CSV export removed
 // duplicate import removed
 import 'admin_dashboard.dart' show ScanRequestsSnapshot;
@@ -46,6 +47,7 @@ class _ReportsState extends State<Reports> {
   String? _slaWithin48h;
   String? _completionRate;
   int? _overduePendingCount;
+  String? _avgTemperature; // Average temperature for the time range
 
   // New metrics for time-filtered cards
   int _reviewsCompleted = 0; // Reviews done in period (reviewedAt-based)
@@ -547,6 +549,81 @@ class _ReportsState extends State<Reports> {
       _healthyScansCount = healthyScans;
       _diseasedScansCount = diseaseScans;
     });
+
+    // Fetch temperature data for the selected time range
+    _fetchTemperatureData();
+  }
+
+  Future<void> _fetchTemperatureData() async {
+    try {
+      // Parse time range to get start and end dates
+      final now = DateTime.now();
+      DateTime? startDate;
+      DateTime? endDate;
+
+      if (_selectedTimeRange.startsWith('Custom (') ||
+          _selectedTimeRange.startsWith('Monthly (')) {
+        final regex = RegExp(
+          r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        );
+        final match = regex.firstMatch(_selectedTimeRange);
+        if (match != null) {
+          startDate = DateTime.parse(match.group(1)!);
+          endDate = DateTime.parse(match.group(2)!);
+        }
+      } else {
+        switch (_selectedTimeRange) {
+          case '1 Day':
+            startDate = now.subtract(const Duration(days: 1));
+            endDate = now;
+            break;
+          case 'Last 7 Days':
+            startDate = now.subtract(const Duration(days: 7));
+            endDate = now;
+            break;
+          case 'Last 30 Days':
+            startDate = now.subtract(const Duration(days: 30));
+            endDate = now;
+            break;
+          case 'Last 60 Days':
+            startDate = now.subtract(const Duration(days: 60));
+            endDate = now;
+            break;
+          case 'Last 90 Days':
+            startDate = now.subtract(const Duration(days: 90));
+            endDate = now;
+            break;
+          case 'Last Year':
+            startDate = now.subtract(const Duration(days: 365));
+            endDate = now;
+            break;
+          default:
+            startDate = now.subtract(const Duration(days: 7));
+            endDate = now;
+        }
+      }
+
+      if (startDate != null && endDate != null) {
+        final weatherSummary = await WeatherService.getAverageTemperature(
+          start: startDate,
+          end: endDate,
+        );
+
+        setState(() {
+          if (weatherSummary.averageC != null) {
+            _avgTemperature =
+                '${weatherSummary.averageC!.toStringAsFixed(1)}°C';
+          } else {
+            _avgTemperature = '—';
+          }
+        });
+      }
+    } catch (e) {
+      print('Error fetching temperature: $e');
+      setState(() {
+        _avgTemperature = '—';
+      });
+    }
   }
 
   Future<void> _loadData() async {
@@ -1309,11 +1386,11 @@ class _ReportsState extends State<Reports> {
                   onTap: () => _showSlaModal(context),
                 ),
                 _buildStatCard(
-                  'SLA ≤ 48h',
-                  _slaWithin48h ?? '—',
-                  Icons.speed_outlined,
+                  'Avg Temperature',
+                  _avgTemperature ?? '—',
+                  Icons.thermostat,
                   Colors.deepPurple,
-                  onTap: () => _showSla48Modal(context),
+                  onTap: () => _showAvgTemperatureModal(context),
                 ),
                 _buildStatCard(
                   'Overdue Pending >24h',
@@ -1417,192 +1494,531 @@ class _ReportsState extends State<Reports> {
       context: context,
       builder: (context) {
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 40,
-            vertical: 40,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
           ),
-          child: Container(
-            width: 700,
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'SLA Details',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Selected range: ${_displayRangeLabel(_selectedTimeRange)}',
-                ),
-                const SizedBox(height: 12),
-                const SizedBox(height: 12),
-                FutureBuilder<List<Map<String, dynamic>>>(
-                  future: ScanRequestsService.getScanRequests(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(child: CircularProgressIndicator()),
-                      );
-                    }
-                    final all = snapshot.data ?? [];
-
-                    // Build reviewedAt-anchored window for SLA (matches cards)
-                    final DateTime now = DateTime.now();
-                    DateTime? startInclusive;
-                    DateTime? endExclusive;
-                    if (_selectedTimeRange.startsWith('Custom (') ||
-                        _selectedTimeRange.startsWith('Monthly (')) {
-                      final regex = RegExp(
-                        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
-                      );
-                      final match = regex.firstMatch(_selectedTimeRange);
-                      if (match != null) {
-                        final s = DateTime.parse(match.group(1)!);
-                        final e = DateTime.parse(match.group(2)!);
-                        startInclusive = DateTime(s.year, s.month, s.day);
-                        endExclusive = DateTime(
-                          e.year,
-                          e.month,
-                          e.day,
-                        ).add(const Duration(days: 1));
-                      }
-                    }
-                    if (startInclusive == null || endExclusive == null) {
-                      switch (_selectedTimeRange) {
-                        case '1 Day':
-                          startInclusive = now.subtract(
-                            const Duration(days: 1),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last 7 Days':
-                          startInclusive = now.subtract(
-                            const Duration(days: 7),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last 30 Days':
-                          startInclusive = now.subtract(
-                            const Duration(days: 30),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last 60 Days':
-                          startInclusive = now.subtract(
-                            const Duration(days: 60),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last 90 Days':
-                          startInclusive = now.subtract(
-                            const Duration(days: 90),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last Year':
-                          startInclusive = DateTime(
-                            now.year - 1,
-                            now.month,
-                            now.day,
-                          );
-                          endExclusive = now;
-                          break;
-                        default:
-                          startInclusive = now.subtract(
-                            const Duration(days: 7),
-                          );
-                          endExclusive = now;
-                      }
-                    }
-                    int completed = 0;
-                    int within24 = 0;
-                    final buckets = <String, int>{
-                      '0-6h': 0,
-                      '6-12h': 0,
-                      '12-24h': 0,
-                      '24-48h': 0,
-                      '>48h': 0,
-                    };
-                    for (final r in all) {
-                      if ((r['status'] ?? '') != 'completed') continue;
-                      final createdAt = r['createdAt'];
-                      final reviewedAt = r['reviewedAt'];
-                      if (createdAt == null || reviewedAt == null) continue;
-                      DateTime? created;
-                      DateTime? reviewed;
-                      if (createdAt is Timestamp) created = createdAt.toDate();
-                      if (createdAt is String)
-                        created = DateTime.tryParse(createdAt);
-                      if (reviewedAt is Timestamp)
-                        reviewed = reviewedAt.toDate();
-                      if (reviewedAt is String)
-                        reviewed = DateTime.tryParse(reviewedAt);
-                      if (created == null || reviewed == null) continue;
-                      final inWindow =
-                          !reviewed.isBefore(startInclusive) &&
-                          reviewed.isBefore(endExclusive);
-                      if (!inWindow) continue;
-                      completed++;
-                      final hours =
-                          reviewed.difference(created).inMinutes / 60.0;
-                      if (hours <= 24) within24++;
-                      if (hours <= 6)
-                        buckets['0-6h'] = buckets['0-6h']! + 1;
-                      else if (hours <= 12)
-                        buckets['6-12h'] = buckets['6-12h']! + 1;
-                      else if (hours <= 24)
-                        buckets['12-24h'] = buckets['12-24h']! + 1;
-                      else if (hours <= 48)
-                        buckets['24-48h'] = buckets['24-48h']! + 1;
-                      else
-                        buckets['>48h'] = buckets['>48h']! + 1;
-                    }
-                    final slaText =
-                        completed == 0
-                            ? '—'
-                            : '${((within24 / completed) * 100).toStringAsFixed(0)}% within 24h';
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 650,
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            child: Container(
+              width:
+                  MediaQuery.of(context).size.width > 700
+                      ? 650
+                      : MediaQuery.of(context).size.width * 0.9,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Fixed header with close button
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'Completed: $completed, $slaText',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        const Expanded(
+                          child: Text(
+                            'SLA ≤ 24h Performance',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 12,
-                          runSpacing: 12,
-                          children:
-                              buckets.entries.map((e) {
-                                return Chip(
-                                  label: Text('${e.key}: ${e.value}'),
-                                );
-                              }).toList(),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close',
                         ),
                       ],
-                    );
-                  },
-                ),
-              ],
+                    ),
+                  ),
+                  // Scrollable content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: FutureBuilder<List<Map<String, dynamic>>>(
+                        future: ScanRequestsService.getScanRequests(),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return const Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          }
+                          final all = snapshot.data ?? [];
+
+                          // Build reviewedAt-anchored window for SLA (matches cards)
+                          final DateTime now = DateTime.now();
+                          DateTime? startInclusive;
+                          DateTime? endExclusive;
+                          if (_selectedTimeRange.startsWith('Custom (') ||
+                              _selectedTimeRange.startsWith('Monthly (')) {
+                            final regex = RegExp(
+                              r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+                            );
+                            final match = regex.firstMatch(_selectedTimeRange);
+                            if (match != null) {
+                              final s = DateTime.parse(match.group(1)!);
+                              final e = DateTime.parse(match.group(2)!);
+                              startInclusive = DateTime(s.year, s.month, s.day);
+                              endExclusive = DateTime(
+                                e.year,
+                                e.month,
+                                e.day,
+                              ).add(const Duration(days: 1));
+                            }
+                          }
+                          if (startInclusive == null || endExclusive == null) {
+                            switch (_selectedTimeRange) {
+                              case '1 Day':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 1),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last 7 Days':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 7),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last 30 Days':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 30),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last 60 Days':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 60),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last 90 Days':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 90),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last Year':
+                                startInclusive = DateTime(
+                                  now.year - 1,
+                                  now.month,
+                                  now.day,
+                                );
+                                endExclusive = now;
+                                break;
+                              default:
+                                startInclusive = now.subtract(
+                                  const Duration(days: 7),
+                                );
+                                endExclusive = now;
+                            }
+                          }
+                          int completed = 0;
+                          int within24 = 0;
+                          final buckets = <String, int>{
+                            '0-6h': 0,
+                            '6-12h': 0,
+                            '12-24h': 0,
+                            '24-48h': 0,
+                            '>48h': 0,
+                          };
+                          for (final r in all) {
+                            if ((r['status'] ?? '') != 'completed') continue;
+                            final createdAt = r['createdAt'];
+                            final reviewedAt = r['reviewedAt'];
+                            if (createdAt == null || reviewedAt == null)
+                              continue;
+                            DateTime? created;
+                            DateTime? reviewed;
+                            if (createdAt is Timestamp)
+                              created = createdAt.toDate();
+                            if (createdAt is String)
+                              created = DateTime.tryParse(createdAt);
+                            if (reviewedAt is Timestamp)
+                              reviewed = reviewedAt.toDate();
+                            if (reviewedAt is String)
+                              reviewed = DateTime.tryParse(reviewedAt);
+                            if (created == null || reviewed == null) continue;
+                            final inWindow =
+                                !reviewed.isBefore(startInclusive) &&
+                                reviewed.isBefore(endExclusive);
+                            if (!inWindow) continue;
+                            completed++;
+                            final hours =
+                                reviewed.difference(created).inMinutes / 60.0;
+                            if (hours <= 24) within24++;
+                            if (hours <= 6)
+                              buckets['0-6h'] = buckets['0-6h']! + 1;
+                            else if (hours <= 12)
+                              buckets['6-12h'] = buckets['6-12h']! + 1;
+                            else if (hours <= 24)
+                              buckets['12-24h'] = buckets['12-24h']! + 1;
+                            else if (hours <= 48)
+                              buckets['24-48h'] = buckets['24-48h']! + 1;
+                            else
+                              buckets['>48h'] = buckets['>48h']! + 1;
+                          }
+                          final slaPercentage =
+                              completed == 0
+                                  ? 0.0
+                                  : (within24 / completed) * 100;
+                          final slaText =
+                              completed == 0
+                                  ? '—'
+                                  : '${slaPercentage.toStringAsFixed(0)}%';
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'What does this show?',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blueGrey,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Percentage of reviews completed within 24 hours during ${_displayRangeLabel(_selectedTimeRange)}.',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.speed,
+                                    color: Colors.indigo.shade700,
+                                    size: 22,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'SLA Performance (What\'s on the Card)',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blueGrey,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.indigo.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.indigo.shade200,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          'SLA ≤ 24h Rate:',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.grey[700],
+                                          ),
+                                        ),
+                                        Text(
+                                          slaText,
+                                          style: TextStyle(
+                                            fontSize: 26,
+                                            fontWeight: FontWeight.bold,
+                                            color:
+                                                slaPercentage >= 85
+                                                    ? Colors.green.shade700
+                                                    : slaPercentage >= 70
+                                                    ? Colors.orange.shade700
+                                                    : Colors.red.shade700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Divider(
+                                      color: Colors.indigo.shade300,
+                                      thickness: 1.5,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      'Breakdown:',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.indigo.shade800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color: Colors.indigo.shade300,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Total Reviews Completed: $completed',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.indigo.shade900,
+                                              fontFamily: 'monospace',
+                                            ),
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Completed within 24h: $within24',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.green.shade700,
+                                              fontFamily: 'monospace',
+                                            ),
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'SLA Rate = ($within24 ÷ $completed) × 100 = $slaText',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.indigo.shade700,
+                                              fontFamily: 'monospace',
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              const Text(
+                                'Response Time Distribution',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blueGrey,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.grey.shade300,
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    _buildResponseTimeBucket(
+                                      '⚡ 0-6 hours (Excellent)',
+                                      buckets['0-6h']!,
+                                      completed,
+                                      Colors.green,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _buildResponseTimeBucket(
+                                      '✓ 6-12 hours (Good)',
+                                      buckets['6-12h']!,
+                                      completed,
+                                      Colors.lightGreen,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _buildResponseTimeBucket(
+                                      '○ 12-24 hours (Acceptable)',
+                                      buckets['12-24h']!,
+                                      completed,
+                                      Colors.orange,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _buildResponseTimeBucket(
+                                      '△ 24-48 hours (Needs Improvement)',
+                                      buckets['24-48h']!,
+                                      completed,
+                                      Colors.deepOrange,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _buildResponseTimeBucket(
+                                      '✕ >48 hours (Critical)',
+                                      buckets['>48h']!,
+                                      completed,
+                                      Colors.red,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color:
+                                      slaPercentage >= 85
+                                          ? Colors.green.shade50
+                                          : slaPercentage >= 70
+                                          ? Colors.orange.shade50
+                                          : Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color:
+                                        slaPercentage >= 85
+                                            ? Colors.green.shade200
+                                            : slaPercentage >= 70
+                                            ? Colors.orange.shade200
+                                            : Colors.red.shade200,
+                                  ),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                      slaPercentage >= 85
+                                          ? Icons.check_circle_outline
+                                          : slaPercentage >= 70
+                                          ? Icons.info_outline
+                                          : Icons.warning_amber,
+                                      color:
+                                          slaPercentage >= 85
+                                              ? Colors.green.shade700
+                                              : slaPercentage >= 70
+                                              ? Colors.orange.shade700
+                                              : Colors.red.shade700,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: RichText(
+                                        text: TextSpan(
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color:
+                                                slaPercentage >= 85
+                                                    ? Colors.green.shade900
+                                                    : slaPercentage >= 70
+                                                    ? Colors.orange.shade900
+                                                    : Colors.red.shade900,
+                                          ),
+                                          children: [
+                                            const TextSpan(
+                                              text: 'Performance Insight: ',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            TextSpan(
+                                              text:
+                                                  slaPercentage >= 85
+                                                      ? 'Excellent performance! Your team is meeting SLA targets consistently. $within24 out of $completed reviews were completed within 24 hours.'
+                                                      : slaPercentage >= 70
+                                                      ? 'Good performance, but there\'s room for improvement. Consider reviewing workload distribution to increase the percentage of reviews completed within 24 hours.'
+                                                      : 'Critical: SLA target not being met. Only $within24 out of $completed reviews were completed within 24 hours. Immediate action required to improve response times.',
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildResponseTimeBucket(
+    String label,
+    int count,
+    int total,
+    Color color,
+  ) {
+    final percentage = total == 0 ? 0.0 : (count / total) * 100;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade800,
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Container(
+              height: 8,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: percentage / 100,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 80,
+            child: Text(
+              '$count (${percentage.toStringAsFixed(0)}%)',
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: color,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1611,156 +2027,525 @@ class _ReportsState extends State<Reports> {
       context: context,
       builder: (context) {
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 40,
-            vertical: 40,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
           ),
-          child: Container(
-            width: 700,
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'SLA ≤ 48h',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 650,
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            child: Container(
+              width:
+                  MediaQuery.of(context).size.width > 700
+                      ? 650
+                      : MediaQuery.of(context).size.width * 0.9,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Fixed header with close button
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'SLA ≤ 48h Performance',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Scrollable content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: FutureBuilder<List<Map<String, dynamic>>>(
+                        future: ScanRequestsService.getScanRequests(),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return const Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          }
+                          final all = snapshot.data ?? [];
+
+                          // Build reviewedAt-anchored window for SLA 48h (matches cards)
+                          final DateTime now = DateTime.now();
+                          DateTime? startInclusive;
+                          DateTime? endExclusive;
+                          if (_selectedTimeRange.startsWith('Custom (') ||
+                              _selectedTimeRange.startsWith('Monthly (')) {
+                            final regex = RegExp(
+                              r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+                            );
+                            final match = regex.firstMatch(_selectedTimeRange);
+                            if (match != null) {
+                              final s = DateTime.parse(match.group(1)!);
+                              final e = DateTime.parse(match.group(2)!);
+                              startInclusive = DateTime(s.year, s.month, s.day);
+                              endExclusive = DateTime(
+                                e.year,
+                                e.month,
+                                e.day,
+                              ).add(const Duration(days: 1));
+                            }
+                          }
+                          if (startInclusive == null || endExclusive == null) {
+                            switch (_selectedTimeRange) {
+                              case '1 Day':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 1),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last 7 Days':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 7),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last 30 Days':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 30),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last 60 Days':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 60),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last 90 Days':
+                                startInclusive = now.subtract(
+                                  const Duration(days: 90),
+                                );
+                                endExclusive = now;
+                                break;
+                              case 'Last Year':
+                                startInclusive = DateTime(
+                                  now.year - 1,
+                                  now.month,
+                                  now.day,
+                                );
+                                endExclusive = now;
+                                break;
+                              default:
+                                startInclusive = now.subtract(
+                                  const Duration(days: 7),
+                                );
+                                endExclusive = now;
+                            }
+                          }
+                          int completed = 0;
+                          int within48 = 0;
+                          for (final r in all) {
+                            if ((r['status'] ?? '') != 'completed') continue;
+                            final createdAt = r['createdAt'];
+                            final reviewedAt = r['reviewedAt'];
+                            if (createdAt == null || reviewedAt == null)
+                              continue;
+                            DateTime? created;
+                            DateTime? reviewed;
+                            if (createdAt is Timestamp)
+                              created = createdAt.toDate();
+                            if (createdAt is String)
+                              created = DateTime.tryParse(createdAt);
+                            if (reviewedAt is Timestamp)
+                              reviewed = reviewedAt.toDate();
+                            if (reviewedAt is String)
+                              reviewed = DateTime.tryParse(reviewedAt);
+                            if (created == null || reviewed == null) continue;
+                            final inWindow =
+                                !reviewed.isBefore(startInclusive) &&
+                                reviewed.isBefore(endExclusive);
+                            if (!inWindow) continue;
+                            completed++;
+                            final hours =
+                                reviewed.difference(created).inMinutes / 60.0;
+                            if (hours <= 48) within48++;
+                          }
+                          final text =
+                              completed == 0
+                                  ? '—'
+                                  : '${((within48 / completed) * 100).toStringAsFixed(0)}% within 48h';
+                          return Text(
+                            text,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          );
+                        },
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                const SizedBox(height: 12),
-                FutureBuilder<List<Map<String, dynamic>>>(
-                  future: ScanRequestsService.getScanRequests(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(child: CircularProgressIndicator()),
-                      );
-                    }
-                    final all = snapshot.data ?? [];
-
-                    // Build reviewedAt-anchored window for SLA 48h (matches cards)
-                    final DateTime now = DateTime.now();
-                    DateTime? startInclusive;
-                    DateTime? endExclusive;
-                    if (_selectedTimeRange.startsWith('Custom (') ||
-                        _selectedTimeRange.startsWith('Monthly (')) {
-                      final regex = RegExp(
-                        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
-                      );
-                      final match = regex.firstMatch(_selectedTimeRange);
-                      if (match != null) {
-                        final s = DateTime.parse(match.group(1)!);
-                        final e = DateTime.parse(match.group(2)!);
-                        startInclusive = DateTime(s.year, s.month, s.day);
-                        endExclusive = DateTime(
-                          e.year,
-                          e.month,
-                          e.day,
-                        ).add(const Duration(days: 1));
-                      }
-                    }
-                    if (startInclusive == null || endExclusive == null) {
-                      switch (_selectedTimeRange) {
-                        case '1 Day':
-                          startInclusive = now.subtract(
-                            const Duration(days: 1),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last 7 Days':
-                          startInclusive = now.subtract(
-                            const Duration(days: 7),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last 30 Days':
-                          startInclusive = now.subtract(
-                            const Duration(days: 30),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last 60 Days':
-                          startInclusive = now.subtract(
-                            const Duration(days: 60),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last 90 Days':
-                          startInclusive = now.subtract(
-                            const Duration(days: 90),
-                          );
-                          endExclusive = now;
-                          break;
-                        case 'Last Year':
-                          startInclusive = DateTime(
-                            now.year - 1,
-                            now.month,
-                            now.day,
-                          );
-                          endExclusive = now;
-                          break;
-                        default:
-                          startInclusive = now.subtract(
-                            const Duration(days: 7),
-                          );
-                          endExclusive = now;
-                      }
-                    }
-                    int completed = 0;
-                    int within48 = 0;
-                    for (final r in all) {
-                      if ((r['status'] ?? '') != 'completed') continue;
-                      final createdAt = r['createdAt'];
-                      final reviewedAt = r['reviewedAt'];
-                      if (createdAt == null || reviewedAt == null) continue;
-                      DateTime? created;
-                      DateTime? reviewed;
-                      if (createdAt is Timestamp) created = createdAt.toDate();
-                      if (createdAt is String)
-                        created = DateTime.tryParse(createdAt);
-                      if (reviewedAt is Timestamp)
-                        reviewed = reviewedAt.toDate();
-                      if (reviewedAt is String)
-                        reviewed = DateTime.tryParse(reviewedAt);
-                      if (created == null || reviewed == null) continue;
-                      final inWindow =
-                          !reviewed.isBefore(startInclusive) &&
-                          reviewed.isBefore(endExclusive);
-                      if (!inWindow) continue;
-                      completed++;
-                      final hours =
-                          reviewed.difference(created).inMinutes / 60.0;
-                      if (hours <= 48) within48++;
-                    }
-                    final text =
-                        completed == 0
-                            ? '—'
-                            : '${((within48 / completed) * 100).toStringAsFixed(0)}% within 48h';
-                    return Text(
-                      text,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    );
-                  },
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
           ),
         );
       },
     );
+  }
+
+  void _showAvgTemperatureModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 600,
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            child: Container(
+              width:
+                  MediaQuery.of(context).size.width > 700
+                      ? 600
+                      : MediaQuery.of(context).size.width * 0.9,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Fixed header with close button
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Average Temperature',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Scrollable content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: FutureBuilder<WeatherSummary>(
+                        future: _getTemperatureForRange(),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(24),
+                                child: CircularProgressIndicator(),
+                              ),
+                            );
+                          }
+
+                          final weather = snapshot.data;
+                          if (weather == null || weather.averageC == null) {
+                            return const Center(
+                              child: Text(
+                                'No temperature data available for this period.',
+                              ),
+                            );
+                          }
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'What does this show?',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blueGrey,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Average temperature data for ${_displayRangeLabel(_selectedTimeRange)}. Temperature can impact plant health and disease development.',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.thermostat,
+                                    color: Colors.deepPurple.shade700,
+                                    size: 22,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'Temperature Summary',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blueGrey,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      Colors.orange.shade50,
+                                      Colors.deepOrange.shade50,
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.orange.shade200,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      '${weather.averageC!.toStringAsFixed(1)}°C',
+                                      style: TextStyle(
+                                        fontSize: 48,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.deepOrange.shade700,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Average Temperature',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 20),
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceEvenly,
+                                      children: [
+                                        _buildTempStat(
+                                          'High',
+                                          weather.maxC != null
+                                              ? '${weather.maxC!.toStringAsFixed(1)}°C'
+                                              : '—',
+                                          Icons.arrow_upward,
+                                          Colors.red,
+                                        ),
+                                        _buildTempStat(
+                                          'Low',
+                                          weather.minC != null
+                                              ? '${weather.minC!.toStringAsFixed(1)}°C'
+                                              : '—',
+                                          Icons.arrow_downward,
+                                          Colors.blue,
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.blue.shade200,
+                                  ),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                      Icons.lightbulb_outline,
+                                      color: Colors.blue.shade700,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: RichText(
+                                        text: TextSpan(
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.blue.shade900,
+                                          ),
+                                          children: [
+                                            const TextSpan(
+                                              text: 'Agricultural Insight: ',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            TextSpan(
+                                              text: _getTemperatureInsight(
+                                                weather.averageC!,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                      Icons.info_outline,
+                                      color: Colors.grey.shade700,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        'Temperature data is sourced from Open-Meteo API and represents average conditions for Carmen, Davao del Norte during the selected time range.',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTempStat(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 24),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+      ],
+    );
+  }
+
+  String _getTemperatureInsight(double avgTemp) {
+    if (avgTemp < 20) {
+      return 'Cooler temperatures may slow plant growth but can reduce certain fungal disease pressure. Monitor for cold-sensitive plant stress.';
+    } else if (avgTemp >= 20 && avgTemp < 28) {
+      return 'Optimal temperature range for most tropical plants. These conditions support healthy growth while minimizing heat stress.';
+    } else if (avgTemp >= 28 && avgTemp < 32) {
+      return 'Warm temperatures may accelerate plant growth but also increase water needs. Watch for signs of heat stress and ensure adequate irrigation.';
+    } else {
+      return 'High temperatures can stress plants and create favorable conditions for certain diseases. Increased monitoring and proper hydration are essential.';
+    }
+  }
+
+  Future<WeatherSummary> _getTemperatureForRange() async {
+    final now = DateTime.now();
+    DateTime? startDate;
+    DateTime? endDate;
+
+    if (_selectedTimeRange.startsWith('Custom (') ||
+        _selectedTimeRange.startsWith('Monthly (')) {
+      final regex = RegExp(
+        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(_selectedTimeRange);
+      if (match != null) {
+        startDate = DateTime.parse(match.group(1)!);
+        endDate = DateTime.parse(match.group(2)!);
+      }
+    } else {
+      switch (_selectedTimeRange) {
+        case '1 Day':
+          startDate = now.subtract(const Duration(days: 1));
+          endDate = now;
+          break;
+        case 'Last 7 Days':
+          startDate = now.subtract(const Duration(days: 7));
+          endDate = now;
+          break;
+        case 'Last 30 Days':
+          startDate = now.subtract(const Duration(days: 30));
+          endDate = now;
+          break;
+        case 'Last 60 Days':
+          startDate = now.subtract(const Duration(days: 60));
+          endDate = now;
+          break;
+        case 'Last 90 Days':
+          startDate = now.subtract(const Duration(days: 90));
+          endDate = now;
+          break;
+        case 'Last Year':
+          startDate = now.subtract(const Duration(days: 365));
+          endDate = now;
+          break;
+        default:
+          startDate = now.subtract(const Duration(days: 7));
+          endDate = now;
+      }
+    }
+
+    if (startDate != null && endDate != null) {
+      return await WeatherService.getAverageTemperature(
+        start: startDate,
+        end: endDate,
+      );
+    }
+
+    return WeatherSummary.empty();
   }
 
   void _showCompletionRateModal(BuildContext context) {
@@ -2610,78 +3395,354 @@ class _ReportsState extends State<Reports> {
       context: context,
       builder: (context) {
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 40,
-            vertical: 40,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
           ),
-          child: Container(
-            width: 700,
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Overdue Pending (>24h)',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 600,
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            child: Container(
+              width:
+                  MediaQuery.of(context).size.width > 700
+                      ? 600
+                      : MediaQuery.of(context).size.width * 0.9,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Fixed header with close button
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Overdue Pending (>24h)',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Scrollable content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: FutureBuilder<List<Map<String, dynamic>>>(
+                        future: ScanRequestsService.getScanRequests(),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return const Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          }
+                          final all = snapshot.data ?? [];
+                          final filtered =
+                              ScanRequestsService.filterByTimeRange(
+                                all,
+                                _selectedTimeRange,
+                              );
+
+                          // Calculate overdue scans by time buckets
+                          int overdue24to48 = 0;
+                          int overdue48to72 = 0;
+                          int overdueOver72 = 0;
+                          int totalOverdue = 0;
+                          int totalPending = 0;
+
+                          final now = DateTime.now();
+
+                          for (final r in filtered) {
+                            if ((r['status'] ?? '') == 'pending') {
+                              totalPending++;
+                              final createdAt = r['createdAt'];
+                              DateTime? created;
+                              if (createdAt is Timestamp) {
+                                created = createdAt.toDate();
+                              } else if (createdAt is String) {
+                                created = DateTime.tryParse(createdAt);
+                              }
+                              if (created != null) {
+                                final hrs =
+                                    now.difference(created).inMinutes / 60.0;
+                                if (hrs > 24.0) {
+                                  totalOverdue++;
+                                  if (hrs <= 48.0) {
+                                    overdue24to48++;
+                                  } else if (hrs <= 72.0) {
+                                    overdue48to72++;
+                                  } else {
+                                    overdueOver72++;
+                                  }
+                                }
+                              }
+                            }
+                          }
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'What does this show?',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.orange,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Number of pending scan reports that have been waiting for review for more than 24 hours within the selected time range.',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Summary',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.orange,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.orange.shade200,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          'Overdue Pending:',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.grey[700],
+                                          ),
+                                        ),
+                                        Text(
+                                          '$totalOverdue',
+                                          style: TextStyle(
+                                            fontSize: 28,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.orange.shade900,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Divider(color: Colors.orange.shade200),
+                                    const SizedBox(height: 8),
+                                    _buildDetailRow(
+                                      'Total Pending:',
+                                      '$totalPending',
+                                    ),
+                                    _buildDetailRow(
+                                      'Time Range:',
+                                      _displayRangeLabel(_selectedTimeRange),
+                                    ),
+                                    _buildDetailRow(
+                                      'Status:',
+                                      'Pending > 24 hours',
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Aging Breakdown',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.orange,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.grey.shade300,
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    _buildAgingBucket(
+                                      '⚠️ 24-48 hours (Urgent)',
+                                      overdue24to48,
+                                      totalOverdue,
+                                      Colors.orange,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _buildAgingBucket(
+                                      '⚠️⚠️ 48-72 hours (Critical)',
+                                      overdue48to72,
+                                      totalOverdue,
+                                      Colors.deepOrange,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _buildAgingBucket(
+                                      '🔴 Over 72 hours (Severe)',
+                                      overdueOver72,
+                                      totalOverdue,
+                                      Colors.red,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.info_outline,
+                                      color: Colors.blue.shade700,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        'This metric tracks pending scans by their creation date, helping you identify backlogs that need immediate attention.',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: Colors.blue.shade900,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              _buildInsightBox(
+                                'Action Required',
+                                _getOverduePendingInsight(
+                                  totalOverdue,
+                                  totalPending,
+                                  overdueOver72,
+                                ),
+                                Icons.warning_amber,
+                                Colors.orange,
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                FutureBuilder<List<Map<String, dynamic>>>(
-                  future: ScanRequestsService.getScanRequests(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(child: CircularProgressIndicator()),
-                      );
-                    }
-                    final all = snapshot.data ?? [];
-                    final filtered = ScanRequestsService.filterByTimeRange(
-                      all,
-                      _selectedTimeRange,
-                    );
-                    int overdue = 0;
-                    for (final r in filtered) {
-                      if ((r['status'] ?? '') == 'pending') {
-                        final createdAt = r['createdAt'];
-                        DateTime? created;
-                        if (createdAt is Timestamp) {
-                          created = createdAt.toDate();
-                        } else if (createdAt is String) {
-                          created = DateTime.tryParse(createdAt);
-                        }
-                        if (created != null) {
-                          final hrs =
-                              DateTime.now().difference(created).inMinutes /
-                              60.0;
-                          if (hrs > 24.0) overdue++;
-                        }
-                      }
-                    }
-                    return Text(
-                      'Overdue pending: $overdue',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    );
-                  },
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
           ),
         );
       },
     );
+  }
+
+  Widget _buildAgingBucket(String label, int count, int total, Color color) {
+    final percentage = total == 0 ? 0.0 : (count / total) * 100;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade800,
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Container(
+              height: 8,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: total == 0 ? 0 : percentage / 100,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 80,
+            child: Text(
+              '$count (${percentage.toStringAsFixed(0)}%)',
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: color,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getOverduePendingInsight(
+    int totalOverdue,
+    int totalPending,
+    int overdueOver72,
+  ) {
+    if (totalOverdue == 0) {
+      return 'Excellent! No overdue pending scans. Your team is responding to all submissions within 24 hours.';
+    } else if (totalOverdue < totalPending * 0.1) {
+      return 'Good response time. Only ${((totalOverdue / totalPending) * 100).toStringAsFixed(0)}% of pending scans are overdue. Continue monitoring to maintain this performance.';
+    } else if (overdueOver72 > 0) {
+      return 'Critical: $overdueOver72 scans have been pending for over 72 hours. Immediate action required. Consider redistributing workload or adding more reviewers to clear the backlog.';
+    } else {
+      return 'Action needed: ${((totalOverdue / totalPending) * 100).toStringAsFixed(0)}% of pending scans are overdue (>24h). Review team capacity and prioritize older submissions to improve response times.';
+    }
   }
 
   void _showReviewsCompletedModal(BuildContext context) {
@@ -3537,23 +4598,9 @@ class _ReportsState extends State<Reports> {
       builder:
           (context) => AvgResponseTimeModal(
             scanRequests: scanRequests,
-            onTimeRangeChanged: (String newTimeRange) {
-              _updateAvgResponseTimeForRange(newTimeRange);
-            },
+            selectedTimeRange: _selectedTimeRange,
           ),
     );
-  }
-
-  void _updateAvgResponseTimeForRange(String timeRange) async {
-    try {
-      final averageResponseTime =
-          await ScanRequestsService.getAverageResponseTime(
-            timeRange: timeRange,
-          );
-      setState(() {
-        _stats['averageResponseTime'] = averageResponseTime;
-      });
-    } catch (_) {}
   }
 
   Future<DateTime?> _showMonthYearPicker({
@@ -5988,11 +7035,11 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
 
 class AvgResponseTimeModal extends StatefulWidget {
   final List<Map<String, dynamic>> scanRequests;
-  final Function(String)? onTimeRangeChanged;
+  final String selectedTimeRange;
   const AvgResponseTimeModal({
     Key? key,
     required this.scanRequests,
-    this.onTimeRangeChanged,
+    required this.selectedTimeRange,
   }) : super(key: key);
 
   @override
@@ -6000,7 +7047,6 @@ class AvgResponseTimeModal extends StatefulWidget {
 }
 
 class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
-  String _selectedRange = 'Last 7 Days';
   bool _loading = true;
   List<_ExpertResponseStats> _expertStats = [];
   int _totalCompletedReports = 0;
@@ -6085,16 +7131,17 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       _loading = true;
     });
     final scanRequests = widget.scanRequests;
+    final selectedRange = widget.selectedTimeRange;
     // Build reviewedAt-anchored window
     final DateTime now = DateTime.now();
     DateTime? startInclusive;
     DateTime? endExclusive;
-    if (_selectedRange.startsWith('Custom (') ||
-        _selectedRange.startsWith('Monthly (')) {
+    if (selectedRange.startsWith('Custom (') ||
+        selectedRange.startsWith('Monthly (')) {
       final regex = RegExp(
         r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
       );
-      final match = regex.firstMatch(_selectedRange);
+      final match = regex.firstMatch(selectedRange);
       if (match != null) {
         final s = DateTime.parse(match.group(1)!);
         final e = DateTime.parse(match.group(2)!);
@@ -6107,7 +7154,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       }
     }
     if (startInclusive == null || endExclusive == null) {
-      switch (_selectedRange) {
+      switch (selectedRange) {
         case '1 Day':
           startInclusive = now.subtract(const Duration(days: 1));
           endExclusive = now;
@@ -6166,10 +7213,10 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       }
       // Filter by reviewedAt window
       bool inWindow;
-      if (_selectedRange == '1 Day') {
+      if (selectedRange == '1 Day') {
         inWindow = reviewed.isAfter(startInclusive);
-      } else if (_selectedRange.startsWith('Custom (') ||
-          _selectedRange.startsWith('Monthly (')) {
+      } else if (selectedRange.startsWith('Custom (') ||
+          selectedRange.startsWith('Monthly (')) {
         inWindow =
             !reviewed.isBefore(startInclusive) &&
             reviewed.isBefore(endExclusive);
@@ -6263,8 +7310,9 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
 
   @override
   Widget build(BuildContext context) {
+    final selectedRange = widget.selectedTimeRange;
     print(
-      '[DEBUG] AvgResponseTimeModal build called with _selectedRange: $_selectedRange',
+      '[DEBUG] AvgResponseTimeModal build called with selectedTimeRange: $selectedRange',
     );
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
@@ -6283,104 +7331,28 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Expanded(
-                  child: Text(
-                    'Average Response Time (per Expert)',
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Average Response Time (per Expert)',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Time Range: ${_displayRangeLabel(selectedRange)}',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                      ),
+                    ],
                   ),
                 ),
-                Row(
-                  children: [
-                    SizedBox(
-                      width: 260,
-                      child: DropdownButton<String>(
-                        value: _selectedRange,
-                        isExpanded: true,
-                        underline: const SizedBox.shrink(),
-                        items: () {
-                          final base = <String>['Last 7 Days', 'Custom…'];
-                          // Ensure the concrete Custom (YYYY-MM-DD to YYYY-MM-DD) is present as an item
-                          if (_selectedRange.startsWith('Custom (') &&
-                              !base.contains(_selectedRange)) {
-                            base.add(_selectedRange);
-                          }
-                          return base.map((range) {
-                            final label = _displayRangeLabel(range);
-                            return DropdownMenuItem(
-                              value: range,
-                              child: Text(
-                                label,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            );
-                          }).toList();
-                        }(),
-                        selectedItemBuilder: (context) {
-                          final base = <String>['Last 7 Days', 'Custom…'];
-                          if (_selectedRange.startsWith('Custom (') &&
-                              !base.contains(_selectedRange)) {
-                            base.add(_selectedRange);
-                          }
-                          return base.map((range) {
-                            final label = _displayRangeLabel(range);
-                            return Align(
-                              alignment: Alignment.centerRight,
-                              child: Text(
-                                label,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            );
-                          }).toList();
-                        },
-                        onChanged: (value) async {
-                          print('=== DROPDOWN ONCHANGED CALLED ===');
-                          print('Dropdown onChanged called with value: $value');
-                          if (value == null) return;
-                          if (value == 'Custom…') {
-                            final picked = await pickDateRangeWithSf(
-                              context,
-                              initial: DateTimeRange(
-                                start: DateTime.now().subtract(
-                                  const Duration(days: 7),
-                                ),
-                                end: DateTime.now(),
-                              ),
-                            );
-                            if (picked != null) {
-                              final start =
-                                  '${picked.start.year}-${picked.start.month.toString().padLeft(2, '0')}-${picked.start.day.toString().padLeft(2, '0')}';
-                              final end =
-                                  '${picked.end.year}-${picked.end.month.toString().padLeft(2, '0')}-${picked.end.day.toString().padLeft(2, '0')}';
-                              final label = 'Custom ($start to $end)';
-                              setState(() => _selectedRange = label);
-                              widget.onTimeRangeChanged?.call(label);
-                              _loadExpertStats();
-                            }
-                          } else {
-                            print('=== MODAL DROPDOWN DEBUG ===');
-                            print('Modal dropdown changed to: $value');
-                            setState(() {
-                              _selectedRange = value;
-                            });
-                            print('Calling onTimeRangeChanged callback...');
-                            widget.onTimeRangeChanged?.call(value);
-                            print(
-                              'Callback called, now loading expert stats...',
-                            );
-                            _loadExpertStats();
-                            print('=== END MODAL DROPDOWN DEBUG ===');
-                          }
-                        },
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 28),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
+                IconButton(
+                  icon: const Icon(Icons.close, size: 28),
+                  onPressed: () => Navigator.of(context).pop(),
                 ),
               ],
             ),
@@ -6464,7 +7436,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                 alignment: Alignment.centerRight,
                 child: Text(
                   () {
-                    final label = _displayRangeLabel(_selectedRange);
+                    final label = _displayRangeLabel(selectedRange);
                     return 'Overall (weighted) for $label: '
                         '${_weightedAverageHours.toStringAsFixed(2)} hours '
                         'across $_totalCompletedReports reports';
