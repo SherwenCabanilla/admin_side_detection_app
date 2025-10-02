@@ -19,12 +19,91 @@ class ReportPdfService {
     // Get all requests
     final List<Map<String, dynamic>> allRequests =
         await ScanRequestsService.getScanRequests();
-    // Created-at anchored, completed-only list for disease analysis
-    final List<Map<String, dynamic>> filteredCreatedCompleted =
-        ScanRequestsService.filterByTimeRange(
-          allRequests,
-          timeRange,
-        ).where((r) => (r['status'] ?? 'pending') == 'completed').toList();
+
+    // Determine reporting period for filtering by createdAt (when disease occurred)
+    DateTime startDate;
+    DateTime endDate;
+    final nowForRange = DateTime.now();
+    if (timeRange.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(timeRange);
+      if (match != null) {
+        startDate = DateTime.parse(match.group(1)!);
+        endDate = DateTime.parse(match.group(2)!);
+      } else {
+        endDate = nowForRange;
+        startDate = endDate.subtract(const Duration(days: 7));
+      }
+    } else {
+      switch (timeRange) {
+        case '1 Day':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 1));
+          break;
+        case 'Last 7 Days':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 7));
+          break;
+        case 'Last 30 Days':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 30));
+          break;
+        case 'Last 60 Days':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 60));
+          break;
+        case 'Last 90 Days':
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 90));
+          break;
+        case 'Last Year':
+          endDate = nowForRange;
+          startDate = DateTime(
+            nowForRange.year - 1,
+            nowForRange.month,
+            nowForRange.day,
+          );
+          break;
+        default:
+          endDate = nowForRange;
+          startDate = endDate.subtract(const Duration(days: 7));
+      }
+    }
+
+    // CreatedAt-anchored, completed-only list for disease analysis
+    // This shows diseases that occurred in the time period (validated by experts)
+    final DateTime startInclusive = DateTime(
+      startDate.year,
+      startDate.month,
+      startDate.day,
+    );
+    final DateTime endExclusive = DateTime(
+      endDate.year,
+      endDate.month,
+      endDate.day,
+    ).add(const Duration(days: 1));
+
+    final List<Map<String, dynamic>> filteredCreatedCompleted = [];
+    for (final r in allRequests) {
+      // Only include completed (expert-validated) scans
+      if ((r['status'] ?? '') != 'completed') continue;
+      final createdRaw = r['createdAt'];
+      if (createdRaw == null) continue;
+      DateTime created;
+      if (createdRaw is String) {
+        created = DateTime.tryParse(createdRaw) ?? startInclusive;
+      } else if (createdRaw.runtimeType.toString() == 'Timestamp') {
+        created = createdRaw.toDate();
+      } else {
+        continue;
+      }
+      final bool inWindow =
+          !created.isBefore(startInclusive) && created.isBefore(endExclusive);
+      if (inWindow) filteredCreatedCompleted.add(r);
+    }
+
     // Build disease stats from validated data
     final Map<String, int> diseaseCounts = {};
     int totalDetections = 0;
@@ -99,59 +178,6 @@ class ReportPdfService {
       (a, b) => (b['count'] as int).compareTo(a['count'] as int),
     );
 
-    // Determine reporting period strictly from the selected timeRange
-    // so the header reflects the user's choice even when there is no data.
-    DateTime startDate;
-    DateTime endDate;
-    final nowForRange = DateTime.now();
-    if (timeRange.startsWith('Custom (')) {
-      final regex = RegExp(
-        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
-      );
-      final match = regex.firstMatch(timeRange);
-      if (match != null) {
-        startDate = DateTime.parse(match.group(1)!);
-        endDate = DateTime.parse(match.group(2)!);
-      } else {
-        endDate = nowForRange;
-        startDate = endDate.subtract(const Duration(days: 7));
-      }
-    } else {
-      switch (timeRange) {
-        case '1 Day':
-          endDate = nowForRange;
-          startDate = endDate.subtract(const Duration(days: 1));
-          break;
-        case 'Last 7 Days':
-          endDate = nowForRange;
-          startDate = endDate.subtract(const Duration(days: 7));
-          break;
-        case 'Last 30 Days':
-          endDate = nowForRange;
-          startDate = endDate.subtract(const Duration(days: 30));
-          break;
-        case 'Last 60 Days':
-          endDate = nowForRange;
-          startDate = endDate.subtract(const Duration(days: 60));
-          break;
-        case 'Last 90 Days':
-          endDate = nowForRange;
-          startDate = endDate.subtract(const Duration(days: 90));
-          break;
-        case 'Last Year':
-          endDate = nowForRange;
-          startDate = DateTime(
-            nowForRange.year - 1,
-            nowForRange.month,
-            nowForRange.day,
-          );
-          break;
-        default:
-          endDate = nowForRange;
-          startDate = endDate.subtract(const Duration(days: 7));
-      }
-    }
-
     // Fetch weather summary (avg/min/max temp) for range
     final weather = await WeatherService.getAverageTemperature(
       start: DateTime(startDate.year, startDate.month, startDate.day),
@@ -161,6 +187,7 @@ class ReportPdfService {
     // use a safe label to avoid NaN formatting downstream
     final String weatherLabel = weather.toLabel();
     // Daily series for chart: separate disease vs healthy counts
+    // Group by createdAt (when disease occurred)
     diseaseByDay = {};
     healthyByDay = {};
     diseaseDayCounts = {};
@@ -244,38 +271,8 @@ class ReportPdfService {
         diseaseStats.where((e) => (e['type'] ?? '') == 'healthy').toList();
     final List<Map<String, dynamic>> diseaseOnlyStats =
         diseaseStats.where((e) => (e['type'] ?? '') != 'healthy').toList();
-    // Overview counts should reflect COMPLETIONS in the selected range (reviewedAt)
-    // Build reviewed-window: [start 00:00, end 24:00) to include the entire end day
-    final DateTime startInclusive = DateTime(
-      startDate.year,
-      startDate.month,
-      startDate.day,
-    );
-    final DateTime endExclusive = DateTime(
-      endDate.year,
-      endDate.month,
-      endDate.day,
-    ).add(const Duration(days: 1));
-    final List<Map<String, dynamic>> completedInWindow = [];
-    for (final r in allRequests) {
-      if ((r['status'] ?? '') != 'completed') continue;
-      final reviewedRaw = r['reviewedAt'];
-      if (reviewedRaw == null) continue;
-      DateTime reviewed;
-      if (reviewedRaw is String) {
-        reviewed = DateTime.tryParse(reviewedRaw) ?? startInclusive;
-      } else if (reviewedRaw.runtimeType.toString() == 'Timestamp') {
-        // Avoid importing Firestore types in PDF layer; handle by runtimeType
-        reviewed = reviewedRaw.toDate();
-      } else {
-        continue;
-      }
-      // 1 Day uses a rolling 24h window via startInclusive=now-1day, endExclusive=now
-      final bool inWindow =
-          !reviewed.isBefore(startInclusive) && reviewed.isBefore(endExclusive);
-      if (inWindow) completedInWindow.add(r);
-    }
-    final int completed = completedInWindow.length;
+    // Overview counts: use the already-filtered list (diseases that occurred in period)
+    final int completed = filteredCreatedCompleted.length;
     // SLA and average response time are no longer shown in the report
 
     // Fonts: Noto Sans (print-friendly, wide coverage)
@@ -420,7 +417,7 @@ class ReportPdfService {
               pw.Text('Overview', style: tsH2),
               pw.SizedBox(height: 2),
               pw.Bullet(
-                text: 'Total Reports Reviewed: ' + completed.toString(),
+                text: 'Total Reports (Validated): ' + completed.toString(),
                 style: tsBody,
               ),
 

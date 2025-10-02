@@ -468,24 +468,24 @@ class _ReportsState extends State<Reports> {
             : '${((scansSubmittedAndCompletedInPeriod / totalScansCount) * 100).toStringAsFixed(0)}%';
 
     // 3. Healthy Rate - calculate from disease stats in the time window
+    // Use createdAt (when disease occurred) for accurate disease timing
     int healthyScans = 0;
     int diseaseScans = 0;
     for (final r in scanRequests) {
       final status = (r['status'] ?? '').toString();
       if (status != 'completed') continue;
 
-      final reviewedAtRaw = r['reviewedAt'];
-      DateTime? reviewedAt;
-      if (reviewedAtRaw is Timestamp) reviewedAt = reviewedAtRaw.toDate();
-      if (reviewedAtRaw is String)
-        reviewedAt = DateTime.tryParse(reviewedAtRaw);
+      final createdAtRaw = r['createdAt'];
+      DateTime? createdAt;
+      if (createdAtRaw is Timestamp) createdAt = createdAtRaw.toDate();
+      if (createdAtRaw is String) createdAt = DateTime.tryParse(createdAtRaw);
 
-      if (reviewedAt != null) {
+      if (createdAt != null) {
         final inWindow =
             _selectedTimeRange == '1 Day'
-                ? reviewedAt.isAfter(startInclusive)
-                : (!reviewedAt.isBefore(startInclusive) &&
-                    reviewedAt.isBefore(endExclusive));
+                ? createdAt.isAfter(startInclusive)
+                : (!createdAt.isBefore(startInclusive) &&
+                    createdAt.isBefore(endExclusive));
 
         if (inWindow) {
           final List<dynamic> diseaseSummary =
@@ -5822,18 +5822,18 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
       final Map<String, dynamic>? data = doc.data() as Map<String, dynamic>?;
       if (data == null) continue;
 
-      // Only include expert-reviewed (completed) and anchor to reviewedAt
+      // Only include expert-reviewed (completed) and anchor to createdAt (when disease occurred)
       final String status = (data['status'] ?? '').toString();
       if (status != 'completed') continue;
-      final dynamic reviewedAtRaw = data['reviewedAt'];
-      DateTime? reviewed;
-      if (reviewedAtRaw is Timestamp) {
-        reviewed = reviewedAtRaw.toDate();
-      } else if (reviewedAtRaw is String) {
-        reviewed = DateTime.tryParse(reviewedAtRaw);
+      final dynamic createdAtRaw = data['submittedAt'] ?? data['createdAt'];
+      DateTime? created;
+      if (createdAtRaw is Timestamp) {
+        created = createdAtRaw.toDate();
+      } else if (createdAtRaw is String) {
+        created = DateTime.tryParse(createdAtRaw);
       }
-      if (reviewed == null) continue;
-      if (reviewed.isBefore(start) || !reviewed.isBefore(end)) continue;
+      if (created == null) continue;
+      if (created.isBefore(start) || !created.isBefore(end)) continue;
 
       final List<dynamic> diseaseSummary =
           (data['diseaseSummary'] as List<dynamic>?) ?? const [];

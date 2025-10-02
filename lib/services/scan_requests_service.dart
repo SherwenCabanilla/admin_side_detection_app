@@ -36,6 +36,7 @@ class ScanRequestsService {
   }
 
   // Get disease statistics for a specific time range
+  // Uses createdAt (when disease occurred) but only includes completed/validated scans
   static Future<List<Map<String, dynamic>>> getDiseaseStats({
     required String timeRange,
   }) async {
@@ -43,7 +44,7 @@ class ScanRequestsService {
       final scanRequests = await getScanRequests();
       print('Total scan requests: ${scanRequests.length}');
 
-      // Filter by reviewedAt window and include only completed
+      // Filter by createdAt window and include only completed (validated) scans
       final DateTime now = DateTime.now();
       DateTime? startInclusive;
       DateTime? endExclusive;
@@ -98,18 +99,19 @@ class ScanRequestsService {
 
       final filteredRequests = <Map<String, dynamic>>[];
       for (final r in scanRequests) {
+        // Only include completed (expert-validated) scans
         if ((r['status'] ?? '') != 'completed') continue;
-        final reviewedAt = r['reviewedAt'];
-        if (reviewedAt == null) continue;
-        DateTime? reviewed;
-        if (reviewedAt is Timestamp) reviewed = reviewedAt.toDate();
-        if (reviewedAt is String) reviewed = DateTime.tryParse(reviewedAt);
-        if (reviewed == null) continue;
+        final createdAt = r['createdAt'];
+        if (createdAt == null) continue;
+        DateTime? created;
+        if (createdAt is Timestamp) created = createdAt.toDate();
+        if (createdAt is String) created = DateTime.tryParse(createdAt);
+        if (created == null) continue;
         final inWindow =
             timeRange == '1 Day'
-                ? reviewed.isAfter(startInclusive)
-                : (!reviewed.isBefore(startInclusive) &&
-                    reviewed.isBefore(endExclusive));
+                ? created.isAfter(startInclusive)
+                : (!created.isBefore(startInclusive) &&
+                    created.isBefore(endExclusive));
         if (inWindow) filteredRequests.add(r);
       }
       print('Filtered requests for $timeRange: ${filteredRequests.length}');
@@ -211,16 +213,85 @@ class ScanRequestsService {
   }
 
   // Get reports trend data for a specific time range
+  // Uses createdAt (when disease occurred) but only includes completed/validated scans
   static Future<List<Map<String, dynamic>>> getReportsTrend({
     required String timeRange,
   }) async {
     try {
       final scanRequests = await getScanRequests();
 
-      // Filter by time range
-      final filteredRequests = filterByTimeRange(scanRequests, timeRange);
+      // Filter by createdAt window and include only completed (validated) scans
+      final DateTime now = DateTime.now();
+      DateTime? startInclusive;
+      DateTime? endExclusive;
+      if (timeRange.startsWith('Custom (') ||
+          timeRange.startsWith('Monthly (')) {
+        final regex = RegExp(
+          r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+        );
+        final match = regex.firstMatch(timeRange);
+        if (match != null) {
+          final s = DateTime.parse(match.group(1)!);
+          final e = DateTime.parse(match.group(2)!);
+          startInclusive = DateTime(s.year, s.month, s.day);
+          endExclusive = DateTime(
+            e.year,
+            e.month,
+            e.day,
+          ).add(const Duration(days: 1));
+        }
+      }
+      if (startInclusive == null || endExclusive == null) {
+        switch (timeRange) {
+          case '1 Day':
+            startInclusive = now.subtract(const Duration(days: 1));
+            endExclusive = now;
+            break;
+          case 'Last 7 Days':
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+            break;
+          case 'Last 30 Days':
+            startInclusive = now.subtract(const Duration(days: 30));
+            endExclusive = now;
+            break;
+          case 'Last 60 Days':
+            startInclusive = now.subtract(const Duration(days: 60));
+            endExclusive = now;
+            break;
+          case 'Last 90 Days':
+            startInclusive = now.subtract(const Duration(days: 90));
+            endExclusive = now;
+            break;
+          case 'Last Year':
+            startInclusive = DateTime(now.year - 1, now.month, now.day);
+            endExclusive = now;
+            break;
+          default:
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+        }
+      }
 
-      // Group by date
+      final filteredRequests = <Map<String, dynamic>>[];
+      for (final r in scanRequests) {
+        // Only include completed (expert-validated) scans
+        if ((r['status'] ?? '') != 'completed') continue;
+        final createdAt = r['createdAt'];
+        if (createdAt == null) continue;
+        DateTime? created;
+        if (createdAt is Timestamp) created = createdAt.toDate();
+        if (createdAt is String) created = DateTime.tryParse(createdAt);
+        if (created == null) continue;
+        final inWindow =
+            timeRange == '1 Day'
+                ? created.isAfter(startInclusive)
+                : (!created.isBefore(startInclusive) &&
+                    created.isBefore(endExclusive));
+        if (inWindow) filteredRequests.add(r);
+      }
+
+      // Group by createdAt date (when disease occurred)
       final Map<String, int> dailyCounts = {};
 
       for (final request in filteredRequests) {
