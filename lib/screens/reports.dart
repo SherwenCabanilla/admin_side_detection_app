@@ -3653,21 +3653,21 @@ class _ReportsState extends State<Reports> {
                                 child: Column(
                                   children: [
                                     _buildAgingBucket(
-                                      '⚠️ 24-48 hours (Urgent)',
+                                      '⚠️ 24-48 hours',
                                       overdue24to48,
                                       totalOverdue,
                                       Colors.orange,
                                     ),
                                     const SizedBox(height: 8),
                                     _buildAgingBucket(
-                                      '⚠️⚠️ 48-72 hours (Critical)',
+                                      '⚠️ 48-72 hours',
                                       overdue48to72,
                                       totalOverdue,
                                       Colors.deepOrange,
                                     ),
                                     const SizedBox(height: 8),
                                     _buildAgingBucket(
-                                      '🔴 Over 72 hours (Severe)',
+                                      '🔴 Over 72 hours',
                                       overdueOver72,
                                       totalOverdue,
                                       Colors.red,
@@ -5213,8 +5213,19 @@ class AvgResponseTrendChart extends StatelessWidget {
                       leftTitles: AxisTitles(
                         sideTitles: SideTitles(
                           showTitles: true,
-                          reservedSize: 40,
+                          reservedSize: 56,
                           interval: _computeYInterval(trend),
+                          getTitlesWidget: (value, meta) {
+                            final doubleVal = value.toDouble();
+                            final String label =
+                                doubleVal >= 10
+                                    ? doubleVal.toStringAsFixed(0)
+                                    : doubleVal.toStringAsFixed(1);
+                            return Text(
+                              label,
+                              style: const TextStyle(fontSize: 10),
+                            );
+                          },
                         ),
                       ),
                       bottomTitles: AxisTitles(
