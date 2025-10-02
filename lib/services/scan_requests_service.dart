@@ -65,6 +65,13 @@ class ScanRequestsService {
     }
   }
 
+  // Force a fresh read and update cache immediately
+  static Future<List<Map<String, dynamic>>> refreshScanRequests() async {
+    _cachedAt = null;
+    _cachedRequests = null;
+    return await getScanRequests();
+  }
+
   // Get disease statistics for a specific time range
   // Uses createdAt (when disease occurred) but only includes completed/validated scans
   static Future<List<Map<String, dynamic>>> getDiseaseStats({

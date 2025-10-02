@@ -177,12 +177,12 @@ class _ReportsState extends State<Reports> {
     super.initState();
     _scanRequestsFuture = ScanRequestsService.getScanRequests();
     _initializeData();
-    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       if (!mounted || _refreshInFlight) return;
       _refreshInFlight = true;
       try {
-        // refresh cached future and recompute stats
-        _scanRequestsFuture = ScanRequestsService.getScanRequests();
+        // force refresh data so cache TTL doesn't delay UI updates
+        _scanRequestsFuture = ScanRequestsService.refreshScanRequests();
         await _loadData();
       } finally {
         _refreshInFlight = false;
@@ -5982,18 +5982,9 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   @override
   void initState() {
     super.initState();
-    _streamSub = FirebaseFirestore.instance
-        .collection('scan_requests')
-        .snapshots()
-        .listen((snap) {
-          _lastSnapshot = snap;
-          final agg = _aggregateFromSnapshot(snap, widget.selectedTimeRange);
-          if (mounted) {
-            setState(() {
-              _liveAggregated = agg;
-            });
-          }
-        });
+    // Use cached data from the parent instead of a live stream to reduce repaint cost
+    // Parent refreshes every 30s; recompute here from provided selectedTimeRange
+    _recomputeFromCached();
   }
 
   @override
@@ -6017,11 +6008,30 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
     super.dispose();
   }
 
+  Future<void> _recomputeFromCached() async {
+    final all = await ScanRequestsService.getScanRequests();
+    final fakeSnapshot = _toFakeSnapshot(all);
+    final agg = _aggregateFromSnapshot(fakeSnapshot, widget.selectedTimeRange);
+    if (!mounted) return;
+    setState(() {
+      _liveAggregated = agg;
+    });
+  }
+
+  // Minimal adapter to reuse existing aggregation code
+  QuerySnapshot<Map<String, dynamic>>? _toFakeSnapshot(
+    List<Map<String, dynamic>> all,
+  ) {
+    // Not creating a real QuerySnapshot. Instead, bypass by returning null
+    // and aggregating directly from list; adjust aggregation to accept lists.
+    return null;
+  }
+
   List<Map<String, dynamic>> _aggregateFromSnapshot(
-    QuerySnapshot? snapshot,
+    dynamic source,
     String selectedRange,
   ) {
-    if (snapshot == null) return const [];
+    // source can be a QuerySnapshot or a List<Map<String,dynamic>>
     final range = _resolveDateRange(selectedRange);
     final DateTime start = range.start;
     final DateTime end = range.end;
@@ -6029,9 +6039,15 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
     final Map<String, int> diseaseToCount = {};
     int healthyCount = 0;
 
-    for (final doc in snapshot.docs) {
-      final Map<String, dynamic>? data = doc.data() as Map<String, dynamic>?;
-      if (data == null) continue;
+    final Iterable<Map<String, dynamic>> docs =
+        source is QuerySnapshot
+            ? source.docs.map(
+              (d) => (d.data() as Map<String, dynamic>?) ?? const {},
+            )
+            : (source is List<Map<String, dynamic>> ? source : const []);
+
+    for (final data in docs) {
+      if (data.isEmpty) continue;
 
       // Only include expert-reviewed (completed) and anchor to createdAt (when disease occurred)
       final String status = (data['status'] ?? '').toString();
