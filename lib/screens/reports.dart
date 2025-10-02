@@ -32,6 +32,7 @@ class _ReportsState extends State<Reports> {
   _scanRequestsFuture; // cached shared future
   Timer? _autoRefreshTimer;
   bool _refreshInFlight = false;
+  final ScrollController _pageScrollController = ScrollController();
 
   // Real data from Firestore
   Map<String, dynamic> _stats = {
@@ -177,13 +178,13 @@ class _ReportsState extends State<Reports> {
     super.initState();
     _scanRequestsFuture = ScanRequestsService.getScanRequests();
     _initializeData();
-    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       if (!mounted || _refreshInFlight) return;
       _refreshInFlight = true;
       try {
         // force refresh data so cache TTL doesn't delay UI updates
-        _scanRequestsFuture = ScanRequestsService.refreshScanRequests();
-        await _loadData();
+        _scanRequestsFuture = ScanRequestsService.getScanRequests();
+        await _loadData(silent: true); // avoid toggling global loading state
       } finally {
         _refreshInFlight = false;
       }
@@ -667,10 +668,12 @@ class _ReportsState extends State<Reports> {
     }
   }
 
-  Future<void> _loadData() async {
-    setState(() {
-      _isLoading = true;
-    });
+  Future<void> _loadData({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
 
     try {
       // Load data in parallel
@@ -682,20 +685,25 @@ class _ReportsState extends State<Reports> {
         _loadSla(),
       ]);
 
-      setState(() {
-        _isLoading = false;
-      });
+      if (!silent) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     } catch (e) {
       // log suppressed in production
-      setState(() {
-        _isLoading = false;
-      });
+      if (!silent) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   @override
   void dispose() {
     _autoRefreshTimer?.cancel();
+    _pageScrollController.dispose();
     super.dispose();
   }
 
@@ -1184,6 +1192,8 @@ class _ReportsState extends State<Reports> {
         return child!;
       },
       child: SingleChildScrollView(
+        key: const PageStorageKey('reports_scroll'),
+        controller: _pageScrollController,
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
@@ -5982,9 +5992,14 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   @override
   void initState() {
     super.initState();
-    // Use cached data from the parent instead of a live stream to reduce repaint cost
-    // Parent refreshes every 30s; recompute here from provided selectedTimeRange
-    _recomputeFromCached();
+    // Re-enable live updates with debounce to prevent flicker
+    _streamSub = FirebaseFirestore.instance
+        .collection('scan_requests')
+        .snapshots()
+        .listen((snap) {
+          _lastSnapshot = snap;
+          _scheduleDebouncedRecompute();
+        });
   }
 
   @override
@@ -6008,23 +6023,19 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
     super.dispose();
   }
 
-  Future<void> _recomputeFromCached() async {
-    final all = await ScanRequestsService.getScanRequests();
-    final fakeSnapshot = _toFakeSnapshot(all);
-    final agg = _aggregateFromSnapshot(fakeSnapshot, widget.selectedTimeRange);
-    if (!mounted) return;
-    setState(() {
-      _liveAggregated = agg;
+  Timer? _debounceTimer;
+  void _scheduleDebouncedRecompute() {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(seconds: 6), () {
+      if (!mounted || _lastSnapshot == null) return;
+      final agg = _aggregateFromSnapshot(
+        _lastSnapshot,
+        widget.selectedTimeRange,
+      );
+      setState(() {
+        _liveAggregated = agg;
+      });
     });
-  }
-
-  // Minimal adapter to reuse existing aggregation code
-  QuerySnapshot<Map<String, dynamic>>? _toFakeSnapshot(
-    List<Map<String, dynamic>> all,
-  ) {
-    // Not creating a real QuerySnapshot. Instead, bypass by returning null
-    // and aggregating directly from list; adjust aggregation to accept lists.
-    return null;
   }
 
   List<Map<String, dynamic>> _aggregateFromSnapshot(
