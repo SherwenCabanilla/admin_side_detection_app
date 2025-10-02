@@ -30,6 +30,8 @@ class _ReportsState extends State<Reports> {
   bool _isLoading = true;
   Future<List<Map<String, dynamic>>>?
   _scanRequestsFuture; // cached shared future
+  Timer? _autoRefreshTimer;
+  bool _refreshInFlight = false;
 
   // Real data from Firestore
   Map<String, dynamic> _stats = {
@@ -175,6 +177,17 @@ class _ReportsState extends State<Reports> {
     super.initState();
     _scanRequestsFuture = ScanRequestsService.getScanRequests();
     _initializeData();
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (!mounted || _refreshInFlight) return;
+      _refreshInFlight = true;
+      try {
+        // refresh cached future and recompute stats
+        _scanRequestsFuture = ScanRequestsService.getScanRequests();
+        await _loadData();
+      } finally {
+        _refreshInFlight = false;
+      }
+    });
   }
 
   Future<void> _initializeData() async {
@@ -678,6 +691,12 @@ class _ReportsState extends State<Reports> {
         _isLoading = false;
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _autoRefreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadStats() async {
@@ -1381,103 +1400,109 @@ class _ReportsState extends State<Reports> {
               const SizedBox(height: 24),
 
               // Stats Grid - Time-filtered metrics only
-              GridView.count(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisCount: 4,
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-                childAspectRatio: 1.2,
-                children: [
-                  // Row 1: Volume & Health metrics
-                  _buildStatCard(
-                    'Reviews Completed',
-                    _reviewsCompleted.toString(),
-                    Icons.check_circle,
-                    Colors.green,
-                    onTap: () => _showReviewsCompletedModal(context),
-                  ),
-                  _buildStatCard(
-                    'Total Scans Submitted',
-                    _totalScansSubmitted.toString(),
-                    Icons.upload_file,
-                    Colors.blue,
-                    onTap: () => _showTotalScansSubmittedModal(context),
-                  ),
-                  _buildStatCard(
-                    'Healthy Rate',
-                    _healthyRate,
-                    Icons.verified,
-                    Colors.lightGreen,
-                    onTap: () => _showHealthyRateModal(context),
-                  ),
-                  _buildStatCard(
-                    'Completion Rate',
-                    _completionRate ?? '—',
-                    Icons.task_alt,
-                    Colors.blueGrey,
-                    onTap: () async {
-                      setState(() {
-                        _completionWarningDismissed = true;
-                      });
-                      await _saveCompletionWarningDismissed(true);
-                      _showCompletionRateModal(context);
-                    },
-                    showWarning: _hasCompletionRateMismatch(),
-                  ),
-                  // Row 2: Performance & SLA metrics
-                  _buildStatCard(
-                    'Avg. Response Time',
-                    _stats['averageResponseTime'] ?? '0 hours',
-                    Icons.timer,
-                    Colors.teal,
-                    onTap: () => _showAvgResponseTimeModal(context),
-                  ),
-                  _buildStatCard(
-                    'SLA ≤ 24h',
-                    _slaWithin24h ?? '—',
-                    Icons.speed,
-                    Colors.indigo,
-                    onTap: () => _showSlaModal(context),
-                  ),
-                  _buildStatCard(
-                    'Avg Temperature',
-                    _avgTemperature ?? '—',
-                    Icons.thermostat,
-                    Colors.deepPurple,
-                    onTap: () => _showAvgTemperatureModal(context),
-                  ),
-                  _buildStatCard(
-                    'Overdue Pending >24h',
-                    (_overduePendingCount ?? 0).toString(),
-                    Icons.warning_amber,
-                    Colors.orange,
-                    onTap: () => _showOverduePendingModal(context),
-                  ),
-                ],
+              RepaintBoundary(
+                child: GridView.count(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisCount: 4,
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: 1.2,
+                  children: [
+                    // Row 1: Volume & Health metrics
+                    _buildStatCard(
+                      'Reviews Completed',
+                      _reviewsCompleted.toString(),
+                      Icons.check_circle,
+                      Colors.green,
+                      onTap: () => _showReviewsCompletedModal(context),
+                    ),
+                    _buildStatCard(
+                      'Total Scans Submitted',
+                      _totalScansSubmitted.toString(),
+                      Icons.upload_file,
+                      Colors.blue,
+                      onTap: () => _showTotalScansSubmittedModal(context),
+                    ),
+                    _buildStatCard(
+                      'Healthy Rate',
+                      _healthyRate,
+                      Icons.verified,
+                      Colors.lightGreen,
+                      onTap: () => _showHealthyRateModal(context),
+                    ),
+                    _buildStatCard(
+                      'Completion Rate',
+                      _completionRate ?? '—',
+                      Icons.task_alt,
+                      Colors.blueGrey,
+                      onTap: () async {
+                        setState(() {
+                          _completionWarningDismissed = true;
+                        });
+                        await _saveCompletionWarningDismissed(true);
+                        _showCompletionRateModal(context);
+                      },
+                      showWarning: _hasCompletionRateMismatch(),
+                    ),
+                    // Row 2: Performance & SLA metrics
+                    _buildStatCard(
+                      'Avg. Response Time',
+                      _stats['averageResponseTime'] ?? '0 hours',
+                      Icons.timer,
+                      Colors.teal,
+                      onTap: () => _showAvgResponseTimeModal(context),
+                    ),
+                    _buildStatCard(
+                      'SLA ≤ 24h',
+                      _slaWithin24h ?? '—',
+                      Icons.speed,
+                      Colors.indigo,
+                      onTap: () => _showSlaModal(context),
+                    ),
+                    _buildStatCard(
+                      'Avg Temperature',
+                      _avgTemperature ?? '—',
+                      Icons.thermostat,
+                      Colors.deepPurple,
+                      onTap: () => _showAvgTemperatureModal(context),
+                    ),
+                    _buildStatCard(
+                      'Overdue Pending >24h',
+                      (_overduePendingCount ?? 0).toString(),
+                      Icons.warning_amber,
+                      Colors.orange,
+                      onTap: () => _showOverduePendingModal(context),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 24),
 
               // Charts Row
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Disease Distribution Chart
-                  Expanded(
-                    child: DiseaseDistributionChart(
-                      diseaseStats: _diseaseStats,
-                      selectedTimeRange: _selectedTimeRange,
-                      onTimeRangeChanged: (String newTimeRange) async {
-                        await _onTimeRangeChanged(newTimeRange);
-                      },
+              RepaintBoundary(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Disease Distribution Chart
+                    Expanded(
+                      child: DiseaseDistributionChart(
+                        diseaseStats: _diseaseStats,
+                        selectedTimeRange: _selectedTimeRange,
+                        onTimeRangeChanged: (String newTimeRange) async {
+                          await _onTimeRangeChanged(newTimeRange);
+                        },
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               const SizedBox(height: 16),
-              AvgResponseTrendChart(
-                trend: _avgResponseTrend,
-                selectedTimeRange: _selectedTimeRange,
+              RepaintBoundary(
+                child: AvgResponseTrendChart(
+                  trend: _avgResponseTrend,
+                  selectedTimeRange: _selectedTimeRange,
+                ),
               ),
               const SizedBox(height: 32),
             ],
@@ -5430,11 +5455,16 @@ class ReportsListTable extends StatefulWidget {
   State<ReportsListTable> createState() => _ReportsListTableState();
 }
 
-class _ReportsListTableState extends State<ReportsListTable> {
+class _ReportsListTableState extends State<ReportsListTable>
+    with AutomaticKeepAliveClientMixin {
   String _searchQuery = '';
   List<Map<String, dynamic>> _reports = [];
   bool _loading = true;
   String? _error;
+  // Pagination and debounced search
+  int _rowsPerPage = 10;
+  int _page = 0;
+  Timer? _searchDebounce;
 
   @override
   void initState() {
@@ -5452,6 +5482,7 @@ class _ReportsListTableState extends State<ReportsListTable> {
       setState(() {
         _reports = data;
         _loading = false;
+        _page = 0; // reset page on data load
       });
     } catch (e) {
       setState(() {
@@ -5489,8 +5520,27 @@ class _ReportsListTableState extends State<ReportsListTable> {
     }).toList();
   }
 
+  List<Map<String, dynamic>> get _visibleReports {
+    final total = _filteredReports.length;
+    final start = _page * _rowsPerPage;
+    if (start >= total) return const [];
+    final endExclusive = start + _rowsPerPage;
+    final safeEnd = endExclusive > total ? total : endExclusive;
+    return _filteredReports.sublist(start, safeEnd);
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  @override
+  bool get wantKeepAlive => true;
+
   @override
   Widget build(BuildContext context) {
+    super.build(context); // for AutomaticKeepAliveClientMixin
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -5507,12 +5557,83 @@ class _ReportsListTableState extends State<ReportsListTable> {
                 ),
               ),
               onChanged: (value) {
-                setState(() {
-                  _searchQuery = value;
+                _searchDebounce?.cancel();
+                _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+                  if (!mounted) return;
+                  setState(() {
+                    _searchQuery = value;
+                    _page = 0; // reset page when searching
+                  });
                 });
               },
             ),
           ),
+        ),
+        // Pagination controls
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                const Text('Rows per page:'),
+                const SizedBox(width: 8),
+                DropdownButton<int>(
+                  value: _rowsPerPage,
+                  items:
+                      const [10, 25, 50, 100]
+                          .map(
+                            (n) =>
+                                DropdownMenuItem(value: n, child: Text('$n')),
+                          )
+                          .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() {
+                      _rowsPerPage = v;
+                      _page = 0;
+                    });
+                  },
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                Builder(
+                  builder: (context) {
+                    final total = _filteredReports.length;
+                    final start = total == 0 ? 0 : (_page * _rowsPerPage) + 1;
+                    final end = ((_page + 1) * _rowsPerPage);
+                    final shownEnd = end > total ? total : end;
+                    return Text(
+                      total == 0 ? '0 of 0' : '$start–$shownEnd of $total',
+                    );
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed:
+                      _page > 0
+                          ? () {
+                            setState(() {
+                              _page -= 1;
+                            });
+                          }
+                          : null,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed:
+                      ((_page + 1) * _rowsPerPage) < _filteredReports.length
+                          ? () {
+                            setState(() {
+                              _page += 1;
+                            });
+                          }
+                          : null,
+                ),
+              ],
+            ),
+          ],
         ),
         SizedBox(
           height: 300,
@@ -5542,7 +5663,7 @@ class _ReportsListTableState extends State<ReportsListTable> {
                           DataColumn(label: Text('Actions')),
                         ],
                         rows:
-                            _filteredReports.map((report) {
+                            _visibleReports.map((report) {
                               return DataRow(
                                 cells: [
                                   DataCell(
@@ -5616,6 +5737,14 @@ class _ReportsListTableState extends State<ReportsListTable> {
                                                             report['image']
                                                                 .toString(),
                                                             fit: BoxFit.cover,
+                                                            filterQuality:
+                                                                FilterQuality
+                                                                    .low,
+                                                            gaplessPlayback:
+                                                                true,
+                                                            // Hint to decoder to downscale to container size
+                                                            cacheWidth: 360,
+                                                            cacheHeight: 360,
                                                           ),
                                                         )
                                                       else

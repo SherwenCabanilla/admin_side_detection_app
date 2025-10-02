@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:http/http.dart' as http;
 
 class WeatherService {
@@ -6,11 +7,65 @@ class WeatherService {
   static const double defaultLat = 7.3600;
   static const double defaultLon = 125.7000;
 
+  // Simple in-memory cache to avoid hammering the API and triggering 429s
+  static final Map<String, (_CachedWeather, DateTime)> _cache = {};
+  static final Map<String, Future<WeatherSummary>> _inflight = {};
+  static DateTime? _lastRequestTime;
+  static const Duration _cacheTtl = Duration(minutes: 15);
+  static const Duration _minRequestInterval = Duration(milliseconds: 1100);
+
   static Future<WeatherSummary> getAverageTemperature({
     required DateTime start,
     required DateTime end,
     double lat = defaultLat,
     double lon = defaultLon,
+  }) async {
+    final key = 'avg:$lat,$lon:${_fmt(start)}:${_fmt(end)}';
+
+    // Return cached value if fresh
+    final cached = _cache[key];
+    if (cached != null) {
+      final (_, storedAt) = cached;
+      if (DateTime.now().difference(storedAt) < _cacheTtl) {
+        return cached.$1.summary;
+      }
+    }
+
+    // If the same request is already in-flight, await it
+    final existing = _inflight[key];
+    if (existing != null) return await existing;
+
+    // Respect a minimum interval between network calls (free-tier rate limits)
+    final now = DateTime.now();
+    if (_lastRequestTime != null) {
+      final since = now.difference(_lastRequestTime!);
+      if (since < _minRequestInterval) {
+        await Future.delayed(_minRequestInterval - since);
+      }
+    }
+
+    final future = _fetchAverageTemperature(
+      start: start,
+      end: end,
+      lat: lat,
+      lon: lon,
+    );
+    _inflight[key] = future;
+    try {
+      final result = await future;
+      _cache[key] = (_CachedWeather(summary: result), DateTime.now());
+      _lastRequestTime = DateTime.now();
+      return result;
+    } finally {
+      _inflight.remove(key);
+    }
+  }
+
+  static Future<WeatherSummary> _fetchAverageTemperature({
+    required DateTime start,
+    required DateTime end,
+    required double lat,
+    required double lon,
   }) async {
     final startStr = _fmt(start);
     final endStr = _fmt(end);
@@ -68,6 +123,11 @@ class WeatherService {
     doubles.sort();
     return doubles.last;
   }
+}
+
+class _CachedWeather {
+  final WeatherSummary summary;
+  _CachedWeather({required this.summary});
 }
 
 class WeatherSummary {

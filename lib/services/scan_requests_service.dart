@@ -1,11 +1,39 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
+// import 'package:flutter/foundation.dart';
+import 'dart:async';
 
 class ScanRequestsService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  // Cache and throttle to avoid repeated reads and rebuilds
+  static List<Map<String, dynamic>>? _cachedRequests;
+  static DateTime? _cachedAt;
+  static Future<List<Map<String, dynamic>>>? _inflight;
+  static const Duration _cacheTtl = Duration(seconds: 20);
 
   // Fetch all scan requests from Firestore
   static Future<List<Map<String, dynamic>>> getScanRequests() async {
+    // Serve from cache if fresh
+    if (_cachedRequests != null && _cachedAt != null) {
+      if (DateTime.now().difference(_cachedAt!) < _cacheTtl) {
+        return _cachedRequests!;
+      }
+    }
+
+    // If already fetching, await the same future
+    if (_inflight != null) return await _inflight!;
+
+    _inflight = _fetchScanRequests();
+    try {
+      final result = await _inflight!;
+      _cachedRequests = result;
+      _cachedAt = DateTime.now();
+      return result;
+    } finally {
+      _inflight = null;
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> _fetchScanRequests() async {
     try {
       final QuerySnapshot snapshot =
           await _firestore.collection('scan_requests').get();
@@ -121,11 +149,9 @@ class ScanRequestsService {
       // );
 
       // Debug: Print details of filtered requests
-      for (final request in filteredRequests) {
-        // debugPrint(
-        //   'Filtered request: ${request['id']} - ${request['userName']} - ${request['createdAt']} - ${request['diseaseSummary']}',
-        // );
-      }
+      // for (final request in filteredRequests) {
+      //   debug prints removed
+      // }
 
       // Aggregate disease data
       final Map<String, int> diseaseCounts = {};
