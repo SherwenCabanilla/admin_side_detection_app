@@ -19,10 +19,12 @@ void main() async {
     );
   } catch (e) {
     // If Firebase is already initialized, just continue
-    print('Firebase already initialized: $e');
+    debugPrint('Firebase already initialized: $e');
   }
 
   if (kReleaseMode) {
+    // Disable debugPrint in release to avoid any logging overhead
+    debugPrint = (String? message, {int? wrapWidth}) {};
     runZonedGuarded(
       () {
         runApp(const MyApp());

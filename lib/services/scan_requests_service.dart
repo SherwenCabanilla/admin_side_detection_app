@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 class ScanRequestsService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -6,14 +7,16 @@ class ScanRequestsService {
   // Fetch all scan requests from Firestore
   static Future<List<Map<String, dynamic>>> getScanRequests() async {
     try {
-      print('Fetching scan requests from Firestore...');
+      debugPrint('Fetching scan requests from Firestore...');
       final QuerySnapshot snapshot =
           await _firestore.collection('scan_requests').get();
-      print('Found ${snapshot.docs.length} scan requests');
+      debugPrint('Found ${snapshot.docs.length} scan requests');
 
       return snapshot.docs.map((doc) {
         final data = doc.data() as Map<String, dynamic>;
-        print('Document ${doc.id} data: $data'); // Debug: Print each document
+        debugPrint(
+          'Document ${doc.id} data: $data',
+        ); // Debug: Print each document
 
         return {
           'id': doc.id,
@@ -30,7 +33,7 @@ class ScanRequestsService {
         };
       }).toList();
     } catch (e) {
-      print('Error fetching scan requests: $e');
+      debugPrint('Error fetching scan requests: $e');
       return [];
     }
   }
@@ -42,7 +45,7 @@ class ScanRequestsService {
   }) async {
     try {
       final scanRequests = await getScanRequests();
-      print('Total scan requests: ${scanRequests.length}');
+      debugPrint('Total scan requests: ${scanRequests.length}');
 
       // Filter by createdAt window and include only completed (validated) scans
       final DateTime now = DateTime.now();
@@ -114,11 +117,13 @@ class ScanRequestsService {
                     created.isBefore(endExclusive));
         if (inWindow) filteredRequests.add(r);
       }
-      print('Filtered requests for $timeRange: ${filteredRequests.length}');
+      debugPrint(
+        'Filtered requests for $timeRange: ${filteredRequests.length}',
+      );
 
       // Debug: Print details of filtered requests
       for (final request in filteredRequests) {
-        print(
+        debugPrint(
           'Filtered request: ${request['id']} - ${request['userName']} - ${request['createdAt']} - ${request['diseaseSummary']}',
         );
       }
@@ -141,15 +146,17 @@ class ScanRequestsService {
           diseaseSummary = request['results'] as List<dynamic>? ?? [];
         }
 
-        print(
+        debugPrint(
           'Processing request ${request['id']} with ${diseaseSummary.length} diseases',
         );
-        print(
+        debugPrint(
           'Disease summary data: $diseaseSummary',
         ); // Debug: Print disease summary
 
         for (final disease in diseaseSummary) {
-          print('Processing disease: $disease'); // Debug: Print each disease
+          debugPrint(
+            'Processing disease: $disease',
+          ); // Debug: Print each disease
 
           // Try different possible field names for disease name and count
           String diseaseName = 'Unknown';
@@ -170,7 +177,7 @@ class ScanRequestsService {
           // Skip Tip Burn as it's not a disease but a scanning feature
           if (diseaseName.toLowerCase().contains('tip burn') ||
               diseaseName.toLowerCase().contains('unknown')) {
-            print('Skipping Tip Burn/Unknown: $diseaseName');
+            debugPrint('Skipping Tip Burn/Unknown: $diseaseName');
             continue;
           }
 
@@ -180,8 +187,8 @@ class ScanRequestsService {
         }
       }
 
-      print('Disease counts: $diseaseCounts');
-      print('Total detections: $totalDetections');
+      debugPrint('Disease counts: $diseaseCounts');
+      debugPrint('Total detections: $totalDetections');
 
       // Convert to list format with percentages
       final List<Map<String, dynamic>> diseaseStats = [];
@@ -204,10 +211,10 @@ class ScanRequestsService {
         (a, b) => (b['count'] as int).compareTo(a['count'] as int),
       );
 
-      print('Final disease stats: $diseaseStats');
+      debugPrint('Final disease stats: $diseaseStats');
       return diseaseStats;
     } catch (e) {
-      print('Error getting disease stats: $e');
+      debugPrint('Error getting disease stats: $e');
       return [];
     }
   }
@@ -312,7 +319,7 @@ class ScanRequestsService {
 
       return trendData;
     } catch (e) {
-      print('Error getting reports trend: $e');
+      debugPrint('Error getting reports trend: $e');
       return [];
     }
   }
@@ -324,7 +331,7 @@ class ScanRequestsService {
           await _firestore.collection('scan_requests').get();
       return snapshot.docs.length;
     } catch (e) {
-      print('Error getting total reports count: $e');
+      debugPrint('Error getting total reports count: $e');
       return 0;
     }
   }
@@ -339,7 +346,7 @@ class ScanRequestsService {
               .get();
       return snapshot.docs.length;
     } catch (e) {
-      print('Error getting pending reports count: $e');
+      debugPrint('Error getting pending reports count: $e');
       return 0;
     }
   }
@@ -354,7 +361,7 @@ class ScanRequestsService {
               .get();
       return snapshot.docs.length;
     } catch (e) {
-      print('Error getting completed reports count: $e');
+      debugPrint('Error getting completed reports count: $e');
       return 0;
     }
   }
@@ -369,8 +376,8 @@ class ScanRequestsService {
 
     // Handle custom date range and monthly range
     if (timeRange.startsWith('Custom (') || timeRange.startsWith('Monthly (')) {
-      print('==== FILTERING Custom/Monthly Range ====');
-      print('Time Range String: $timeRange');
+      debugPrint('==== FILTERING Custom/Monthly Range ====');
+      debugPrint('Time Range String: $timeRange');
       // Extract dates from "Custom (2025-08-01 to 2025-08-07)" or "Monthly (2025-08-01 to 2025-08-31)"
       final regex = RegExp(
         r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
@@ -380,11 +387,11 @@ class ScanRequestsService {
       if (match != null) {
         final startDateStr = match.group(1)!;
         final endDateStr = match.group(2)!;
-        print('Extracted Start: $startDateStr, End: $endDateStr');
+        debugPrint('Extracted Start: $startDateStr, End: $endDateStr');
 
         final customStartDate = DateTime.parse(startDateStr);
         final customEndDate = DateTime.parse(endDateStr);
-        print('Parsed Start: $customStartDate, End: $customEndDate');
+        debugPrint('Parsed Start: $customStartDate, End: $customEndDate');
 
         // For custom ranges, we'll use the provided dates
         return _filterByCustomDateRange(
@@ -393,7 +400,7 @@ class ScanRequestsService {
           customEndDate,
         );
       } else {
-        print('REGEX DID NOT MATCH!');
+        debugPrint('REGEX DID NOT MATCH!');
       }
     }
 
@@ -420,23 +427,23 @@ class ScanRequestsService {
         startDate = now.subtract(const Duration(days: 7));
     }
 
-    print('=== TIME RANGE FILTERING DEBUG ===');
-    print('Time Range: $timeRange');
-    print('Now: $now');
-    print('Start Date: $startDate');
+    debugPrint('=== TIME RANGE FILTERING DEBUG ===');
+    debugPrint('Time Range: $timeRange');
+    debugPrint('Now: $now');
+    debugPrint('Start Date: $startDate');
     if (timeRange != '1 Day') {
-      print(
+      debugPrint(
         'Effective range: ${startDate.toString().split(' ')[0]} to today (including today)',
       );
     }
-    print('Total requests to filter: ${requests.length}');
-    print('==================================');
+    debugPrint('Total requests to filter: ${requests.length}');
+    debugPrint('==================================');
 
     final filteredRequests =
         requests.where((request) {
           final createdAt = request['createdAt'];
           if (createdAt == null) {
-            print('Request ${request['id']} has no createdAt date');
+            debugPrint('Request ${request['id']} has no createdAt date');
             return false;
           }
 
@@ -446,9 +453,9 @@ class ScanRequestsService {
           } else if (createdAt is String) {
             // Handle ISO string format like "2025-08-01T18:47:52.592255"
             requestDate = DateTime.tryParse(createdAt) ?? DateTime.now();
-            print('Parsed date from string: $requestDate');
+            debugPrint('Parsed date from string: $requestDate');
           } else {
-            print(
+            debugPrint(
               'Request ${request['id']} has invalid createdAt format: $createdAt',
             );
             return false;
@@ -474,18 +481,18 @@ class ScanRequestsService {
           }
 
           if (timeRange == '1 Day') {
-            print(
+            debugPrint(
               'Request ${request['id']} date: $requestDate, timeRange: $timeRange (today only), in range: $isInRange',
             );
           } else {
-            print(
+            debugPrint(
               'Request ${request['id']} date: $requestDate, timeRange: $timeRange (${startDate.toString().split(' ')[0]} to today), in range: $isInRange',
             );
           }
           return isInRange;
         }).toList();
 
-    print(
+    debugPrint(
       'Filtered ${filteredRequests.length} requests out of ${requests.length}',
     );
     return filteredRequests;
@@ -497,13 +504,13 @@ class ScanRequestsService {
     DateTime startDate,
     DateTime endDate,
   ) {
-    print('Filtering requests from $startDate to $endDate');
+    debugPrint('Filtering requests from $startDate to $endDate');
 
     final filteredRequests =
         requests.where((request) {
           final createdAt = request['createdAt'];
           if (createdAt == null) {
-            print('Request ${request['id']} has no createdAt date');
+            debugPrint('Request ${request['id']} has no createdAt date');
             return false;
           }
 
@@ -512,9 +519,9 @@ class ScanRequestsService {
             requestDate = createdAt.toDate();
           } else if (createdAt is String) {
             requestDate = DateTime.tryParse(createdAt) ?? DateTime.now();
-            print('Parsed date from string: $requestDate');
+            debugPrint('Parsed date from string: $requestDate');
           } else {
-            print(
+            debugPrint(
               'Request ${request['id']} has invalid createdAt format: $createdAt',
             );
             return false;
@@ -535,13 +542,13 @@ class ScanRequestsService {
               !requestDate.isBefore(startOfDay) &&
               requestDate.isBefore(endExclusive);
 
-          print(
+          debugPrint(
             'Request ${request['id']} date: $requestDate, in range: $isInRange',
           );
           return isInRange;
         }).toList();
 
-    print(
+    debugPrint(
       'Filtered ${filteredRequests.length} requests out of ${requests.length}',
     );
     return filteredRequests;
@@ -626,11 +633,11 @@ class ScanRequestsService {
         }
       }
 
-      print('=== AVG RESPONSE TIME (OVERALL) DEBUG ===');
-      print('Time Range: $timeRange');
-      print('Now: $now');
-      print('Start (reviewedAt): $startInclusive');
-      print('End (exclusive, reviewedAt): $endExclusive');
+      debugPrint('=== AVG RESPONSE TIME (OVERALL) DEBUG ===');
+      debugPrint('Time Range: $timeRange');
+      debugPrint('Now: $now');
+      debugPrint('Start (reviewedAt): $startInclusive');
+      debugPrint('End (exclusive, reviewedAt): $endExclusive');
 
       int completedCount = 0;
       int totalSeconds = 0;
@@ -683,24 +690,24 @@ class ScanRequestsService {
       }
 
       if (completedCount == 0) {
-        print('No completed requests in range. Returning 0 hours');
+        debugPrint('No completed requests in range. Returning 0 hours');
         return '0 hours';
       }
 
       final double averageSeconds = totalSeconds / completedCount;
       final double averageHours = averageSeconds / 3600.0;
 
-      print(
+      debugPrint(
         'Overall average across $completedCount requests: '
         '${averageSeconds.toStringAsFixed(2)} seconds '
         '(${averageHours.toStringAsFixed(2)} hours)',
       );
-      print('================================');
+      debugPrint('================================');
 
       // Always return in hours for UI consistency
       return '${averageHours.toStringAsFixed(2)} hours';
     } catch (e) {
-      print('Error getting average response time: $e');
+      debugPrint('Error getting average response time: $e');
       return '0 hours';
     }
   }

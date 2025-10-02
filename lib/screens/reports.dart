@@ -28,6 +28,8 @@ class Reports extends StatefulWidget {
 class _ReportsState extends State<Reports> {
   String _selectedTimeRange = 'Last 7 Days';
   bool _isLoading = true;
+  Future<List<Map<String, dynamic>>>?
+  _scanRequestsFuture; // cached shared future
 
   // Real data from Firestore
   Map<String, dynamic> _stats = {
@@ -57,6 +59,8 @@ class _ReportsState extends State<Reports> {
   String _healthyRate = '—';
   int _healthyScansCount = 0;
   int _diseasedScansCount = 0;
+  // Dismiss state for completion rate warning animation/icon
+  bool _completionWarningDismissed = false;
 
   String _monthName(int m) {
     const names = [
@@ -169,12 +173,14 @@ class _ReportsState extends State<Reports> {
   @override
   void initState() {
     super.initState();
+    _scanRequestsFuture = ScanRequestsService.getScanRequests();
     _initializeData();
   }
 
   Future<void> _initializeData() async {
     await _loadSavedTimeRange();
-    print('[DEBUG] Saved time range loaded: $_selectedTimeRange');
+    await _loadCompletionWarningDismissed();
+    // debug log removed
 
     // Mark as initialized before loading data
     setState(() {
@@ -185,9 +191,7 @@ class _ReportsState extends State<Reports> {
     await _loadData();
 
     // Now update stats with the correct saved time range
-    print(
-      '[DEBUG] Calling _updateStatsFromSnapshot after loadData with range: $_selectedTimeRange',
-    );
+    // debug log removed
     _updateStatsFromSnapshot();
   }
 
@@ -201,7 +205,7 @@ class _ReportsState extends State<Reports> {
         });
       }
     } catch (e) {
-      print('Error loading saved time range: $e');
+      // log suppressed in production
     }
   }
 
@@ -210,7 +214,35 @@ class _ReportsState extends State<Reports> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('selected_time_range', timeRange);
     } catch (e) {
-      print('Error saving time range: $e');
+      // log suppressed in production
+    }
+  }
+
+  String _dismissalKeyForRange(String range) =>
+      'completion_warning_dismissed_' + range;
+
+  Future<void> _loadCompletionWarningDismissed() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = _dismissalKeyForRange(_selectedTimeRange);
+      final dismissed = prefs.getBool(key);
+      if (dismissed != null) {
+        setState(() {
+          _completionWarningDismissed = dismissed;
+        });
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  Future<void> _saveCompletionWarningDismissed(bool dismissed) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = _dismissalKeyForRange(_selectedTimeRange);
+      await prefs.setBool(key, dismissed);
+    } catch (e) {
+      // ignore
     }
   }
 
@@ -401,13 +433,11 @@ class _ReportsState extends State<Reports> {
 
     // Align completion rate and overdue pending with modal logic and dataset
     // Use shared helper to match counts exactly
-    print(
-      '[DEBUG _updateStatsFromSnapshot] About to call getCountsForTimeRange with: $_selectedTimeRange',
-    );
+    // debug log removed
     final counts = await ScanRequestsService.getCountsForTimeRange(
       timeRange: _selectedTimeRange,
     );
-    print('[DEBUG _updateStatsFromSnapshot] Received counts: $counts');
+    // debug log removed
     final int completedByCreated = counts['completed'] ?? 0;
     final int pendingByCreated = counts['pending'] ?? 0;
     final int totalForCompletion = completedByCreated + pendingByCreated;
@@ -526,9 +556,7 @@ class _ReportsState extends State<Reports> {
             ? '—'
             : '${((healthyScans / totalHealthyCheck) * 100).toStringAsFixed(1)}%';
 
-    print(
-      '[CARD] range=$_selectedTimeRange withinPeriod=$scansSubmittedAndCompletedInPeriod total=$totalScansCount cardRate=$completionRateStr lifetimeCompleted=$completedByCreated',
-    );
+    // debug log removed
     setState(() {
       _stats['totalReportsReviewed'] = completedInWindow;
       _stats['pendingRequests'] = pendingInWindow;
@@ -619,7 +647,7 @@ class _ReportsState extends State<Reports> {
         });
       }
     } catch (e) {
-      print('Error fetching temperature: $e');
+      // log suppressed in production
       setState(() {
         _avgTemperature = '—';
       });
@@ -645,7 +673,7 @@ class _ReportsState extends State<Reports> {
         _isLoading = false;
       });
     } catch (e) {
-      print('Error loading data: $e');
+      // log suppressed in production
       setState(() {
         _isLoading = false;
       });
@@ -675,7 +703,7 @@ class _ReportsState extends State<Reports> {
         _stats['averageResponseTime'] = averageResponseTime;
       });
     } catch (e) {
-      print('Error loading stats: $e');
+      // log suppressed in production
     }
   }
 
@@ -684,7 +712,7 @@ class _ReportsState extends State<Reports> {
       final trendData = await ScanRequestsService.getReportsTrend(
         timeRange: _selectedTimeRange,
       );
-      print('Loaded reports trend: $trendData');
+      // debug log removed
 
       // If no data, show a message
       if (trendData.isEmpty) {
@@ -699,7 +727,7 @@ class _ReportsState extends State<Reports> {
         });
       }
     } catch (e) {
-      print('Error loading reports trend: $e');
+      // log suppressed in production
       // Fallback data
       setState(() {
         _reportsTrend = [
@@ -714,7 +742,7 @@ class _ReportsState extends State<Reports> {
       final diseaseData = await ScanRequestsService.getDiseaseStats(
         timeRange: _selectedTimeRange,
       );
-      print('Loaded disease stats: $diseaseData');
+      // debug log removed
 
       // If no data, show a message
       if (diseaseData.isEmpty) {
@@ -734,7 +762,7 @@ class _ReportsState extends State<Reports> {
         });
       }
     } catch (e) {
-      print('Error loading disease stats: $e');
+      // log suppressed in production
       // Fallback data
       setState(() {
         _diseaseStats = [
@@ -923,7 +951,7 @@ class _ReportsState extends State<Reports> {
         });
       }
     } catch (e) {
-      print('Error loading avg response trend: $e');
+      // log suppressed in production
       setState(() {
         _avgResponseTrend = [];
       });
@@ -1043,7 +1071,7 @@ class _ReportsState extends State<Reports> {
         _slaWithin48h = sla48Str;
       });
     } catch (e) {
-      print('Error loading SLA: $e');
+      // log suppressed in production
       setState(() {
         _slaWithin24h = '—';
         _slaWithin48h = '—';
@@ -1074,12 +1102,15 @@ class _ReportsState extends State<Reports> {
         'timestamp': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      print('Failed to log time range change: $e');
+      // log suppressed in production
     }
 
     setState(() {
       _selectedTimeRange = newTimeRange;
+      // Reset dismissal when the range changes so warnings reflect new data
+      _completionWarningDismissed = false;
     });
+    await _saveCompletionWarningDismissed(false);
     // Immediately update card KPIs to reflect the new range
     try {
       final counts = await ScanRequestsService.getCountsForTimeRange(
@@ -1385,7 +1416,13 @@ class _ReportsState extends State<Reports> {
                     _completionRate ?? '—',
                     Icons.task_alt,
                     Colors.blueGrey,
-                    onTap: () => _showCompletionRateModal(context),
+                    onTap: () async {
+                      setState(() {
+                        _completionWarningDismissed = true;
+                      });
+                      await _saveCompletionWarningDismissed(true);
+                      _showCompletionRateModal(context);
+                    },
                     showWarning: _hasCompletionRateMismatch(),
                   ),
                   // Row 2: Performance & SLA metrics
@@ -1464,6 +1501,9 @@ class _ReportsState extends State<Reports> {
   bool _hasCompletionRateMismatch() {
     // Show warning if reviews completed doesn't match what you'd expect
     // from the completion rate (indicates backlog or future reviews)
+    if (_completionWarningDismissed) {
+      return false;
+    }
     if (_completionRate == null ||
         _completionRate == '—' ||
         _reviewsCompleted == 0 ||
@@ -1557,7 +1597,7 @@ class _ReportsState extends State<Reports> {
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(24),
                       child: FutureBuilder<List<Map<String, dynamic>>>(
-                        future: ScanRequestsService.getScanRequests(),
+                        future: _scanRequestsFuture,
                         builder: (context, snapshot) {
                           if (snapshot.connectionState ==
                               ConnectionState.waiting) {
@@ -2090,7 +2130,7 @@ class _ReportsState extends State<Reports> {
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(24),
                       child: FutureBuilder<List<Map<String, dynamic>>>(
-                        future: ScanRequestsService.getScanRequests(),
+                        future: _scanRequestsFuture,
                         builder: (context, snapshot) {
                           if (snapshot.connectionState ==
                               ConnectionState.waiting) {
@@ -3458,7 +3498,7 @@ class _ReportsState extends State<Reports> {
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(24),
                       child: FutureBuilder<List<Map<String, dynamic>>>(
-                        future: ScanRequestsService.getScanRequests(),
+                        future: _scanRequestsFuture,
                         builder: (context, snapshot) {
                           if (snapshot.connectionState ==
                               ConnectionState.waiting) {
@@ -5480,127 +5520,139 @@ class _ReportsListTableState extends State<ReportsListTable> {
                       height: 200,
                       child: Center(child: Text('Failed to load: $_error')),
                     )
-                    : DataTable(
-                      columns: const [
-                        DataColumn(label: Text('Report ID')),
-                        DataColumn(label: Text('User')),
-                        DataColumn(label: Text('Date')),
-                        DataColumn(label: Text('Disease')),
-                        DataColumn(label: Text('Status')),
-                        DataColumn(label: Text('Actions')),
-                      ],
-                      rows:
-                          _filteredReports.map((report) {
-                            return DataRow(
-                              cells: [
-                                DataCell(Text((report['id'] ?? '').toString())),
-                                DataCell(
-                                  Text(
-                                    (report['userName'] ??
-                                            report['userId'] ??
-                                            '')
-                                        .toString(),
+                    : RepaintBoundary(
+                      child: DataTable(
+                        columns: const [
+                          DataColumn(label: Text('Report ID')),
+                          DataColumn(label: Text('User')),
+                          DataColumn(label: Text('Date')),
+                          DataColumn(label: Text('Disease')),
+                          DataColumn(label: Text('Status')),
+                          DataColumn(label: Text('Actions')),
+                        ],
+                        rows:
+                            _filteredReports.map((report) {
+                              return DataRow(
+                                cells: [
+                                  DataCell(
+                                    Text((report['id'] ?? '').toString()),
                                   ),
-                                ),
-                                DataCell(
-                                  Text(_formatDate(report['createdAt'])),
-                                ),
-                                DataCell(Text(_extractDisease(report))),
-                                DataCell(
-                                  Text((report['status'] ?? '').toString()),
-                                ),
-                                DataCell(
-                                  ElevatedButton(
-                                    child: const Text('View'),
-                                    onPressed: () {
-                                      showDialog(
-                                        context: context,
-                                        builder:
-                                            (context) => AlertDialog(
-                                              title: Text(
-                                                'Report Details: ${(report['id'] ?? '').toString()}',
-                                              ),
-                                              content: SingleChildScrollView(
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    Text(
-                                                      'Report ID: ${(report['id'] ?? '').toString()}',
-                                                      style: const TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                    const SizedBox(height: 8),
-                                                    Text(
-                                                      'User: ${(report['userName'] ?? report['userId'] ?? '').toString()}',
-                                                    ),
-                                                    Text(
-                                                      'Date: ${_formatDate(report['createdAt'])}',
-                                                    ),
-                                                    Text(
-                                                      'Disease: ${_extractDisease(report)}',
-                                                    ),
-                                                    Text(
-                                                      'Status: ${(report['status'] ?? '').toString()}',
-                                                    ),
-                                                    const SizedBox(height: 16),
-                                                    if (report['image'] != null)
-                                                      Container(
-                                                        height: 180,
-                                                        width: 180,
-                                                        color: Colors.grey[200],
-                                                        child: Image.network(
-                                                          report['image']
-                                                              .toString(),
-                                                          fit: BoxFit.cover,
+                                  DataCell(
+                                    Text(
+                                      (report['userName'] ??
+                                              report['userId'] ??
+                                              '')
+                                          .toString(),
+                                    ),
+                                  ),
+                                  DataCell(
+                                    Text(_formatDate(report['createdAt'])),
+                                  ),
+                                  DataCell(Text(_extractDisease(report))),
+                                  DataCell(
+                                    Text((report['status'] ?? '').toString()),
+                                  ),
+                                  DataCell(
+                                    ElevatedButton(
+                                      child: const Text('View'),
+                                      onPressed: () {
+                                        showDialog(
+                                          context: context,
+                                          builder:
+                                              (context) => AlertDialog(
+                                                title: Text(
+                                                  'Report Details: ${(report['id'] ?? '').toString()}',
+                                                ),
+                                                content: SingleChildScrollView(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Text(
+                                                        'Report ID: ${(report['id'] ?? '').toString()}',
+                                                        style: const TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.bold,
                                                         ),
-                                                      )
-                                                    else
-                                                      Container(
-                                                        height: 180,
-                                                        width: 180,
-                                                        color: Colors.grey[200],
-                                                        child: const Center(
-                                                          child: Text(
-                                                            'No Image',
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      Text(
+                                                        'User: ${(report['userName'] ?? report['userId'] ?? '').toString()}',
+                                                      ),
+                                                      Text(
+                                                        'Date: ${_formatDate(report['createdAt'])}',
+                                                      ),
+                                                      Text(
+                                                        'Disease: ${_extractDisease(report)}',
+                                                      ),
+                                                      Text(
+                                                        'Status: ${(report['status'] ?? '').toString()}',
+                                                      ),
+                                                      const SizedBox(
+                                                        height: 16,
+                                                      ),
+                                                      if (report['image'] !=
+                                                          null)
+                                                        Container(
+                                                          height: 180,
+                                                          width: 180,
+                                                          color:
+                                                              Colors.grey[200],
+                                                          child: Image.network(
+                                                            report['image']
+                                                                .toString(),
+                                                            fit: BoxFit.cover,
+                                                          ),
+                                                        )
+                                                      else
+                                                        Container(
+                                                          height: 180,
+                                                          width: 180,
+                                                          color:
+                                                              Colors.grey[200],
+                                                          child: const Center(
+                                                            child: Text(
+                                                              'No Image',
+                                                            ),
                                                           ),
                                                         ),
+                                                      const SizedBox(
+                                                        height: 16,
                                                       ),
-                                                    const SizedBox(height: 16),
-                                                    Text(
-                                                      'Details: ${(report['details'] ?? '-').toString()}',
-                                                    ),
-                                                    const SizedBox(height: 8),
-                                                    Text(
-                                                      'Expert: ${(report['expert'] ?? "-").toString()}',
-                                                    ),
-                                                    Text(
-                                                      'Feedback: ${(report['feedback'] ?? "-").toString()}',
-                                                    ),
-                                                  ],
+                                                      Text(
+                                                        'Details: ${(report['details'] ?? '-').toString()}',
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      Text(
+                                                        'Expert: ${(report['expert'] ?? "-").toString()}',
+                                                      ),
+                                                      Text(
+                                                        'Feedback: ${(report['feedback'] ?? "-").toString()}',
+                                                      ),
+                                                    ],
+                                                  ),
                                                 ),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed:
+                                                        () => Navigator.pop(
+                                                          context,
+                                                        ),
+                                                    child: const Text('Close'),
+                                                  ),
+                                                ],
                                               ),
-                                              actions: [
-                                                TextButton(
-                                                  onPressed:
-                                                      () => Navigator.pop(
-                                                        context,
-                                                      ),
-                                                  child: const Text('Close'),
-                                                ),
-                                              ],
-                                            ),
-                                      );
-                                    },
+                                        );
+                                      },
+                                    ),
                                   ),
-                                ),
-                              ],
-                            );
-                          }).toList(),
+                                ],
+                              );
+                            }).toList(),
+                      ),
                     ),
           ),
         ),
@@ -6899,12 +6951,7 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
 
   Widget _buildBarChart({Key? key}) {
     // Debug print to trace data
-    print(
-      'DEBUG: _selectedTimeRange=$_selectedTimeRange, _aggregatedData.length=${_aggregatedData.length}',
-    );
-    for (var i = 0; i < _aggregatedData.length; i++) {
-      print('DEBUG: _aggregatedData[$i]=${_aggregatedData[i]}');
-    }
+    // debug logs removed
     // Data validation
     if (_selectedTimeRange == 'Last Year' && _aggregatedData.length != 12) {
       return const Center(
@@ -7141,7 +7188,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
   @override
   void initState() {
     super.initState();
-    print('[DEBUG] AvgResponseTimeModal initState called');
+    // debug log removed
     _loadExpertStats();
   }
 
@@ -7225,10 +7272,8 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       }
       if (reviewedRaw is Timestamp) {
         reviewed = reviewedRaw.toDate();
-      } else if (reviewedRaw is String) {
-        reviewed = DateTime.tryParse(reviewedRaw) ?? created;
       } else {
-        continue;
+        reviewed = DateTime.tryParse(reviewedRaw) ?? DateTime.now();
       }
       // Filter by reviewedAt window
       bool inWindow;
@@ -7247,7 +7292,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       if (!inWindow) continue;
       expertGroups.putIfAbsent(expertId, () => []).add(req);
     }
-    print('[DEBUG] expertGroups keys: \'${expertGroups.keys.toList()}\'');
+    // debug log removed
     final Map<String, Map<String, dynamic>> experts = {};
     final List<_ExpertResponseStats> stats = [];
     int grandTotalSeconds = 0;
@@ -7296,12 +7341,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
         ),
       );
     }
-    print('[DEBUG] _expertStats to display:');
-    for (final s in stats) {
-      print(
-        '  expertId: \'${s.expertId}\', name: \'${s.name}\', avgSeconds: ${s.avgSeconds}, trend: ${s.trend}',
-      );
-    }
+    // debug log removed
     stats.sort((a, b) => a.avgSeconds.compareTo(b.avgSeconds));
     setState(() {
       _expertStats = stats;
@@ -7330,9 +7370,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
   @override
   Widget build(BuildContext context) {
     final selectedRange = widget.selectedTimeRange;
-    print(
-      '[DEBUG] AvgResponseTimeModal build called with selectedTimeRange: $selectedRange',
-    );
+    // debug log removed
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       child: Container(
