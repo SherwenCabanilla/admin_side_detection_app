@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_store.dart';
 import 'package:provider/provider.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../screens/admin_dashboard.dart';
 
 class PendingApprovalsCard extends StatefulWidget {
@@ -176,6 +175,13 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
 
+  // Loading states for individual actions
+  final Set<String> _loadingUserIds = {};
+
+  // Loading states for bulk actions
+  bool _isApprovingAll = false;
+  bool _isDeletingAll = false;
+
   @override
   void initState() {
     super.initState();
@@ -264,6 +270,10 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
     );
 
     if (confirmed == true) {
+      setState(() {
+        _loadingUserIds.add(user['id']);
+      });
+
       try {
         await UserStore.updateUserStatus(user['id'], 'active');
 
@@ -280,6 +290,7 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
         setState(() {
           _pendingUsers.removeWhere((u) => u['id'] == user['id']);
           _filteredUsers.removeWhere((u) => u['id'] == user['id']);
+          _loadingUserIds.remove(user['id']);
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -287,6 +298,9 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           );
         }
       } catch (e) {
+        setState(() {
+          _loadingUserIds.remove(user['id']);
+        });
         if (mounted) {
           ScaffoldMessenger.of(
             context,
@@ -324,6 +338,10 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
     );
 
     if (confirmed == true) {
+      setState(() {
+        _loadingUserIds.add(user['id']);
+      });
+
       try {
         await UserStore.deleteUser(user['id']);
 
@@ -340,6 +358,7 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
         setState(() {
           _pendingUsers.removeWhere((u) => u['id'] == user['id']);
           _filteredUsers.removeWhere((u) => u['id'] == user['id']);
+          _loadingUserIds.remove(user['id']);
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -347,6 +366,9 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           );
         }
       } catch (e) {
+        setState(() {
+          _loadingUserIds.remove(user['id']);
+        });
         if (mounted) {
           ScaffoldMessenger.of(
             context,
@@ -383,6 +405,10 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
     );
 
     if (confirmed == true) {
+      setState(() {
+        _isApprovingAll = true;
+      });
+
       try {
         for (final user in _filteredUsers) {
           await UserStore.updateUserStatus(user['id'], 'active');
@@ -400,6 +426,7 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
         setState(() {
           _pendingUsers.clear();
           _filteredUsers.clear();
+          _isApprovingAll = false;
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -407,6 +434,9 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           );
         }
       } catch (e) {
+        setState(() {
+          _isApprovingAll = false;
+        });
         if (mounted) {
           ScaffoldMessenger.of(
             context,
@@ -443,6 +473,10 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
     );
 
     if (confirmed == true) {
+      setState(() {
+        _isDeletingAll = true;
+      });
+
       try {
         for (final user in _filteredUsers) {
           await UserStore.deleteUser(user['id']);
@@ -460,6 +494,7 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
         setState(() {
           _pendingUsers.clear();
           _filteredUsers.clear();
+          _isDeletingAll = false;
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -467,6 +502,9 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           );
         }
       } catch (e) {
+        setState(() {
+          _isDeletingAll = false;
+        });
         if (mounted) {
           ScaffoldMessenger.of(
             context,
@@ -544,7 +582,10 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
                 // Bulk Actions
                 if (_filteredUsers.isNotEmpty) ...[
                   OutlinedButton(
-                    onPressed: _approveAllUsers,
+                    onPressed:
+                        _isApprovingAll || _isDeletingAll
+                            ? null
+                            : _approveAllUsers,
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(color: Colors.grey),
                       padding: const EdgeInsets.symmetric(
@@ -552,11 +593,21 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
                         vertical: 8,
                       ),
                     ),
-                    child: const Text('Approve All'),
+                    child:
+                        _isApprovingAll
+                            ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                            : const Text('Approve All'),
                   ),
                   const SizedBox(width: 8),
                   ElevatedButton(
-                    onPressed: _rejectAllUsers,
+                    onPressed:
+                        _isApprovingAll || _isDeletingAll
+                            ? null
+                            : _rejectAllUsers,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.red,
                       foregroundColor: Colors.white,
@@ -565,7 +616,19 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
                         vertical: 8,
                       ),
                     ),
-                    child: const Text('Delete All'),
+                    child:
+                        _isDeletingAll
+                            ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
+                              ),
+                            )
+                            : const Text('Delete All'),
                   ),
                 ],
               ],
@@ -652,7 +715,12 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   ElevatedButton(
-                                    onPressed: () => _approveUser(user),
+                                    onPressed:
+                                        _loadingUserIds.contains(user['id']) ||
+                                                _isApprovingAll ||
+                                                _isDeletingAll
+                                            ? null
+                                            : () => _approveUser(user),
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: Colors.green,
                                       foregroundColor: Colors.white,
@@ -662,11 +730,29 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
                                       ),
                                       minimumSize: const Size(80, 32),
                                     ),
-                                    child: const Text('Accept'),
+                                    child:
+                                        _loadingUserIds.contains(user['id'])
+                                            ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                valueColor:
+                                                    AlwaysStoppedAnimation<
+                                                      Color
+                                                    >(Colors.white),
+                                              ),
+                                            )
+                                            : const Text('Accept'),
                                   ),
                                   const SizedBox(width: 8),
                                   ElevatedButton(
-                                    onPressed: () => _rejectUser(user),
+                                    onPressed:
+                                        _loadingUserIds.contains(user['id']) ||
+                                                _isApprovingAll ||
+                                                _isDeletingAll
+                                            ? null
+                                            : () => _rejectUser(user),
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: Colors.red,
                                       foregroundColor: Colors.white,
@@ -676,7 +762,20 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
                                       ),
                                       minimumSize: const Size(80, 32),
                                     ),
-                                    child: const Text('Delete'),
+                                    child:
+                                        _loadingUserIds.contains(user['id'])
+                                            ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                valueColor:
+                                                    AlwaysStoppedAnimation<
+                                                      Color
+                                                    >(Colors.white),
+                                              ),
+                                            )
+                                            : const Text('Delete'),
                                   ),
                                 ],
                               ),

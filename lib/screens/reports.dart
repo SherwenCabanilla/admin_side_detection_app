@@ -1564,6 +1564,34 @@ class _ReportsState extends State<Reports> {
     return false;
   }
 
+  bool _shouldShowWarningContent() {
+    // Show warning content in modal based on actual data conditions,
+    // regardless of whether the warning has been dismissed
+    if (_completionRate == null ||
+        _completionRate == '—' ||
+        _reviewsCompleted == 0 ||
+        _totalScansSubmitted == 0) {
+      return false;
+    }
+
+    // If over 100%, definitely show warning content
+    if (_isCompletionRateOver100()) return true;
+
+    // If the simple math doesn't match (due to old submissions being reviewed),
+    // show warning content. Allow 2% tolerance for rounding.
+    try {
+      final rateStr = _completionRate!.replaceAll('%', '').trim();
+      final displayedRate = double.tryParse(rateStr);
+      final expectedRate = (_reviewsCompleted / _totalScansSubmitted) * 100;
+
+      if (displayedRate != null && (displayedRate - expectedRate).abs() > 2) {
+        return true;
+      }
+    } catch (_) {}
+
+    return false;
+  }
+
   Widget _buildStatCard(
     String title,
     String value,
@@ -3210,7 +3238,7 @@ class _ReportsState extends State<Reports> {
                                   child: CircularProgressIndicator(),
                                 ),
                               ],
-                              if (_hasCompletionRateMismatch()) ...[
+                              if (_shouldShowWarningContent()) ...[
                                 const SizedBox(height: 16),
                                 Container(
                                   padding: const EdgeInsets.all(16),
@@ -7539,147 +7567,178 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
     final selectedRange = widget.selectedTimeRange;
     // debug log removed
     return Dialog(
-      insetPadding: const EdgeInsets.all(16),
-      child: Container(
-        width: 750,
-        padding: const EdgeInsets.all(32),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 750,
+          maxHeight: MediaQuery.of(context).size.height * 0.85,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Average Response Time (per Expert)',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Time Range: ${_displayRangeLabel(selectedRange)}',
-                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 28),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _expertStats.isEmpty
-                ? const Text('No data available for this range.')
-                : Row(
+        child: Container(
+          width:
+              MediaQuery.of(context).size.width > 800
+                  ? 750
+                  : MediaQuery.of(context).size.width * 0.9,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Fixed header with close button
+              Container(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Expanded(
-                      child: DataTable(
-                        columnSpacing: 8, // minimal extra space
-                        columns: const [
-                          DataColumn(label: Text('Expert')),
-                          DataColumn(label: Text('Avg. Response Time')),
-                          DataColumn(label: Text('Reports')),
-                          DataColumn(
-                            label: Align(
-                              alignment: Alignment.center,
-                              child: Text('Trend'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Average Response Time (per Expert)',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Time Range: ${_displayRangeLabel(selectedRange)}',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[600],
                             ),
                           ),
                         ],
-                        rows:
-                            _expertStats
-                                .map(
-                                  (e) => DataRow(
-                                    cells: [
-                                      DataCell(
-                                        Row(
-                                          children: [
-                                            CircleAvatar(
-                                              backgroundImage:
-                                                  (e.avatar.isNotEmpty)
-                                                      ? NetworkImage(e.avatar)
-                                                      : null,
-                                              child:
-                                                  (e.avatar.isEmpty)
-                                                      ? const Icon(Icons.person)
-                                                      : null,
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Text(e.name),
-                                          ],
-                                        ),
-                                      ),
-                                      DataCell(
-                                        Text(_formatDuration(e.avgSeconds)),
-                                      ),
-                                      DataCell(Text(e.count.toString())),
-                                      DataCell(
-                                        Align(
-                                          alignment: Alignment.centerRight,
-                                          child: SizedBox(
-                                            width: double.infinity,
-                                            height: 32,
-                                            child:
-                                                e.trend.length > 1
-                                                    ? CustomPaint(
-                                                      painter:
-                                                          _MiniTrendLinePainter(
-                                                            e.trend,
-                                                          ),
-                                                    )
-                                                    : const Text('-'),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                                .toList(),
                       ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                      tooltip: 'Close',
                     ),
                   ],
                 ),
-            const SizedBox(height: 12),
-            if (_totalCompletedReports > 0)
-              Align(
-                alignment: Alignment.centerRight,
-                child: Text(
-                  () {
-                    final label = _displayRangeLabel(selectedRange);
-                    return 'Overall (weighted) for $label: '
-                        '${_weightedAverageHours.toStringAsFixed(2)} hours '
-                        'across $_totalCompletedReports reports';
-                  }(),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
+              ),
+              // Scrollable content
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _loading
+                          ? const Center(child: CircularProgressIndicator())
+                          : _expertStats.isEmpty
+                          ? const Text('No data available for this range.')
+                          : Row(
+                            children: [
+                              Expanded(
+                                child: DataTable(
+                                  columnSpacing: 8, // minimal extra space
+                                  columns: const [
+                                    DataColumn(label: Text('Expert')),
+                                    DataColumn(
+                                      label: Text('Avg. Response Time'),
+                                    ),
+                                    DataColumn(label: Text('Reports')),
+                                    DataColumn(
+                                      label: Align(
+                                        alignment: Alignment.center,
+                                        child: Text('Trend'),
+                                      ),
+                                    ),
+                                  ],
+                                  rows:
+                                      _expertStats
+                                          .map(
+                                            (e) => DataRow(
+                                              cells: [
+                                                DataCell(
+                                                  Row(
+                                                    children: [
+                                                      CircleAvatar(
+                                                        backgroundImage:
+                                                            (e
+                                                                    .avatar
+                                                                    .isNotEmpty)
+                                                                ? NetworkImage(
+                                                                  e.avatar,
+                                                                )
+                                                                : null,
+                                                        child:
+                                                            (e.avatar.isEmpty)
+                                                                ? const Icon(
+                                                                  Icons.person,
+                                                                )
+                                                                : null,
+                                                      ),
+                                                      const SizedBox(width: 12),
+                                                      Text(e.name),
+                                                    ],
+                                                  ),
+                                                ),
+                                                DataCell(
+                                                  Text(
+                                                    _formatDuration(
+                                                      e.avgSeconds,
+                                                    ),
+                                                  ),
+                                                ),
+                                                DataCell(
+                                                  Text(e.count.toString()),
+                                                ),
+                                                DataCell(
+                                                  Align(
+                                                    alignment:
+                                                        Alignment.centerRight,
+                                                    child: SizedBox(
+                                                      width: double.infinity,
+                                                      height: 32,
+                                                      child:
+                                                          e.trend.length > 1
+                                                              ? CustomPaint(
+                                                                painter:
+                                                                    _MiniTrendLinePainter(
+                                                                      e.trend,
+                                                                    ),
+                                                              )
+                                                              : const Text('-'),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          )
+                                          .toList(),
+                                ),
+                              ),
+                            ],
+                          ),
+                      const SizedBox(height: 12),
+                    ],
                   ),
                 ),
               ),
-            const SizedBox(height: 16),
-            Align(
-              alignment: Alignment.centerRight,
-              child: ElevatedButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Close'),
-              ),
-            ),
-          ],
+              // Overall weighted summary at the bottom
+              if (_totalCompletedReports > 0)
+                Container(
+                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      () {
+                        final label = _displayRangeLabel(selectedRange);
+                        return 'Overall (weighted) for $label: '
+                            '${_weightedAverageHours.toStringAsFixed(2)} hours '
+                            'across $_totalCompletedReports reports';
+                      }(),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
