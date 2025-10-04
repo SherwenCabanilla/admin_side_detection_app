@@ -8,6 +8,7 @@ import 'firebase_options.dart';
 import 'screens/admin_login.dart';
 import 'screens/admin_dashboard.dart';
 import 'models/admin_user.dart';
+import 'utils/responsive_wrapper.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,7 +55,11 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: const AuthWrapper(),
+      home: const ResponsiveScaffold(
+        minWidth: 1245,
+        minHeight: 600,
+        body: AuthWrapper(),
+      ),
     );
   }
 }
@@ -115,3 +120,5 @@ class AuthWrapper extends StatelessWidget {
     );
   }
 }
+// flutter build web --release --dart-define=FLUTTER_WEB_USE_SKIA=true
+//flutter run -d chrome --profile --dart-define=FLUTTER_WEB_USE_SKIA=true
