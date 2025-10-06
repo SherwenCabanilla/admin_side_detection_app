@@ -4020,6 +4020,38 @@ class _ReportsState extends State<Reports> {
                             ),
                           ),
                           const SizedBox(height: 16),
+                          // Backlog note: show only when some reviews came from earlier submissions
+                          if (_reviewsCompleted > _scansCompletedFromPeriod)
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: Colors.orange.shade200,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.history,
+                                    color: Colors.orange.shade700,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      'Includes backlog: ${_reviewsCompleted - _scansCompletedFromPeriod} reviews from earlier submissions',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.orange.shade900,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          const SizedBox(height: 8),
                           _buildInsightBox(
                             'Insight',
                             _getReviewsCompletedInsight(),

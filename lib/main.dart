@@ -8,7 +8,6 @@ import 'firebase_options.dart';
 import 'screens/admin_login.dart';
 import 'screens/admin_dashboard.dart';
 import 'models/admin_user.dart';
-import 'utils/responsive_wrapper.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -55,11 +54,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: const ResponsiveScaffold(
-        minWidth: 1245,
-        minHeight: 600,
-        body: AuthWrapper(),
-      ),
+      home: const AuthWrapper(),
     );
   }
 }
