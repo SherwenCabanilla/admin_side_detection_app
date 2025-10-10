@@ -7520,7 +7520,47 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       expertGroups.putIfAbsent(expertId, () => []).add(req);
     }
     // debug log removed
+
+    // Fetch expert data from Firestore (experts are stored in users collection with role='expert')
     final Map<String, Map<String, dynamic>> experts = {};
+    if (expertGroups.isNotEmpty) {
+      try {
+        final expertIds = expertGroups.keys.toList();
+
+        // Handle case where we have more than 10 experts (Firestore whereIn limit)
+        if (expertIds.length <= 10) {
+          final QuerySnapshot expertSnapshot =
+              await FirebaseFirestore.instance
+                  .collection('users')
+                  .where(FieldPath.documentId, whereIn: expertIds)
+                  .where('role', isEqualTo: 'expert')
+                  .get();
+
+          for (final doc in expertSnapshot.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            experts[doc.id] = data;
+          }
+        } else {
+          // If more than 10 experts, fetch all experts and filter
+          final QuerySnapshot allExpertsSnapshot =
+              await FirebaseFirestore.instance
+                  .collection('users')
+                  .where('role', isEqualTo: 'expert')
+                  .get();
+
+          for (final doc in allExpertsSnapshot.docs) {
+            if (expertIds.contains(doc.id)) {
+              final data = doc.data() as Map<String, dynamic>;
+              experts[doc.id] = data;
+            }
+          }
+        }
+      } catch (e) {
+        print('Error fetching expert data: $e');
+        // Continue with empty experts map if fetch fails
+      }
+    }
+
     final List<_ExpertResponseStats> stats = [];
     int grandTotalSeconds = 0;
     int grandCompletedCount = 0;
@@ -7553,6 +7593,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       grandCompletedCount += requests.length;
       final expert = experts[expertId];
       final firstReq = requests.isNotEmpty ? requests.first : null;
+      final avatarUrl = expert?['imageProfile'] ?? '';
       stats.add(
         _ExpertResponseStats(
           expertId: expertId,
@@ -7561,7 +7602,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
               (firstReq?['expertReview']?['expertName'] ??
                   firstReq?['expertName'] ??
                   'Unknown'),
-          avatar: expert?['imageProfile'] ?? '',
+          avatar: avatarUrl,
           avgSeconds: avgSeconds,
           trend: times,
           count: requests.length,
