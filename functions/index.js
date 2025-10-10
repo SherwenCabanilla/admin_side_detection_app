@@ -1,4 +1,5 @@
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onCall } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
@@ -156,6 +157,108 @@ exports.notifyAdminOnUserRegister = onDocumentCreated(
     } catch (err) {
       console.error("notifyAdminOnUserRegister: sendMail failed", err);
       throw err;
+    }
+  },
+);
+
+/**
+ * Cloud Function to delete a user account
+ * Deletes both the Firebase Authentication account and Firestore document
+ * Can only be called by authenticated admin users
+ */
+exports.deleteUserAccount = onCall(
+  {
+    region: "us-central1",
+  },
+  async (request) => {
+    // Verify the caller is authenticated
+    if (!request.auth) {
+      throw new Error("Authentication required to delete users");
+    }
+
+    // Verify the caller is an admin
+    const callerUid = request.auth.uid;
+    const adminDoc = await admin
+      .firestore()
+      .collection("admins")
+      .doc(callerUid)
+      .get();
+
+    if (!adminDoc.exists) {
+      throw new Error("Unauthorized: Only admins can delete users");
+    }
+
+    const { userId } = request.data;
+
+    if (!userId) {
+      throw new Error("userId is required");
+    }
+
+    console.log(
+      `deleteUserAccount: Deleting user ${userId} by admin ${callerUid}`,
+    );
+
+    try {
+      // First, get the user document to retrieve the email for logging
+      const userDoc = await admin
+        .firestore()
+        .collection("users")
+        .doc(userId)
+        .get();
+
+      const userData = userDoc.exists ? userDoc.data() : null;
+      const userEmail = (userData && userData.email) || "unknown";
+      const userName =
+        (userData && (userData.fullName || userData.name)) || "unknown";
+
+      // Delete from Firebase Authentication
+      try {
+        await admin.auth().deleteUser(userId);
+        console.log(
+          `deleteUserAccount: Successfully deleted auth account for ${userId}`,
+        );
+      } catch (authError) {
+        // If auth user doesn't exist, log it but continue to delete Firestore doc
+        if (authError.code === "auth/user-not-found") {
+          console.log(
+            `deleteUserAccount: Auth account not found for ${userId}, continuing to delete Firestore doc`,
+          );
+        } else {
+          throw authError;
+        }
+      }
+
+      // Delete from Firestore
+      await admin.firestore().collection("users").doc(userId).delete();
+      console.log(
+        `deleteUserAccount: Successfully deleted Firestore doc for ${userId}`,
+      );
+
+      // Delete ONLY pending scan requests
+      // Completed/reviewed scans are preserved for historical records
+      const scanRequestsSnapshot = await admin
+        .firestore()
+        .collection("scan_requests")
+        .where("userId", "==", userId)
+        .where("status", "==", "pending")
+        .get();
+
+      const deletePromises = scanRequestsSnapshot.docs.map((doc) =>
+        doc.ref.delete(),
+      );
+      await Promise.all(deletePromises);
+      console.log(
+        `deleteUserAccount: Deleted ${deletePromises.length} pending scan requests for user ${userId}`,
+      );
+
+      return {
+        success: true,
+        message: `Successfully deleted user ${userName} (${userEmail})`,
+        deletedPendingScanRequests: deletePromises.length,
+      };
+    } catch (error) {
+      console.error(`deleteUserAccount: Error deleting user ${userId}`, error);
+      throw new Error(`Failed to delete user: ${error.message}`);
     }
   },
 );
