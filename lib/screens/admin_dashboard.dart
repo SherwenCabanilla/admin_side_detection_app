@@ -208,37 +208,6 @@ class _AdminDashboardState extends State<AdminDashboard>
     }
   }
 
-  // Remove the hardcoded activities list
-  // List<Map<String, dynamic>> activities = [
-  //   {
-  //     'icon': Icons.person_add,
-  //     'action': 'Accepted new user registration',
-  //     'user': 'John Doe',
-  //     'time': '2 hours ago',
-  //     'color': Colors.green,
-  //   },
-  //   {
-  //     'icon': Icons.verified_user,
-  //     'action': 'Verified expert account',
-  //     'user': 'Dr. Smith',
-  //     'time': '3 hours ago',
-  //     'color': Colors.blue,
-  //   },
-  //   {
-  //     'icon': Icons.block,
-  //     'action': 'Rejected user registration',
-  //     'user': 'Jane Smith',
-  //     'time': '5 hours ago',
-  //     'color': Colors.red,
-  //   },
-  //   {
-  //     'icon': Icons.edit,
-  //     'action': 'Updated user permissions',
-  //     'user': 'Mike Johnson',
-  //     'time': '1 day ago',
-  //     'color': Colors.orange,
-  //   },
-  // ];
 
   Future<void> logActivity({
     required String action,

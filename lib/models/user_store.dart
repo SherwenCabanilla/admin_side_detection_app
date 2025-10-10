@@ -1,7 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 class UserStore {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
+    region: 'us-central1',
+  );
 
   // Fetch all users from Firestore
   static Future<List<Map<String, dynamic>>> getUsers() async {
@@ -52,14 +56,18 @@ class UserStore {
   ) async {
     try {
       print('Updating user $userId...');
-      await _firestore.collection('users').doc(userId).update({
+      final Map<String, dynamic> payload = {
         'fullName': userData['name'],
         'email': userData['email'],
         'phoneNumber': userData['phone'],
         'address': userData['address'],
         'status': userData['status'],
         'role': userData['role'],
-      });
+      };
+      if (userData.containsKey('imageProfile')) {
+        payload['imageProfile'] = userData['imageProfile'];
+      }
+      await _firestore.collection('users').doc(userId).update(payload);
       print('Successfully updated user');
       return true;
     } catch (e) {
@@ -68,16 +76,40 @@ class UserStore {
     }
   }
 
-  // Delete user
+  // Delete user (calls Cloud Function to delete both Auth and Firestore)
   static Future<bool> deleteUser(String userId) async {
     try {
-      print('Deleting user $userId...');
-      await _firestore.collection('users').doc(userId).delete();
-      print('Successfully deleted user');
-      return true;
+      print('Deleting user $userId (Auth + Firestore)...');
+
+      // Call the Cloud Function to delete user from both Auth and Firestore
+      final callable = _functions.httpsCallable('deleteUserAccount');
+      final result = await callable.call({'userId': userId});
+
+      final data = result.data as Map<String, dynamic>;
+      print('Successfully deleted user: ${data['message']}');
+      print(
+        'Deleted ${data['deletedPendingScanRequests']} pending scan requests',
+      );
+      print(
+        'Note: Completed/reviewed scans are preserved for historical records',
+      );
+
+      return data['success'] == true;
     } catch (e) {
       print('Error deleting user: $e');
-      return false;
+
+      // Fallback: if Cloud Function fails, try direct Firestore delete
+      // (This won't delete Auth account but at least removes from Firestore)
+      try {
+        print('Attempting fallback Firestore-only deletion...');
+        await _firestore.collection('users').doc(userId).delete();
+        print('Fallback: Successfully deleted user from Firestore only');
+        print('WARNING: Firebase Auth account may still exist');
+        return true;
+      } catch (fallbackError) {
+        print('Fallback deletion also failed: $fallbackError');
+        return false;
+      }
     }
   }
 

@@ -17,6 +17,66 @@ class _UserManagementState extends State<UserManagement> {
   List<Map<String, dynamic>> _users = [];
   bool _isLoading = true;
 
+  void _showImagePreview(String imageUrl) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black54,
+      builder:
+          (context) => Dialog(
+            backgroundColor: Colors.black,
+            insetPadding: const EdgeInsets.all(24),
+            child: Stack(
+              children: [
+                AspectRatio(
+                  aspectRatio: 1,
+                  child: InteractiveViewer(
+                    minScale: 0.5,
+                    maxScale: 5,
+                    child: Image.network(imageUrl, fit: BoxFit.contain),
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton(
+                    tooltip: 'Close',
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.black54,
+                    ),
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+    );
+  }
+
+  Widget _buildLoadingDialog(String message) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 260, maxWidth: 320),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 3),
+              ),
+              const SizedBox(width: 16),
+              Expanded(child: Text(message)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -82,8 +142,11 @@ class _UserManagementState extends State<UserManagement> {
     final addressController = TextEditingController(
       text: user['address'] ?? '',
     );
+    final formKey = GlobalKey<FormState>();
     String selectedStatus = user['status'];
     String selectedRole = user['role'];
+    final String profileImageUrl =
+        (user['profileImage'] as String? ?? '').trim();
 
     // Create a list of all possible roles, including the current user's role
     final allRoles = ['expert', 'farmer'];
@@ -94,162 +157,292 @@ class _UserManagementState extends State<UserManagement> {
     showDialog(
       context: context,
       builder:
-          (context) => AlertDialog(
-            title: Text('Edit User: ${user['name']}'),
-            content: SingleChildScrollView(
+          (context) => Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 520),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Full Name',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: emailController,
-                    decoration: const InputDecoration(
-                      labelText: 'Email',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: phoneController,
-                    decoration: const InputDecoration(
-                      labelText: 'Phone Number',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: addressController,
-                    decoration: const InputDecoration(
-                      labelText: 'Address',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    value: selectedStatus,
-                    decoration: const InputDecoration(
-                      labelText: 'Status',
-                      border: OutlineInputBorder(),
-                    ),
-                    items:
-                        ['pending', 'active']
-                            .map(
-                              (status) => DropdownMenuItem(
-                                value: status,
-                                child: Text(status.toUpperCase()),
+                  // Header
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            GestureDetector(
+                              onTap:
+                                  profileImageUrl.isNotEmpty
+                                      ? () => _showImagePreview(profileImageUrl)
+                                      : null,
+                              child: Tooltip(
+                                message:
+                                    profileImageUrl.isNotEmpty
+                                        ? 'Click to enlarge'
+                                        : 'No profile photo',
+                                child: CircleAvatar(
+                                  radius: 20,
+                                  backgroundColor: Colors.grey.shade200,
+                                  backgroundImage:
+                                      profileImageUrl.isNotEmpty
+                                          ? NetworkImage(profileImageUrl)
+                                              as ImageProvider<Object>?
+                                          : null,
+                                  child:
+                                      profileImageUrl.isEmpty
+                                          ? const Icon(
+                                            Icons.person,
+                                            color: Colors.grey,
+                                          )
+                                          : null,
+                                ),
                               ),
-                            )
-                            .toList(),
-                    onChanged: (value) => selectedStatus = value!,
-                  ),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    value: selectedRole,
-                    decoration: const InputDecoration(
-                      labelText: 'Role',
-                      border: OutlineInputBorder(),
-                    ),
-                    items:
-                        allRoles
-                            .map(
-                              (role) => DropdownMenuItem(
-                                value: role,
-                                child: Text(role.toUpperCase()),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Edit User',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge
+                                        ?.copyWith(fontWeight: FontWeight.bold),
+                                  ),
+                                  Text(
+                                    user['name'],
+                                    style:
+                                        Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                ],
                               ),
-                            )
-                            .toList(),
-                    onChanged: (value) => selectedRole = value!,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        const Divider(height: 1),
+                      ],
+                    ),
+                  ),
+                  // Content
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+                      child: Form(
+                        key: formKey,
+                        autovalidateMode: AutovalidateMode.onUserInteraction,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: nameController,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Full Name',
+                                hintText: 'Enter full name',
+                                prefixIcon: Icon(Icons.person_outline),
+                                border: OutlineInputBorder(),
+                              ),
+                              validator:
+                                  (v) =>
+                                      (v == null || v.trim().isEmpty)
+                                          ? 'Name is required'
+                                          : null,
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: emailController,
+                              keyboardType: TextInputType.emailAddress,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Email',
+                                hintText: 'name@example.com',
+                                prefixIcon: Icon(Icons.email_outlined),
+                                border: OutlineInputBorder(),
+                              ),
+                              validator: (v) {
+                                final value = v?.trim() ?? '';
+                                if (value.isEmpty) return 'Email is required';
+                                final emailRegex = RegExp(
+                                  r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
+                                );
+                                if (!emailRegex.hasMatch(value)) {
+                                  return 'Enter a valid email';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: phoneController,
+                              keyboardType: TextInputType.phone,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Phone Number',
+                                hintText: 'e.g. 09123456789',
+                                prefixIcon: Icon(Icons.phone_outlined),
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: addressController,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Address',
+                                hintText: 'Street, City, etc.',
+                                prefixIcon: Icon(Icons.home_outlined),
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            DropdownButtonFormField<String>(
+                              value: selectedStatus,
+                              decoration: const InputDecoration(
+                                labelText: 'Status',
+                                prefixIcon: Icon(Icons.verified_outlined),
+                                border: OutlineInputBorder(),
+                              ),
+                              items:
+                                  ['pending', 'active']
+                                      .map(
+                                        (status) => DropdownMenuItem(
+                                          value: status,
+                                          child: Text(status.toUpperCase()),
+                                        ),
+                                      )
+                                      .toList(),
+                              onChanged: (value) => selectedStatus = value!,
+                            ),
+                            const SizedBox(height: 16),
+                            DropdownButtonFormField<String>(
+                              value: selectedRole,
+                              decoration: const InputDecoration(
+                                labelText: 'Role',
+                                prefixIcon: Icon(Icons.badge_outlined),
+                                border: OutlineInputBorder(),
+                              ),
+                              items:
+                                  allRoles
+                                      .map(
+                                        (role) => DropdownMenuItem(
+                                          value: role,
+                                          child: Text(role.toUpperCase()),
+                                        ),
+                                      )
+                                      .toList(),
+                              onChanged: (value) => selectedRole = value!,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Actions
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel'),
+                        ),
+                        const SizedBox(width: 12),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 12,
+                            ),
+                            textStyle: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          onPressed: () async {
+                            if (!(formKey.currentState?.validate() ?? false))
+                              return;
+
+                            showDialog(
+                              context: context,
+                              barrierDismissible: false,
+                              builder:
+                                  (context) => _buildLoadingDialog('Saving...'),
+                            );
+
+                            try {
+                              final success =
+                                  await UserStore.updateUser(user['id'], {
+                                    'name': nameController.text.trim(),
+                                    'email': emailController.text.trim(),
+                                    'phone': phoneController.text.trim(),
+                                    'address': addressController.text.trim(),
+                                    'status': selectedStatus,
+                                    'role': selectedRole,
+                                  });
+
+                              Navigator.pop(context);
+
+                              if (success) {
+                                Navigator.pop(context);
+                                _loadUsers();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      '${user['name']} updated successfully',
+                                    ),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                                await cf.FirebaseFirestore.instance
+                                    .collection('activities')
+                                    .add({
+                                      'action': 'Updated user data',
+                                      'user': nameController.text,
+                                      'type': 'update',
+                                      'color': Colors.blue.value,
+                                      'icon': Icons.edit.codePoint,
+                                      'timestamp':
+                                          cf.FieldValue.serverTimestamp(),
+                                    });
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Failed to update user. Please try again.',
+                                    ),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              Navigator.pop(context);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Error updating user: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          },
+                          child: const Text('Save Changes'),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                onPressed: () async {
-                  // Show loading
-                  showDialog(
-                    context: context,
-                    barrierDismissible: false,
-                    builder:
-                        (context) =>
-                            const Center(child: CircularProgressIndicator()),
-                  );
-
-                  try {
-                    final success = await UserStore.updateUser(user['id'], {
-                      'name': nameController.text,
-                      'email': emailController.text,
-                      'phone': phoneController.text,
-                      'address': addressController.text,
-                      'status': selectedStatus,
-                      'role': selectedRole,
-                    });
-
-                    // Close loading dialog
-                    Navigator.pop(context);
-
-                    if (success) {
-                      // Close edit dialog
-                      Navigator.pop(context);
-
-                      // Refresh the list
-                      _loadUsers();
-
-                      // Show success message
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('${user['name']} updated successfully'),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
-                      await cf.FirebaseFirestore.instance
-                          .collection('activities')
-                          .add({
-                            'action': 'Updated user data',
-                            'user': nameController.text,
-                            'type': 'update',
-                            'color': Colors.blue.value,
-                            'icon': Icons.edit.codePoint,
-                            'timestamp': cf.FieldValue.serverTimestamp(),
-                          });
-                    } else {
-                      // Show error message
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Failed to update user. Please try again.',
-                          ),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                    }
-                  } catch (e) {
-                    // Close loading dialog
-                    Navigator.pop(context);
-
-                    // Show error message
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Error updating user: $e'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                  }
-                },
-                child: const Text('Save Changes'),
-              ),
-            ],
           ),
     );
   }
@@ -345,7 +538,49 @@ class _UserManagementState extends State<UserManagement> {
                                       .map(
                                         (user) => DataRow(
                                           cells: [
-                                            DataCell(Text(user['name'])),
+                                            DataCell(
+                                              Row(
+                                                children: [
+                                                  CircleAvatar(
+                                                    radius: 16,
+                                                    backgroundColor:
+                                                        Colors.grey.shade200,
+                                                    backgroundImage:
+                                                        (user['profileImage'] !=
+                                                                    null &&
+                                                                (user['profileImage']
+                                                                        as String)
+                                                                    .trim()
+                                                                    .isNotEmpty)
+                                                            ? NetworkImage(
+                                                                  (user['profileImage']
+                                                                          as String)
+                                                                      .trim(),
+                                                                )
+                                                                as ImageProvider<
+                                                                  Object
+                                                                >?
+                                                            : null,
+                                                    child:
+                                                        (user['profileImage'] ==
+                                                                    null ||
+                                                                (user['profileImage']
+                                                                        as String)
+                                                                    .trim()
+                                                                    .isEmpty)
+                                                            ? const Icon(
+                                                              Icons.person,
+                                                              size: 16,
+                                                              color:
+                                                                  Colors.grey,
+                                                            )
+                                                            : null,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Text(user['name']),
+                                                ],
+                                              ),
+                                            ),
                                             DataCell(Text(user['email'])),
                                             DataCell(Text(user['phone'] ?? '')),
                                             DataCell(
@@ -424,6 +659,14 @@ class _UserManagementState extends State<UserManagement> {
                                                                     backgroundColor:
                                                                         Colors
                                                                             .red,
+                                                                    foregroundColor:
+                                                                        Colors
+                                                                            .white,
+                                                                    textStyle: const TextStyle(
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold,
+                                                                    ),
                                                                   ),
                                                                   onPressed: () async {
                                                                     // Show loading
@@ -435,9 +678,8 @@ class _UserManagementState extends State<UserManagement> {
                                                                       builder:
                                                                           (
                                                                             context,
-                                                                          ) => const Center(
-                                                                            child:
-                                                                                CircularProgressIndicator(),
+                                                                          ) => _buildLoadingDialog(
+                                                                            'Deleting...',
                                                                           ),
                                                                     );
                                                                     final success =
