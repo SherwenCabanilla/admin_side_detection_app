@@ -17,6 +17,8 @@ class _AdminLoginState extends State<AdminLogin> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _emailFocusNode = FocusNode();
+  final _passwordFocusNode = FocusNode();
   bool _isLoading = false;
   String? _errorMessage;
   bool _obscurePassword = true;
@@ -27,6 +29,11 @@ class _AdminLoginState extends State<AdminLogin> {
     _emailController.text = 'cabanilla.sherwen@dnsc.edu.ph'; // Premade for dev
     _passwordController.text = ''; // Premade for dev
     _initializeFirebase();
+
+    // Auto-focus on email field after the widget is built
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _emailFocusNode.requestFocus();
+    });
   }
 
   Future<void> _initializeFirebase() async {
@@ -367,6 +374,12 @@ class _AdminLoginState extends State<AdminLogin> {
                               height: inputHeight,
                               child: TextFormField(
                                 controller: _emailController,
+                                focusNode: _emailFocusNode,
+                                textInputAction: TextInputAction.next,
+                                onFieldSubmitted: (value) {
+                                  // Move focus to password field when Enter is pressed
+                                  _passwordFocusNode.requestFocus();
+                                },
                                 decoration: InputDecoration(
                                   labelText: 'Email',
                                   labelStyle: const TextStyle(
@@ -412,7 +425,15 @@ class _AdminLoginState extends State<AdminLogin> {
                               height: inputHeight,
                               child: TextFormField(
                                 controller: _passwordController,
+                                focusNode: _passwordFocusNode,
                                 obscureText: _obscurePassword,
+                                textInputAction: TextInputAction.done,
+                                onFieldSubmitted: (value) {
+                                  // Submit the form when Enter is pressed in password field
+                                  if (!_isLoading) {
+                                    _login();
+                                  }
+                                },
                                 decoration: InputDecoration(
                                   labelText: 'Password',
                                   labelStyle: const TextStyle(
@@ -562,6 +583,8 @@ class _AdminLoginState extends State<AdminLogin> {
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _emailFocusNode.dispose();
+    _passwordFocusNode.dispose();
     super.dispose();
   }
 }

@@ -638,9 +638,12 @@ class _SettingsState extends State<Settings> {
                                         onPressed:
                                             () => Navigator.pop(context, true),
                                         style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.blue,
+                                          backgroundColor: Colors.green,
                                         ),
-                                        child: const Text('Confirm Change'),
+                                        child: const Text(
+                                          'Confirm Change',
+                                          style: TextStyle(color: Colors.white),
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -802,7 +805,9 @@ class _SettingsState extends State<Settings> {
                               });
                             }
                           },
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                  ),
                   child:
                       isLoading
                           ? const SizedBox(
@@ -815,7 +820,10 @@ class _SettingsState extends State<Settings> {
                               ),
                             ),
                           )
-                          : const Text('Send Verification'),
+                          : const Text(
+                            'Send Verification',
+                            style: TextStyle(color: Colors.white),
+                          ),
                 ),
               ],
             );
