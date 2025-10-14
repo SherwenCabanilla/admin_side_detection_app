@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/user_store.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
@@ -16,6 +17,15 @@ class _UserManagementState extends State<UserManagement> {
   String _selectedFilter = 'All';
   List<Map<String, dynamic>> _users = [];
   bool _isLoading = true;
+  String? _selectedUserId;
+
+  // Cache for filtered users
+  List<Map<String, dynamic>>? _cachedFilteredUsers;
+  String _lastSearchQuery = '';
+  String _lastFilter = '';
+
+  // Debounce timer for search
+  Timer? _searchDebounce;
 
   void _showImagePreview(String imageUrl) {
     showDialog(
@@ -91,19 +101,35 @@ class _UserManagementState extends State<UserManagement> {
       setState(() {
         _users = users;
         _isLoading = false;
+        // Clear cache when loading new data
+        _cachedFilteredUsers = null;
       });
     } catch (e) {
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error loading users: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error loading users: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
   List<Map<String, dynamic>> get _filteredUsers {
+    // Use cached result if search query and filter haven't changed
+    if (_cachedFilteredUsers != null &&
+        _lastSearchQuery == _searchQuery &&
+        _lastFilter == _selectedFilter) {
+      return _cachedFilteredUsers!;
+    }
+
+    // Update cache markers
+    _lastSearchQuery = _searchQuery;
+    _lastFilter = _selectedFilter;
+
+    // Perform filtering
     final filtered =
         _users.where((user) {
             final query = _searchQuery.toLowerCase();
@@ -132,6 +158,8 @@ class _UserManagementState extends State<UserManagement> {
           }).toList()
           ..sort((a, b) => a['name'].compareTo(b['name']));
 
+    // Cache the result
+    _cachedFilteredUsers = filtered;
     return filtered;
   }
 
@@ -370,8 +398,9 @@ class _UserManagementState extends State<UserManagement> {
                             ),
                           ),
                           onPressed: () async {
-                            if (!(formKey.currentState?.validate() ?? false))
+                            if (!(formKey.currentState?.validate() ?? false)) {
                               return;
+                            }
 
                             showDialog(
                               context: context,
@@ -396,14 +425,16 @@ class _UserManagementState extends State<UserManagement> {
                               if (success) {
                                 Navigator.pop(context);
                                 _loadUsers();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      '${user['name']} updated successfully',
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        '${user['name']} updated successfully',
+                                      ),
+                                      backgroundColor: Colors.green,
                                     ),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
+                                  );
+                                }
                                 await cf.FirebaseFirestore.instance
                                     .collection('activities')
                                     .add({
@@ -416,23 +447,27 @@ class _UserManagementState extends State<UserManagement> {
                                           cf.FieldValue.serverTimestamp(),
                                     });
                               } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Failed to update user. Please try again.',
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Failed to update user. Please try again.',
+                                      ),
+                                      backgroundColor: Colors.red,
                                     ),
+                                  );
+                                }
+                              }
+                            } catch (e) {
+                              Navigator.pop(context);
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Error updating user: $e'),
                                     backgroundColor: Colors.red,
                                   ),
                                 );
                               }
-                            } catch (e) {
-                              Navigator.pop(context);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Error updating user: $e'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
                             }
                           },
                           child: const Text('Save Changes'),
@@ -451,6 +486,7 @@ class _UserManagementState extends State<UserManagement> {
   void dispose() {
     _searchController.dispose();
     _horizontalScrollController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
   }
 
@@ -488,7 +524,22 @@ class _UserManagementState extends State<UserManagement> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                   ),
-                  onChanged: (value) => setState(() => _searchQuery = value),
+                  onChanged: (value) {
+                    // Cancel previous timer
+                    if (_searchDebounce?.isActive ?? false) {
+                      _searchDebounce!.cancel();
+                    }
+                    // Start new timer
+                    _searchDebounce = Timer(
+                      const Duration(milliseconds: 300),
+                      () {
+                        setState(() {
+                          _searchQuery = value;
+                          _cachedFilteredUsers = null;
+                        });
+                      },
+                    );
+                  },
                 ),
               ),
               const SizedBox(width: 16),
@@ -503,8 +554,12 @@ class _UserManagementState extends State<UserManagement> {
                           ),
                         )
                         .toList(),
-                onChanged:
-                    (value) => setState(() => _selectedFilter = value ?? 'All'),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedFilter = value ?? 'All';
+                    _cachedFilteredUsers = null;
+                  });
+                },
               ),
             ],
           ),
@@ -522,229 +577,267 @@ class _UserManagementState extends State<UserManagement> {
                           scrollDirection: Axis.horizontal,
                           child: SingleChildScrollView(
                             scrollDirection: Axis.vertical,
-                            child: DataTable(
-                              columns: const [
-                                DataColumn(label: Text('Name')),
-                                DataColumn(label: Text('Email')),
-                                DataColumn(label: Text('Phone Number')),
-                                DataColumn(label: Text('Address')),
-                                DataColumn(label: Text('Status')),
-                                DataColumn(label: Text('Role')),
-                                DataColumn(label: Text('Registered')),
-                                DataColumn(label: Text('Actions')),
-                              ],
-                              rows:
-                                  _filteredUsers
-                                      .map(
-                                        (user) => DataRow(
-                                          cells: [
-                                            DataCell(
-                                              Row(
-                                                children: [
-                                                  CircleAvatar(
-                                                    radius: 16,
-                                                    backgroundColor:
-                                                        Colors.grey.shade200,
-                                                    backgroundImage:
-                                                        (user['profileImage'] !=
-                                                                    null &&
-                                                                (user['profileImage']
-                                                                        as String)
-                                                                    .trim()
-                                                                    .isNotEmpty)
-                                                            ? NetworkImage(
+                            child: Theme(
+                              data: Theme.of(context).copyWith(
+                                // Control the ripple/splash animation duration
+                                splashFactory: InkRipple.splashFactory,
+                              ),
+                              child: DataTable(
+                                showCheckboxColumn: false,
+                                columns: const [
+                                  DataColumn(label: Text('Name')),
+                                  DataColumn(label: Text('Email')),
+                                  DataColumn(label: Text('Phone Number')),
+                                  DataColumn(label: Text('Address')),
+                                  DataColumn(label: Text('Status')),
+                                  DataColumn(label: Text('Role')),
+                                  DataColumn(label: Text('Registered')),
+                                  DataColumn(label: Text('Actions')),
+                                ],
+                                rows:
+                                    _filteredUsers
+                                        .map(
+                                          (user) => DataRow(
+                                            selected:
+                                                _selectedUserId == user['id'],
+                                            onSelectChanged: (selected) {
+                                              setState(() {
+                                                _selectedUserId =
+                                                    _selectedUserId ==
+                                                            user['id']
+                                                        ? null
+                                                        : user['id'];
+                                              });
+                                            },
+                                            color:
+                                                WidgetStateProperty.resolveWith<
+                                                  Color?
+                                                >((states) {
+                                                  if (states.contains(
+                                                    WidgetState.selected,
+                                                  )) {
+                                                    return const Color(
+                                                      0x2D2A9D32,
+                                                    ); // brand green 18% opacity
+                                                  }
+                                                  if (states.contains(
+                                                    WidgetState.hovered,
+                                                  )) {
+                                                    return const Color(
+                                                      0x142A9D32,
+                                                    ); // brand green 8% opacity
+                                                  }
+                                                  return null;
+                                                }),
+                                            cells: [
+                                              DataCell(
+                                                Row(
+                                                  children: [
+                                                    CircleAvatar(
+                                                      radius: 16,
+                                                      backgroundColor:
+                                                          Colors.grey.shade200,
+                                                      backgroundImage:
+                                                          (user['profileImage'] !=
+                                                                      null &&
                                                                   (user['profileImage']
                                                                           as String)
-                                                                      .trim(),
-                                                                )
-                                                                as ImageProvider<
-                                                                  Object
-                                                                >?
-                                                            : null,
-                                                    child:
-                                                        (user['profileImage'] ==
-                                                                    null ||
-                                                                (user['profileImage']
-                                                                        as String)
-                                                                    .trim()
-                                                                    .isEmpty)
-                                                            ? const Icon(
-                                                              Icons.person,
-                                                              size: 16,
-                                                              color:
-                                                                  Colors.grey,
-                                                            )
-                                                            : null,
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Text(user['name']),
-                                                ],
-                                              ),
-                                            ),
-                                            DataCell(Text(user['email'])),
-                                            DataCell(Text(user['phone'] ?? '')),
-                                            DataCell(
-                                              Text(user['address'] ?? ''),
-                                            ),
-                                            DataCell(
-                                              Text(
-                                                user['status'].toUpperCase(),
-                                                style: TextStyle(
-                                                  color: _getStatusColor(
-                                                    user['status'],
-                                                  ),
-                                                  fontWeight: FontWeight.bold,
+                                                                      .trim()
+                                                                      .isNotEmpty)
+                                                              ? NetworkImage(
+                                                                    (user['profileImage']
+                                                                            as String)
+                                                                        .trim(),
+                                                                  )
+                                                                  as ImageProvider<
+                                                                    Object
+                                                                  >?
+                                                              : null,
+                                                      child:
+                                                          (user['profileImage'] ==
+                                                                      null ||
+                                                                  (user['profileImage']
+                                                                          as String)
+                                                                      .trim()
+                                                                      .isEmpty)
+                                                              ? const Icon(
+                                                                Icons.person,
+                                                                size: 16,
+                                                                color:
+                                                                    Colors.grey,
+                                                              )
+                                                              : null,
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Text(user['name']),
+                                                  ],
                                                 ),
                                               ),
-                                            ),
-                                            DataCell(
-                                              Text(
-                                                user['role'].toUpperCase(),
-                                                style: TextStyle(
-                                                  color: _getRoleColor(
-                                                    user['role'],
+                                              DataCell(Text(user['email'])),
+                                              DataCell(
+                                                Text(user['phone'] ?? ''),
+                                              ),
+                                              DataCell(
+                                                Text(user['address'] ?? ''),
+                                              ),
+                                              DataCell(
+                                                Text(
+                                                  user['status'].toUpperCase(),
+                                                  style: TextStyle(
+                                                    color: _getStatusColor(
+                                                      user['status'],
+                                                    ),
+                                                    fontWeight: FontWeight.bold,
                                                   ),
-                                                  fontWeight: FontWeight.bold,
                                                 ),
                                               ),
-                                            ),
-                                            DataCell(
-                                              Text(user['registeredAt']),
-                                            ),
-                                            DataCell(
-                                              Row(
-                                                children: [
-                                                  IconButton(
-                                                    icon: const Icon(
-                                                      Icons.edit,
+                                              DataCell(
+                                                Text(
+                                                  user['role'].toUpperCase(),
+                                                  style: TextStyle(
+                                                    color: _getRoleColor(
+                                                      user['role'],
                                                     ),
-                                                    tooltip: 'Edit User',
-                                                    onPressed:
-                                                        () => _showEditDialog(
-                                                          user,
-                                                        ),
+                                                    fontWeight: FontWeight.bold,
                                                   ),
-                                                  IconButton(
-                                                    icon: const Icon(
-                                                      Icons.delete,
-                                                      color: Colors.red,
+                                                ),
+                                              ),
+                                              DataCell(
+                                                Text(user['registeredAt']),
+                                              ),
+                                              DataCell(
+                                                Row(
+                                                  children: [
+                                                    IconButton(
+                                                      icon: const Icon(
+                                                        Icons.edit,
+                                                      ),
+                                                      tooltip: 'Edit User',
+                                                      onPressed:
+                                                          () => _showEditDialog(
+                                                            user,
+                                                          ),
                                                     ),
-                                                    tooltip: 'Delete User',
-                                                    onPressed: () {
-                                                      showDialog(
-                                                        context: context,
-                                                        builder:
-                                                            (
-                                                              context,
-                                                            ) => AlertDialog(
-                                                              title: const Text(
-                                                                'Delete User',
-                                                              ),
-                                                              content: Text(
-                                                                'Are you sure you want to delete "${user['name']}"?',
-                                                              ),
-                                                              actions: [
-                                                                TextButton(
-                                                                  onPressed:
-                                                                      () => Navigator.pop(
-                                                                        context,
-                                                                      ),
-                                                                  child:
-                                                                      const Text(
-                                                                        'Cancel',
-                                                                      ),
+                                                    IconButton(
+                                                      icon: const Icon(
+                                                        Icons.delete,
+                                                        color: Colors.red,
+                                                      ),
+                                                      tooltip: 'Delete User',
+                                                      onPressed: () {
+                                                        showDialog(
+                                                          context: context,
+                                                          builder:
+                                                              (
+                                                                context,
+                                                              ) => AlertDialog(
+                                                                title: const Text(
+                                                                  'Delete User',
                                                                 ),
-                                                                ElevatedButton(
-                                                                  style: ElevatedButton.styleFrom(
-                                                                    backgroundColor:
-                                                                        Colors
-                                                                            .red,
-                                                                    foregroundColor:
-                                                                        Colors
-                                                                            .white,
-                                                                    textStyle: const TextStyle(
-                                                                      fontWeight:
-                                                                          FontWeight
-                                                                              .bold,
+                                                                content: Text(
+                                                                  'Are you sure you want to delete "${user['name']}"?',
+                                                                ),
+                                                                actions: [
+                                                                  TextButton(
+                                                                    onPressed:
+                                                                        () => Navigator.pop(
+                                                                          context,
+                                                                        ),
+                                                                    child: const Text(
+                                                                      'Cancel',
                                                                     ),
                                                                   ),
-                                                                  onPressed: () async {
-                                                                    // Show loading
-                                                                    showDialog(
-                                                                      context:
-                                                                          context,
-                                                                      barrierDismissible:
-                                                                          false,
-                                                                      builder:
-                                                                          (
-                                                                            context,
-                                                                          ) => _buildLoadingDialog(
-                                                                            'Deleting...',
-                                                                          ),
-                                                                    );
-                                                                    final success =
-                                                                        await UserStore.deleteUser(
-                                                                          user['id'],
-                                                                        );
-                                                                    Navigator.pop(
-                                                                      context,
-                                                                    ); // Close loading
-                                                                    Navigator.pop(
-                                                                      context,
-                                                                    ); // Close confirm dialog
-                                                                    if (success) {
-                                                                      await cf
-                                                                          .FirebaseFirestore
-                                                                          .instance
-                                                                          .collection(
-                                                                            'activities',
-                                                                          )
-                                                                          .add({
-                                                                            'action':
-                                                                                'Deleted user',
-                                                                            'user':
-                                                                                user['name'],
-                                                                            'type':
-                                                                                'delete',
-                                                                            'color':
-                                                                                Colors.red.value,
-                                                                            'icon':
-                                                                                Icons.delete.codePoint,
-                                                                            'timestamp':
-                                                                                cf.FieldValue.serverTimestamp(),
-                                                                          });
-                                                                      _loadUsers();
-                                                                    } else {
-                                                                      ScaffoldMessenger.of(
-                                                                        context,
-                                                                      ).showSnackBar(
-                                                                        const SnackBar(
-                                                                          content: Text(
-                                                                            'Failed to delete user. Please try again.',
-                                                                          ),
-                                                                          backgroundColor:
-                                                                              Colors.red,
-                                                                        ),
-                                                                      );
-                                                                    }
-                                                                  },
-                                                                  child:
-                                                                      const Text(
-                                                                        'Delete',
+                                                                  ElevatedButton(
+                                                                    style: ElevatedButton.styleFrom(
+                                                                      backgroundColor:
+                                                                          Colors
+                                                                              .red,
+                                                                      foregroundColor:
+                                                                          Colors
+                                                                              .white,
+                                                                      textStyle: const TextStyle(
+                                                                        fontWeight:
+                                                                            FontWeight.bold,
                                                                       ),
-                                                                ),
-                                                              ],
-                                                            ),
-                                                      );
-                                                    },
-                                                  ),
-                                                ],
+                                                                    ),
+                                                                    onPressed: () async {
+                                                                      showDialog(
+                                                                        context:
+                                                                            context,
+                                                                        barrierDismissible:
+                                                                            false,
+                                                                        builder:
+                                                                            (
+                                                                              context,
+                                                                            ) => _buildLoadingDialog(
+                                                                              'Deleting...',
+                                                                            ),
+                                                                      );
+                                                                      final success =
+                                                                          await UserStore.deleteUser(
+                                                                            user['id'],
+                                                                          );
+                                                                      Navigator.pop(
+                                                                        context,
+                                                                      ); // Close loading
+                                                                      Navigator.pop(
+                                                                        context,
+                                                                      ); // Close confirm dialog
+                                                                      if (success) {
+                                                                        await cf
+                                                                            .FirebaseFirestore
+                                                                            .instance
+                                                                            .collection(
+                                                                              'activities',
+                                                                            )
+                                                                            .add({
+                                                                              'action':
+                                                                                  'Deleted user',
+                                                                              'user':
+                                                                                  user['name'],
+                                                                              'type':
+                                                                                  'delete',
+                                                                              'color':
+                                                                                  Colors.red.value,
+                                                                              'icon':
+                                                                                  Icons.delete.codePoint,
+                                                                              'timestamp':
+                                                                                  cf.FieldValue.serverTimestamp(),
+                                                                            });
+                                                                        _loadUsers();
+                                                                      } else {
+                                                                        if (mounted) {
+                                                                          ScaffoldMessenger.of(
+                                                                            context,
+                                                                          ).showSnackBar(
+                                                                            const SnackBar(
+                                                                              content: Text(
+                                                                                'Failed to delete user. Please try again.',
+                                                                              ),
+                                                                              backgroundColor:
+                                                                                  Colors.red,
+                                                                            ),
+                                                                          );
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    child: const Text(
+                                                                      'Delete',
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                        );
+                                                      },
+                                                    ),
+                                                  ],
+                                                ),
                                               ),
-                                            ),
-                                          ],
-                                        ),
-                                      )
-                                      .toList(),
+                                            ],
+                                          ),
+                                        )
+                                        .toList(),
+                              ),
                             ),
                           ),
                         ),
