@@ -402,6 +402,57 @@ class _UserManagementState extends State<UserManagement> {
                               return;
                             }
 
+                            final bool? confirm = await showDialog<bool>(
+                              context: context,
+                              builder:
+                                  (ctx) => AlertDialog(
+                                    title: const Text('Confirm changes'),
+                                    content: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Name: ' + nameController.text.trim(),
+                                        ),
+                                        Text(
+                                          'Email: ' +
+                                              emailController.text.trim(),
+                                        ),
+                                        if (phoneController.text
+                                            .trim()
+                                            .isNotEmpty)
+                                          Text(
+                                            'Phone: ' +
+                                                phoneController.text.trim(),
+                                          ),
+                                        if (addressController.text
+                                            .trim()
+                                            .isNotEmpty)
+                                          Text(
+                                            'Address: ' +
+                                                addressController.text.trim(),
+                                          ),
+                                        Text('Status: ' + selectedStatus),
+                                        Text('Role: ' + selectedRole),
+                                      ],
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed:
+                                            () => Navigator.of(ctx).pop(false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      ElevatedButton(
+                                        onPressed:
+                                            () => Navigator.of(ctx).pop(true),
+                                        child: const Text('Save'),
+                                      ),
+                                    ],
+                                  ),
+                            );
+                            if (confirm != true) return;
+
                             showDialog(
                               context: context,
                               barrierDismissible: false,
@@ -592,6 +643,7 @@ class _UserManagementState extends State<UserManagement> {
                                   DataColumn(label: Text('Status')),
                                   DataColumn(label: Text('Role')),
                                   DataColumn(label: Text('Registered')),
+                                  DataColumn(label: Text('Accepted')),
                                   DataColumn(label: Text('Actions')),
                                 ],
                                 rows:
@@ -704,6 +756,9 @@ class _UserManagementState extends State<UserManagement> {
                                               ),
                                               DataCell(
                                                 Text(user['registeredAt']),
+                                              ),
+                                              DataCell(
+                                                Text(user['acceptedAt'] ?? '—'),
                                               ),
                                               DataCell(
                                                 Row(

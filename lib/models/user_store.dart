@@ -16,15 +16,31 @@ class UserStore {
 
       return snapshot.docs.map((doc) {
         final data = doc.data() as Map<String, dynamic>;
+        final String status = (data['status'] ?? 'pending').toString();
+        final String registered = _formatDate(data['createdAt']);
+        // Accepted display logic:
+        // - pending -> dash
+        // - active with acceptedAt -> formatted acceptedAt
+        // - active with no acceptedAt (legacy) -> show registered
+        String acceptedDisplay = '—';
+        if (status.toLowerCase() == 'active') {
+          if (data['acceptedAt'] != null) {
+            acceptedDisplay = _formatDate(data['acceptedAt']);
+          } else {
+            acceptedDisplay = registered;
+          }
+        }
+
         return {
           'id': doc.id,
           'name': _titleCase(data['fullName'] ?? ''),
           'email': data['email'] ?? '',
           'phone': data['phoneNumber'] ?? '',
           'address': data['address'] ?? '',
-          'status': data['status'] ?? 'pending',
+          'status': status,
           'role': data['role'] ?? 'user',
-          'registeredAt': _formatDate(data['createdAt']),
+          'registeredAt': registered,
+          'acceptedAt': acceptedDisplay,
           'profileImage': data['imageProfile'] ?? '',
         };
       }).toList();
@@ -38,9 +54,15 @@ class UserStore {
   static Future<bool> updateUserStatus(String userId, String status) async {
     try {
       print('Updating user $userId status to $status...');
-      await _firestore.collection('users').doc(userId).update({
-        'status': status,
-      });
+      final docRef = _firestore.collection('users').doc(userId);
+      final snap = await docRef.get();
+      final data = snap.data() as Map<String, dynamic>?;
+      final bool hasAccepted = (data?['acceptedAt']) != null;
+      final Map<String, dynamic> payload = {'status': status};
+      if (status.toLowerCase() == 'active' && !hasAccepted) {
+        payload['acceptedAt'] = FieldValue.serverTimestamp();
+      }
+      await docRef.update(payload);
       print('Successfully updated user status');
       return true;
     } catch (e) {
@@ -67,6 +89,21 @@ class UserStore {
       if (userData.containsKey('imageProfile')) {
         payload['imageProfile'] = userData['imageProfile'];
       }
+      // acceptedAt guard: set when new status is active and field is missing
+      try {
+        final docRef = _firestore.collection('users').doc(userId);
+        final current = await docRef.get();
+        final currentData = current.data() as Map<String, dynamic>?;
+        final bool hasAccepted = (currentData?['acceptedAt']) != null;
+        final String newStatus = (userData['status'] ?? '').toString();
+        if (!hasAccepted && newStatus.toLowerCase() == 'active') {
+          payload['acceptedAt'] = FieldValue.serverTimestamp();
+        }
+      } catch (e) {
+        // Skip setting acceptedAt if we can't read current; proceed with update
+        print('acceptedAt guard read skipped: $e');
+      }
+
       await _firestore.collection('users').doc(userId).update(payload);
       print('Successfully updated user');
       return true;
