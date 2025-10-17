@@ -87,10 +87,12 @@ class WeatherService {
     final len =
         tempsMax.length > tempsMin.length ? tempsMax.length : tempsMin.length;
     for (int i = 0; i < len; i++) {
-      final maxV =
-          i < tempsMax.length ? (tempsMax[i] as num).toDouble() : double.nan;
-      final minV =
-          i < tempsMin.length ? (tempsMin[i] as num).toDouble() : double.nan;
+      final dynamic maxRaw = i < tempsMax.length ? tempsMax[i] : null;
+      final dynamic minRaw = i < tempsMin.length ? tempsMin[i] : null;
+      final double maxV =
+          maxRaw is num ? maxRaw.toDouble() : double.nan; // guard nulls
+      final double minV =
+          minRaw is num ? minRaw.toDouble() : double.nan; // guard nulls
       if (!maxV.isNaN && !minV.isNaN) {
         avgs.add((maxV + minV) / 2.0);
       } else if (!maxV.isNaN) {
@@ -112,14 +114,16 @@ class WeatherService {
 
   static double? _safeMin(List list) {
     if (list.isEmpty) return null;
-    final doubles = list.map((e) => (e as num).toDouble()).toList();
+    final doubles =
+        list.where((e) => e is num).map((e) => (e as num).toDouble()).toList();
     doubles.sort();
     return doubles.first;
   }
 
   static double? _safeMax(List list) {
     if (list.isEmpty) return null;
-    final doubles = list.map((e) => (e as num).toDouble()).toList();
+    final doubles =
+        list.where((e) => e is num).map((e) => (e as num).toDouble()).toList();
     doubles.sort();
     return doubles.last;
   }

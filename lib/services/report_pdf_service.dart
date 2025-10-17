@@ -571,10 +571,12 @@ class ReportPdfService {
       ),
     );
 
-    await Printing.sharePdf(
-      bytes: await doc.save(),
-      filename: 'report_${now.millisecondsSinceEpoch}.pdf',
+    final String filename = _buildReportFilename(
+      timeRange: timeRange,
+      start: startDate,
+      end: endDate,
     );
+    await Printing.sharePdf(bytes: await doc.save(), filename: filename);
   }
 
   // Keep about 8 evenly spaced labels; always include first and last.
@@ -804,6 +806,77 @@ class ReportPdfService {
     ];
     if (m < 1 || m > 12) return '';
     return names[m - 1];
+  }
+
+  static String _buildReportFilename({
+    required String timeRange,
+    required DateTime start,
+    required DateTime end,
+  }) {
+    String fmt(DateTime d) {
+      const months = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ];
+      final m = (d.month >= 1 && d.month <= 12) ? months[d.month - 1] : '';
+      return '$m ${d.day}, ${d.year}';
+    }
+
+    String clean(String s) {
+      // Replace characters that may be problematic in filenames
+      final replaced = s.replaceAll(RegExp(r'[^A-Za-z0-9 _\-\(\),]'), '_');
+      // Collapse multiple spaces/underscores
+      return replaced
+          .replaceAll(RegExp(r'[\s_]+'), ' ')
+          .trim()
+          .replaceAll(' ', '_');
+    }
+
+    // Detect if the period covers a full single month (useful when UI passes
+    // Monthly ranges as Custom).
+    bool isFullMonthRange(DateTime s, DateTime e) {
+      final startIsFirst = s.day == 1;
+      final sameMonth = s.year == e.year && s.month == e.month;
+      final lastDay = DateTime(s.year, s.month + 1, 0).day; // last day of month
+      final endIsLast = e.day == lastDay;
+      return startIsFirst && sameMonth && endIsLast;
+    }
+
+    String base;
+    if (timeRange.startsWith('Monthly (') || isFullMonthRange(start, end)) {
+      const monthsLong = [
+        'January',
+        'February',
+        'March',
+        'April',
+        'May',
+        'June',
+        'July',
+        'August',
+        'September',
+        'October',
+        'November',
+        'December',
+      ];
+      final label = '${monthsLong[start.month - 1]}_${start.year.toString()}';
+      base = 'Monthly_Report_' + label;
+    } else if (timeRange.startsWith('Custom (')) {
+      base = 'Custom_Report_${fmt(start)}_to_${fmt(end)}';
+    } else {
+      // Preset ranges (e.g., Last 7 Days). Include type and human dates.
+      base = 'Report_${timeRange}_${fmt(start)}_to_${fmt(end)}';
+    }
+    return clean(base) + '.pdf';
   }
 
   static Future<pw.ImageProvider?> _tryLoadLogo(String assetPath) async {

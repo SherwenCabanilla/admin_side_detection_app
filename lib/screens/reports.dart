@@ -8044,6 +8044,29 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
                   setState(() {
                     _selectedRange = value;
                   });
+                  // If user selects Monthly, immediately prompt for month/year
+                  if (value == 'Monthly…') {
+                    final now = DateTime.now();
+                    _showMonthYearPicker(
+                      context: context,
+                      initialDate: _customStart ?? now,
+                      firstDate: DateTime(2020),
+                      lastDate: now,
+                    ).then((picked) {
+                      if (picked != null) {
+                        final firstDay = DateTime(picked.year, picked.month, 1);
+                        final lastDay = DateTime(
+                          picked.year,
+                          picked.month + 1,
+                          0,
+                        );
+                        setState(() {
+                          _customStart = firstDay;
+                          _customEnd = lastDay;
+                        });
+                      }
+                    });
+                  }
                 }
               },
             ),
@@ -8174,14 +8197,50 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
           onPressed: () {
             String range = _selectedRange;
             if (_selectedRange == 'Monthly…') {
-              if (_customStart == null || _customEnd == null) return;
+              if (_customStart == null || _customEnd == null) {
+                showDialog(
+                  context: context,
+                  builder:
+                      (ctx) => AlertDialog(
+                        title: const Text('Month required'),
+                        content: const Text(
+                          'Please choose a month to generate a Monthly report.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            child: const Text('OK'),
+                          ),
+                        ],
+                      ),
+                );
+                return;
+              }
               final start = _customStart!;
               final end = _customEnd!;
               final startStr = start.toIso8601String().substring(0, 10);
               final endStr = end.toIso8601String().substring(0, 10);
-              range = 'Custom ($startStr to $endStr)';
+              range = 'Monthly ($startStr to $endStr)';
             } else if (_selectedRange == 'Custom…') {
-              if (_customStart == null || _customEnd == null) return;
+              if (_customStart == null || _customEnd == null) {
+                showDialog(
+                  context: context,
+                  builder:
+                      (ctx) => AlertDialog(
+                        title: const Text('Date range required'),
+                        content: const Text(
+                          'Please choose a start and end date to generate a Custom report.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            child: const Text('OK'),
+                          ),
+                        ],
+                      ),
+                );
+                return;
+              }
               final start = _customStart!;
               final end = _customEnd!;
               final startStr = start.toIso8601String().substring(0, 10);
