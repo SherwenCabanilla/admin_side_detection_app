@@ -67,8 +67,23 @@ class ReportPdfService {
           );
           break;
         default:
-          endDate = nowForRange;
-          startDate = endDate.subtract(const Duration(days: 7));
+          // Handle Monthly ranges that weren't caught by the Custom regex above
+          if (timeRange.startsWith('Monthly (')) {
+            final regex = RegExp(
+              r'Monthly \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+            );
+            final match = regex.firstMatch(timeRange);
+            if (match != null) {
+              startDate = DateTime.parse(match.group(1)!);
+              endDate = DateTime.parse(match.group(2)!);
+            } else {
+              endDate = nowForRange;
+              startDate = endDate.subtract(const Duration(days: 7));
+            }
+          } else {
+            endDate = nowForRange;
+            startDate = endDate.subtract(const Duration(days: 7));
+          }
       }
     }
 
