@@ -3,9 +3,9 @@ import 'dart:async';
 import 'package:http/http.dart' as http;
 
 class WeatherService {
-  // Carmen, Davao del Norte (approximate)
-  static const double defaultLat = 7.3600;
-  static const double defaultLon = 125.7000;
+  // Barangay Cebulano, Carmen, Davao del Norte (approximate)
+  static const double defaultLat = 7.3500;
+  static const double defaultLon = 125.6720;
 
   // Simple in-memory cache to avoid hammering the API and triggering 429s
   static final Map<String, (_CachedWeather, DateTime)> _cache = {};

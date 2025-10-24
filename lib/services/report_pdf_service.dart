@@ -260,11 +260,15 @@ class ReportPdfService {
           ..addAll(diseaseByDay.keys)
           ..addAll(healthyByDay.keys);
     trendLabelKeys = allKeys.toList()..sort();
-    // Build full series first from complete label keys
-    final healthySeriesFull = trendLabelKeys
-        .map((k) => (healthyByDay[k] ?? 0).toDouble())
-        .map((v) => v.isFinite ? v : 0.0)
-        .toList(growable: false);
+    // Build full series first from complete label keys - convert to percentages
+    final healthySeriesFull =
+        trendLabelKeys.map((k) {
+          final healthyCount = healthyByDay[k] ?? 0;
+          final diseaseCount = diseaseByDay[k] ?? 0;
+          final totalCount = healthyCount + diseaseCount;
+          return totalCount > 0 ? (healthyCount / totalCount) : 0.0;
+        }).toList();
+
     // Downsample labels for display; remap series to those label positions
     final List<String> displayLabels =
         _downsampleLabels(trendLabelKeys).map((e) => e.substring(5)).toList();
@@ -329,9 +333,9 @@ class ReportPdfService {
       fontSize: baseCaption * scale,
     );
     // Table styles are applied via _buildDiseaseTable parameters
-    // Make charts more compact to ensure the disease table fits on the page
-    final double chartHeight = isSmall ? 70 : 90;
-    final int tableRows = isSmall ? 4 : 6;
+    // Make charts compact but readable to fit executive summary and all content in 2 pages
+    final double chartHeight = isSmall ? 70 : 85;
+    final int tableRows = isSmall ? 3 : 5;
 
     // If using a background template with embedded logos, we won't draw logos here
     final bool useBackground = backgroundAsset != null;
@@ -380,7 +384,13 @@ class ReportPdfService {
     final topDiseases = totals.take(4).map((e) => e.key).toList();
     for (final name in topDiseases) {
       final perDay = diseaseDayCounts[name] ?? const <String, int>{};
-      final series = [for (final k in displayKeys) (perDay[k] ?? 0).toDouble()];
+      final series =
+          displayKeys.map((k) {
+            final diseaseCount = perDay[k] ?? 0;
+            final healthyCount = healthyByDay[k] ?? 0;
+            final totalCount = diseaseCount + healthyCount;
+            return totalCount > 0 ? (diseaseCount / totalCount) : 0.0;
+          }).toList();
       diseaseSeriesByName[name] = series;
     }
 
@@ -415,7 +425,7 @@ class ReportPdfService {
               pw.Divider(thickness: 0.7),
               _labeledRow(
                 'Location:',
-                'Carmen, Davao del Norte',
+                'Barangay Cebulano, Carmen, Davao del Norte',
                 baseBody * scale,
                 font: baseFont,
                 boldFont: boldFont,
@@ -428,18 +438,26 @@ class ReportPdfService {
                 boldFont: boldFont,
               ),
               pw.Divider(thickness: 0.7),
-              pw.SizedBox(height: isSmall ? 4 : 6),
-              pw.Text('Overview', style: tsH2),
+              pw.SizedBox(height: isSmall ? 3 : 4),
+
+              // === EXECUTIVE SUMMARY ===
+              pw.Text('Executive Summary', style: tsH2),
               pw.SizedBox(height: 2),
-              pw.Bullet(
-                text: 'Total Reports (Validated): ' + completed.toString(),
-                style: tsBody,
+              _buildExecutiveSummary(
+                diseaseStats,
+                healthyOnlyStats,
+                diseaseOnlyStats,
+                completed,
+                baseBody * scale,
+                baseFont,
+                boldFont,
               ),
+              pw.SizedBox(height: isSmall ? 3 : 4),
 
               // === HEALTHY SECTION ===
               // Healthy Trend chart
-              pw.SizedBox(height: isSmall ? 6 : 8),
-              pw.Text('Healthy Trend (Daily Counts)', style: tsH2),
+              pw.SizedBox(height: isSmall ? 4 : 6),
+              pw.Text('Healthy Trend (Daily Percentages)', style: tsH2),
               pw.SizedBox(height: 3),
               _buildSingleLineChart(
                 displayLabels,
@@ -447,11 +465,11 @@ class ReportPdfService {
                 color: pdf.PdfColors.blue,
                 height: chartHeight,
               ),
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 6),
               pw.Text(_healthyConclusion(healthySeries), style: tsCaption),
 
               // Healthy Distribution (paired with chart above)
-              pw.SizedBox(height: isSmall ? 6 : 10),
+              pw.SizedBox(height: isSmall ? 4 : 6),
               pw.Text('Healthy Distribution (Total Counts)', style: tsH2),
               pw.SizedBox(height: 3),
               _buildStatsTable(
@@ -462,7 +480,7 @@ class ReportPdfService {
                 font: baseFont,
                 boldFont: boldFont,
               ),
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 6),
               pw.Text(
                 _distributionConclusion(healthyOnlyStats, isHealthy: true),
                 style: tsCaption,
@@ -473,8 +491,8 @@ class ReportPdfService {
 
               // === DISEASE SECTION ===
               // Disease Trends chart (top 4 diseases)
-              pw.SizedBox(height: isSmall ? 6 : 10),
-              pw.Text('Disease Trends (Daily Counts)', style: tsH2),
+              pw.SizedBox(height: isSmall ? 4 : 6),
+              pw.Text('Disease Trends (Daily Percentages)', style: tsH2),
               pw.SizedBox(height: 3),
               _buildMultiLineDiseaseChart(
                 displayLabels,
@@ -495,14 +513,14 @@ class ReportPdfService {
                     ),
                 ],
               ),
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 6),
               pw.Text(
                 _diseaseConclusion(diseaseSeriesByName),
                 style: tsCaption,
               ),
 
               // Disease Distribution (paired with chart above - excludes Tip burn/Unknown)
-              pw.SizedBox(height: isSmall ? 6 : 10),
+              pw.SizedBox(height: isSmall ? 4 : 6),
               pw.Text('Disease Distribution (Total Counts)', style: tsH2),
               pw.SizedBox(height: 3),
               _buildStatsTable(
@@ -513,14 +531,14 @@ class ReportPdfService {
                 font: baseFont,
                 boldFont: boldFont,
               ),
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 6),
               pw.Text(
                 _distributionConclusion(diseaseOnlyStats, isHealthy: false),
                 style: tsCaption,
               ),
 
               // General notes
-              pw.SizedBox(height: isSmall ? 6 : 10),
+              pw.SizedBox(height: isSmall ? 4 : 6),
               pw.Text('Notes', style: tsH2),
               pw.SizedBox(height: 2),
               pw.Bullet(
@@ -749,12 +767,270 @@ class ReportPdfService {
 
   // Removed old combined trend and response-time helpers
 
-  static double _niceStepDouble(double maxY) {
-    if (maxY <= 5) return 1;
-    if (maxY <= 10) return 2;
-    if (maxY <= 20) return 5;
-    if (maxY <= 50) return 10;
-    return 20;
+  static pw.Widget _buildExecutiveSummary(
+    List<Map<String, dynamic>> diseaseStats,
+    List<Map<String, dynamic>> healthyStats,
+    List<Map<String, dynamic>> diseaseOnlyStats,
+    int completed,
+    double fontSize,
+    pw.Font? font,
+    pw.Font? boldFont,
+  ) {
+    // Calculate overall health percentage
+    final int totalHealthy = healthyStats.fold<int>(
+      0,
+      (sum, item) => sum + (item['count'] as int),
+    );
+    final int totalDiseased = diseaseOnlyStats.fold<int>(
+      0,
+      (sum, item) => sum + (item['count'] as int),
+    );
+    final int totalLeaves = totalHealthy + totalDiseased;
+    final double healthyPercentage =
+        totalLeaves > 0 ? (totalHealthy / totalLeaves) * 100 : 0.0;
+    final double diseasedPercentage =
+        totalLeaves > 0 ? (totalDiseased / totalLeaves) * 100 : 0.0;
+
+    // Get top disease
+    final topDisease =
+        diseaseOnlyStats.isNotEmpty ? diseaseOnlyStats.first : null;
+    final String topDiseaseName = topDisease?['name'] ?? 'None';
+    final double topDiseasePercentage =
+        ((topDisease?['percentage'] ?? 0.0) as double) * 100;
+
+    // Calculate trend (simplified)
+    final String trend =
+        healthyPercentage > 70
+            ? 'Good'
+            : healthyPercentage > 50
+            ? 'Moderate'
+            : 'Poor';
+
+    final boldStyle = pw.TextStyle(
+      fontSize: fontSize * 1.05,
+      font: boldFont,
+      fontWeight: pw.FontWeight.bold,
+    );
+    final regularStyle = pw.TextStyle(fontSize: fontSize, font: font);
+
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(8),
+      decoration: pw.BoxDecoration(
+        color: pdf.PdfColors.white,
+        border: pw.Border.all(color: pdf.PdfColors.grey300, width: 0.5),
+        borderRadius: pw.BorderRadius.circular(4),
+      ),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          // LEFT SIDE - Professional Health Chart
+          pw.Container(
+            width: 100,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.center,
+              children: [
+                // Chart Title
+                pw.Container(
+                  padding: const pw.EdgeInsets.symmetric(
+                    vertical: 4,
+                    horizontal: 8,
+                  ),
+                  decoration: pw.BoxDecoration(
+                    color: pdf.PdfColors.grey800,
+                    borderRadius: pw.BorderRadius.circular(4),
+                  ),
+                  child: pw.Text(
+                    'HEALTH STATUS',
+                    style: pw.TextStyle(
+                      fontSize: fontSize * 0.75,
+                      font: boldFont,
+                      fontWeight: pw.FontWeight.bold,
+                      color: pdf.PdfColors.white,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ),
+                pw.SizedBox(height: 10),
+
+                // Bar Chart Container
+                pw.Container(
+                  height: 75,
+                  decoration: pw.BoxDecoration(
+                    color: pdf.PdfColors.white,
+                    border: pw.Border.all(
+                      color: pdf.PdfColors.grey300,
+                      width: 1.5,
+                    ),
+                    borderRadius: pw.BorderRadius.circular(4),
+                  ),
+                  padding: const pw.EdgeInsets.all(8),
+                  child: pw.Chart(
+                    grid: pw.CartesianGrid(
+                      xAxis: pw.FixedAxis.fromStrings(
+                        ['Healthy', 'Diseased'],
+                        marginStart: 12,
+                        marginEnd: 12,
+                        textStyle: pw.TextStyle(
+                          fontSize: fontSize * 0.65,
+                          font: font,
+                        ),
+                      ),
+                      yAxis: pw.FixedAxis(
+                        [0, 25, 50, 75, 100],
+                        format: (v) => '${v.toInt()}%',
+                        divisions: true,
+                        textStyle: pw.TextStyle(
+                          fontSize: fontSize * 0.6,
+                          font: font,
+                        ),
+                      ),
+                    ),
+                    datasets: [
+                      pw.BarDataSet(
+                        color: pdf.PdfColors.green600,
+                        borderColor: pdf.PdfColors.green800,
+                        borderWidth: 1.5,
+                        width: 20,
+                        data: [pw.PointChartValue(0, healthyPercentage)],
+                      ),
+                      pw.BarDataSet(
+                        color: pdf.PdfColors.red600,
+                        borderColor: pdf.PdfColors.red800,
+                        borderWidth: 1.5,
+                        width: 20,
+                        data: [pw.PointChartValue(1, diseasedPercentage)],
+                      ),
+                    ],
+                  ),
+                ),
+                pw.SizedBox(height: 8),
+
+                // Percentage Badges
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+                  children: [
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: pw.BoxDecoration(
+                        color: pdf.PdfColors.green600,
+                        borderRadius: pw.BorderRadius.circular(12),
+                        border: pw.Border.all(
+                          color: pdf.PdfColors.green800,
+                          width: 1,
+                        ),
+                      ),
+                      child: pw.Text(
+                        '${healthyPercentage.toStringAsFixed(1)}%',
+                        style: pw.TextStyle(
+                          fontSize: fontSize * 0.75,
+                          color: pdf.PdfColors.white,
+                          font: boldFont,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: pw.BoxDecoration(
+                        color: pdf.PdfColors.red600,
+                        borderRadius: pw.BorderRadius.circular(12),
+                        border: pw.Border.all(
+                          color: pdf.PdfColors.red800,
+                          width: 1,
+                        ),
+                      ),
+                      child: pw.Text(
+                        '${diseasedPercentage.toStringAsFixed(1)}%',
+                        style: pw.TextStyle(
+                          fontSize: fontSize * 0.75,
+                          color: pdf.PdfColors.white,
+                          font: boldFont,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          pw.SizedBox(width: 12),
+
+          // RIGHT SIDE - Plain Text Summary
+          pw.Expanded(
+            child: pw.Padding(
+              padding: const pw.EdgeInsets.only(top: 25),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.center,
+                mainAxisAlignment: pw.MainAxisAlignment.end,
+                children: [
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.start,
+                    children: [
+                      pw.Text('• Overall Health: ', style: boldStyle),
+                      pw.Text(
+                        '${healthyPercentage.toStringAsFixed(1)}% Healthy, ${diseasedPercentage.toStringAsFixed(1)}% Diseased',
+                        style: regularStyle,
+                      ),
+                    ],
+                  ),
+                  pw.SizedBox(height: 3),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.start,
+                    children: [
+                      pw.Text('• Primary Concern: ', style: boldStyle),
+                      pw.Text(
+                        '$topDiseaseName (${topDiseasePercentage.toStringAsFixed(1)}%)',
+                        style: regularStyle,
+                      ),
+                    ],
+                  ),
+                  pw.SizedBox(height: 3),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.start,
+                    children: [
+                      pw.Text('• Health Status: ', style: boldStyle),
+                      pw.Text(trend, style: regularStyle),
+                    ],
+                  ),
+                  pw.SizedBox(height: 3),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.start,
+                    children: [
+                      pw.Text('• Recommendation: ', style: boldStyle),
+                      pw.Text(
+                        topDiseaseName != 'None'
+                            ? 'Focus treatment on $topDiseaseName'
+                            : 'Continue monitoring crop health',
+                        style: regularStyle,
+                      ),
+                    ],
+                  ),
+                  pw.SizedBox(height: 3),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.start,
+                    children: [
+                      pw.Text('• Total Reports: ', style: boldStyle),
+                      pw.Text(
+                        '$completed validated reports',
+                        style: regularStyle,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   static pdf.PdfPageFormat _resolvePageFormat(String name) {
@@ -956,12 +1232,11 @@ class ReportPdfService {
     if (labels.isEmpty || labels.length < 2) {
       return pw.Text('No trend data');
     }
-    double maxY = 1.0;
-    for (final v in values) {
-      final vv = v.isFinite ? v : 0.0;
-      if (vv > maxY) maxY = vv;
-    }
-    final step = _niceStepDouble(maxY);
+    // Convert to percentages (0-100)
+    final percentageValues =
+        values.map((v) => (v.isFinite ? v : 0.0) * 100).toList();
+    double maxY = 100.0; // Max percentage is 100%
+    final step = 25.0; // 25% intervals
     return pw.Container(
       height: height,
       child: pw.Chart(
@@ -972,8 +1247,8 @@ class ReportPdfService {
             marginEnd: 10,
           ),
           yAxis: pw.FixedAxis([
-            for (double i = 0; i <= maxY + step; i += step) i.isFinite ? i : 0,
-          ], format: (v) => (v.isFinite ? v : 0).toStringAsFixed(0)),
+            for (double i = 0; i <= maxY; i += step) i,
+          ], format: (v) => '${v.toStringAsFixed(0)}%'),
         ),
         datasets: [
           pw.LineDataSet(
@@ -981,10 +1256,10 @@ class ReportPdfService {
             isCurved: true,
             color: color,
             data: [
-              for (int i = 0; i < values.length; i++)
+              for (int i = 0; i < percentageValues.length; i++)
                 pw.PointChartValue(
                   i.toDouble(),
-                  values[i].isFinite ? values[i] : 0.0,
+                  percentageValues[i].isFinite ? percentageValues[i] : 0.0,
                 ),
             ],
           ),
@@ -1002,18 +1277,19 @@ class ReportPdfService {
     if (labels.isEmpty || labels.length < 2 || seriesByName.isEmpty) {
       return pw.Text('No disease trend data');
     }
-    double maxY = 1.0;
-    for (final s in seriesByName.values) {
-      for (final v in s) {
-        final vv = v.isFinite ? v : 0.0;
-        if (vv > maxY) maxY = vv;
-      }
+    // Convert all series to percentages (0-100)
+    final percentageSeriesByName = <String, List<double>>{};
+    for (final entry in seriesByName.entries) {
+      percentageSeriesByName[entry.key] =
+          entry.value.map((v) => (v.isFinite ? v : 0.0) * 100).toList();
     }
-    final step = _niceStepDouble(maxY);
+
+    double maxY = 100.0; // Max percentage is 100%
+    final step = 25.0; // 25% intervals
     final datasets = <pw.Dataset>[];
     for (int idx = 0; idx < order.length; idx++) {
       final String diseaseName = order[idx];
-      final series = seriesByName[diseaseName] ?? const <double>[];
+      final series = percentageSeriesByName[diseaseName] ?? const <double>[];
       datasets.add(
         pw.LineDataSet(
           drawSurface: false,
@@ -1040,8 +1316,8 @@ class ReportPdfService {
             marginEnd: 10,
           ),
           yAxis: pw.FixedAxis([
-            for (double i = 0; i <= maxY + step; i += step) i.isFinite ? i : 0,
-          ], format: (v) => (v.isFinite ? v : 0).toStringAsFixed(0)),
+            for (double i = 0; i <= maxY; i += step) i,
+          ], format: (v) => '${v.toStringAsFixed(0)}%'),
         ),
         datasets: datasets,
       ),
@@ -1063,7 +1339,7 @@ class ReportPdfService {
     final first = series.first.isFinite ? series.first : 0.0;
     final last = series.last.isFinite ? series.last : 0.0;
     final delta = last - first;
-    const double eps = 1.0;
+    const double eps = 0.1; // 10% threshold for percentage data
     String direction;
     if (delta > eps) {
       direction = 'slightly uptrend overall';
@@ -1073,9 +1349,9 @@ class ReportPdfService {
       direction = 'relatively flat across the period';
     }
     final String summary =
-        'Healthy detections appear ' +
+        'Healthy prevalence appears ' +
         direction +
-        '. This view aggregates daily healthy classifications across the selected dates.';
+        '. This view shows daily healthy percentage across the selected dates.';
     final String context =
         'Short-term fluctuations may occur day-to-day; the overall direction compares the beginning versus the end of the period.';
     return summary + ' ' + context;
@@ -1101,8 +1377,9 @@ class ReportPdfService {
         falling = name;
       }
     });
-    final bool hasUp = rising != null && risingDelta > 1.0;
-    final bool hasDown = falling != null && fallingDelta < -1.0;
+    final bool hasUp = rising != null && risingDelta > 0.1; // 10% threshold
+    final bool hasDown =
+        falling != null && fallingDelta < -0.1; // 10% threshold
     final String opening =
         hasUp
             ? _titleCase(rising!) + ' shows the strongest increase'
@@ -1112,9 +1389,9 @@ class ReportPdfService {
             ? ', while ' + _titleCase(falling!) + ' shows the sharpest decline.'
             : '.';
     final String context =
-        ' Lines reflect daily detections per disease; comparing the start and end highlights the overall direction.';
+        ' Lines reflect daily disease prevalence percentages; comparing the start and end highlights the overall direction.';
     final String guidance =
-        ' Consider both the magnitude of change and baseline counts when interpreting these movements.';
+        ' Consider both the magnitude of change and baseline percentages when interpreting these movements.';
     return opening + middle + context + ' ' + guidance;
   }
 
