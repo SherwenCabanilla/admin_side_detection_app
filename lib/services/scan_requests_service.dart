@@ -72,6 +72,20 @@ class ScanRequestsService {
     return await getScanRequests();
   }
 
+  // Delete a scan request by document id
+  static Future<bool> deleteScanRequest(String requestId) async {
+    try {
+      await _firestore.collection('scan_requests').doc(requestId).delete();
+      // Invalidate cache so UI reflects deletion
+      _cachedAt = null;
+      _cachedRequests = null;
+      return true;
+    } catch (e) {
+      // debugPrint('Error deleting scan request: $e');
+      return false;
+    }
+  }
+
   // Get disease statistics for a specific time range
   // Uses createdAt (when disease occurred) but only includes completed/validated scans
   static Future<List<Map<String, dynamic>>> getDiseaseStats({

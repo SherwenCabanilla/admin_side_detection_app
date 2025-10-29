@@ -847,23 +847,28 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                     ],
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isCompleted ? Colors.green : Colors.orange,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    isCompleted ? 'Completed' : 'Pending',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isCompleted ? Colors.green : Colors.orange,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        isCompleted ? 'Completed' : 'Pending',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                     ),
-                  ),
+                    // no delete action in summary card; delete lives in modal
+                  ],
                 ),
               ],
             ),
@@ -2836,23 +2841,33 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                     ],
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isCompleted ? Colors.green : Colors.orange,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    isCompleted ? 'Completed' : 'Pending',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isCompleted ? Colors.green : Colors.orange,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        isCompleted ? 'Completed' : 'Pending',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: 'Delete',
+                      onPressed: () async => _confirmAndDelete(report),
+                      icon: const Icon(Icons.delete, color: Colors.red),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -3104,6 +3119,118 @@ class _ReportsModalContentState extends State<ReportsModalContent>
         ),
       ),
     );
+  }
+
+  Future<void> _confirmAndDelete(Map<String, dynamic> report) async {
+    final String reportId = (report['id'] ?? '').toString();
+    if (reportId.isEmpty) return;
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Delete Report'),
+          content: const Text(
+            'Are you sure you want to delete this report? This action cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    final success = await ScanRequestsService.deleteScanRequest(reportId);
+    if (!mounted) return;
+
+    if (success) {
+      // Refresh both tabs' data
+      setState(() {
+        _completedReportsFuture = _getCompletedReports();
+        _pendingReportsFuture = _getPendingReports();
+      });
+
+      // Log admin activity for deletion
+      try {
+        final String status = (report['status'] ?? '').toString().toLowerCase();
+        final String userName = (report['userName'] ?? 'User').toString();
+        String expertName = '';
+        final dynamic expertReview = report['expertReview'];
+        if (expertReview is Map<String, dynamic>) {
+          expertName = (expertReview['expertName'] ?? '').toString();
+        } else if (expertReview is String) {
+          expertName = expertReview;
+        }
+
+        String actionText;
+        if (status == 'completed') {
+          actionText =
+              expertName.isNotEmpty
+                  ? 'Deleted completed report for $userName (expert: $expertName)'
+                  : 'Deleted completed report for $userName';
+        } else {
+          actionText = 'Deleted pending report for $userName';
+        }
+
+        await FirebaseFirestore.instance.collection('activities').add({
+          'action': actionText,
+          'user': 'Admin',
+          'type': 'delete',
+          'color': Colors.red.value,
+          'icon': Icons.delete.codePoint,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        // Ignore logging errors; do not block UX
+        // print('Failed to log delete activity: $e');
+      }
+
+      // Show professional success dialog
+      await showDialog<void>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Report Deleted'),
+            content: const Text('The report has been successfully deleted.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        },
+      );
+    } else {
+      // Show professional error dialog
+      await showDialog<void>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Delete Failed'),
+            content: const Text(
+              'We could not delete the report. Please try again.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        },
+      );
+    }
   }
 
   String _formatDate(dynamic date) {

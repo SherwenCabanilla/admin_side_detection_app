@@ -523,29 +523,8 @@ class _AdminDashboardState extends State<AdminDashboard>
               diseaseStats: _diseaseStats,
               selectedTimeRange: _selectedTimeRange,
               onTimeRangeChanged: (String newTimeRange) async {
-                // Save the time range
+                // Save and apply the time range without logging activity
                 await _saveTimeRange(newTimeRange);
-
-                // Log dashboard time range change
-                try {
-                  await cf.FirebaseFirestore.instance.collection('activities').add({
-                    'action':
-                        'Dashboard time range changed to ${_formatTimeRangeForActivity(newTimeRange)}',
-                    'user':
-                        _currentAdminName.isNotEmpty
-                            ? _currentAdminName
-                            : (widget.adminUser.username.isNotEmpty
-                                ? widget.adminUser.username
-                                : 'Admin'),
-                    'type': 'dashboard_change',
-                    'color': Colors.teal.value,
-                    'icon': Icons.dashboard.codePoint,
-                    'timestamp': cf.FieldValue.serverTimestamp(),
-                  });
-                } catch (e) {
-                  print('Failed to log dashboard time range change: $e');
-                }
-
                 setState(() {
                   _selectedTimeRange = newTimeRange;
                 });

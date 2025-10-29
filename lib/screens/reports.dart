@@ -1116,21 +1116,7 @@ class _ReportsState extends State<Reports> {
     // Save the selected time range
     await _saveTimeRange(newTimeRange);
 
-    // Log report time range change
-    try {
-      final formattedRange = _formatTimeRangeForActivity(newTimeRange);
-      await FirebaseFirestore.instance.collection('activities').add({
-        'action': 'Report time range changed to $formattedRange',
-        'user':
-            'Admin', // You can get this from the current admin context if available
-        'type': 'report_change',
-        'color': Colors.indigo.value,
-        'icon': Icons.date_range.codePoint,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      // log suppressed in production
-    }
+    // No activity logging for time range change
 
     setState(() {
       _selectedTimeRange = newTimeRange;
