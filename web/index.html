@@ -1,19 +1,6 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
     <base href="$FLUTTER_BASE_HREF" />
 
     <meta charset="UTF-8" />
@@ -54,69 +41,172 @@
       rel="stylesheet"
     />
 
+    <!-- Load Modern Font -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+
     <style>
-      body {
+      * {
         margin: 0;
         padding: 0;
-        font-family: Arial, sans-serif;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Poppins", Arial, sans-serif;
         background: linear-gradient(
           135deg,
-          #2a9d32 0%,
-          #228b22 50%,
-          #196f3d 100%
+          #2d9f38 0%,
+          #238b22 50%,
+          #1a7a3d 100%
         );
-        height: 100vh;
+        min-height: 100vh;
         display: flex;
         justify-content: center;
         align-items: center;
         overflow: hidden;
+        position: relative;
+      }
+
+      /* Subtle background pattern */
+      body::before {
+        content: "";
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-image: radial-gradient(
+            circle at 20% 30%,
+            rgba(255, 255, 255, 0.05) 0%,
+            transparent 50%
+          ),
+          radial-gradient(
+            circle at 80% 70%,
+            rgba(255, 255, 255, 0.05) 0%,
+            transparent 50%
+          );
+        animation: bgShift 15s ease-in-out infinite;
+      }
+
+      @keyframes bgShift {
+        0%,
+        100% {
+          opacity: 0.5;
+        }
+        50% {
+          opacity: 1;
+        }
       }
 
       .loading-container {
         text-align: center;
-        color: white;
+        position: relative;
+        z-index: 10;
+        animation: containerFadeIn 0.6s ease-out;
       }
 
+      @keyframes containerFadeIn {
+        from {
+          opacity: 0;
+          transform: scale(0.9);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      /* Logo container */
       .logo {
-        width: 120px;
-        height: 120px;
+        width: 130px;
+        height: 130px;
         background: white;
         border-radius: 50%;
-        margin: 0 auto 40px;
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-        animation: pulse 2s ease-in-out infinite;
+        box-shadow: 0 15px 50px rgba(0, 0, 0, 0.3),
+          0 0 0 12px rgba(255, 255, 255, 0.1);
+        padding: 22px;
+        margin: 0 auto 30px;
+        animation: logoBreath 3s ease-in-out infinite;
+        position: relative;
+      }
+
+      @keyframes logoBreath {
+        0%,
+        100% {
+          transform: scale(1);
+          box-shadow: 0 15px 50px rgba(0, 0, 0, 0.3),
+            0 0 0 12px rgba(255, 255, 255, 0.1);
+        }
+        50% {
+          transform: scale(1.05);
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4),
+            0 0 0 16px rgba(255, 255, 255, 0.15);
+        }
       }
 
       .logo img {
-        width: 80px;
-        height: 80px;
-        object-fit: cover;
-        border-radius: 50%;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
       }
 
-      .title {
-        font-size: 28px;
-        font-weight: bold;
-        margin-bottom: 20px;
-        animation: fadeIn 1s ease-in;
+      /* Brand name stacked vertically */
+      .brand {
+        margin-bottom: 8px;
+        display: flex;
       }
 
+      .brand-line {
+        display: block;
+        color: white;
+        font-weight: 700;
+        line-height: 1;
+        text-shadow: 0 3px 15px rgba(0, 0, 0, 0.3);
+      }
+
+      .brand-mango {
+        font-size: clamp(32px, 5vw, 48px);
+        letter-spacing: -1px;
+      }
+
+      .brand-sense {
+        font-size: clamp(32px, 5vw, 48px);
+        color: #ffd166;
+        letter-spacing: -1px;
+      }
+
+      /* Subtitle */
+      .subtitle {
+        font-size: clamp(13px, 2vw, 15px);
+        font-weight: 400;
+        color: rgba(255, 255, 255, 0.75);
+        margin-bottom: 50px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+
+      /* Loading dots */
       .loading-dots {
         display: flex;
         justify-content: center;
-        gap: 8px;
-        margin-bottom: 40px;
+        gap: 10px;
+        margin-bottom: 16px;
       }
 
       .dot {
-        width: 8px;
-        height: 8px;
-        background: rgba(255, 255, 255, 0.6);
+        width: 10px;
+        height: 10px;
+        background: rgba(255, 255, 255, 0.9);
         border-radius: 50%;
-        animation: dotPulse 1.5s ease-in-out infinite;
+        animation: dotBounce 1.4s ease-in-out infinite;
+      }
+
+      .dot:nth-child(1) {
+        animation-delay: 0s;
       }
 
       .dot:nth-child(2) {
@@ -127,100 +217,117 @@
         animation-delay: 0.4s;
       }
 
-      .loading-text {
-        font-size: 16px;
-        color: rgba(255, 255, 255, 0.8);
-        animation: fadeIn 1s ease-in 0.5s both;
-      }
-
-      @keyframes pulse {
+      @keyframes dotBounce {
         0%,
+        60%,
         100% {
-          transform: scale(1);
-        }
-        50% {
-          transform: scale(1.1);
-        }
-      }
-
-      @keyframes dotPulse {
-        0%,
-        100% {
-          opacity: 0.3;
-          transform: scale(1);
-        }
-        50% {
-          opacity: 1;
-          transform: scale(1.2);
-        }
-      }
-
-      @keyframes fadeIn {
-        from {
-          opacity: 0;
-          transform: translateY(20px);
-        }
-        to {
-          opacity: 1;
           transform: translateY(0);
+          opacity: 0.5;
         }
+        30% {
+          transform: translateY(-15px);
+          opacity: 1;
+        }
+      }
+
+      /* Loading text */
+      .loading-text {
+        font-size: 14px;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.85);
+        letter-spacing: 1px;
       }
 
       /* Hide loading screen when Flutter is ready */
       .flutter-ready {
-        display: none !important;
+        animation: fadeOut 0.5s ease-out forwards;
+      }
+
+      @keyframes fadeOut {
+        to {
+          opacity: 0;
+          visibility: hidden;
+        }
+      }
+
+      /* Responsive adjustments */
+      @media (max-width: 768px) {
+        .logo {
+          width: 110px;
+          height: 110px;
+          padding: 18px;
+        }
+
+        .brand-mango,
+        .brand-sense {
+          font-size: 36px;
+        }
+
+        .subtitle {
+          font-size: 12px;
+        }
       }
     </style>
   </head>
   <body>
     <div id="loading-screen" class="loading-container">
       <div class="logo">
-        <img src="logo.png" alt="Logo" />
+        <img src="updatelogo.png" alt="MangoSense Logo" />
       </div>
-      <div class="title">Admin Portal</div>
+
+      <div class="brand">
+        <span class="brand-line brand-mango">Mango</span>
+        <span class="brand-line brand-sense">Sense</span>
+      </div>
+
+      <div class="subtitle">Admin Portal</div>
+
       <div class="loading-dots">
         <div class="dot"></div>
         <div class="dot"></div>
         <div class="dot"></div>
       </div>
+
       <div class="loading-text">Loading...</div>
     </div>
 
     <script>
+      // Force service worker to update and handle new versions
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker
+          .getRegistrations()
+          .then(function (registrations) {
+            for (let registration of registrations) {
+              registration.update();
+            }
+          });
+
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener(
+          "controllerchange",
+          function () {
+            if (!refreshing) {
+              refreshing = true;
+              window.location.reload();
+            }
+          }
+        );
+      }
+
       // Hide loading screen when Flutter is ready
       window.addEventListener("load", function () {
-        // Wait for Flutter to be ready
         if (window.flutter_inappwebview) {
-          // For webview
           document
             .getElementById("loading-screen")
             .classList.add("flutter-ready");
         } else {
-          // For regular web
           setTimeout(function () {
             document
               .getElementById("loading-screen")
               .classList.add("flutter-ready");
-          }, 2000); // Hide after 2 seconds or when Flutter is ready
+          }, 2000);
         }
       });
-
-      // Alternative method to hide loading screen
-      if (window.flutter_web_optimizer) {
-        window.flutter_web_optimizer.loadEntrypoint({
-          serviceWorker: {
-            serviceWorkerVersion: serviceWorkerVersion,
-          },
-          onEntrypointLoaded: function (engineInitializer) {
-            engineInitializer.initializeEngine().then(function (appRunner) {
-              document
-                .getElementById("loading-screen")
-                .classList.add("flutter-ready");
-              appRunner.runApp();
-            });
-          },
-        });
-      }
     </script>
 
     <script src="flutter_bootstrap.js" async></script>
