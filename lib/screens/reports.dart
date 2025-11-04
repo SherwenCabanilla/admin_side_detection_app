@@ -5380,8 +5380,8 @@ class AvgResponseTrendChart extends StatelessWidget {
   double _computeXInterval(List<Map<String, dynamic>> data) {
     final n = data.length;
     if (n <= 1) return 1;
-    if (n <= 8) return 1;
-    return (n / 8).ceilToDouble();
+    if (n <= 10) return 1;
+    return (n / 10).ceilToDouble();
   }
 }
 
@@ -5908,6 +5908,16 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   QuerySnapshot? _lastSnapshot;
   List<Map<String, dynamic>> _liveAggregated = const [];
   // Removed: we aggregate in build() with a safe fallback to pre-fetched data
+  String _chartMode = 'bar'; // 'bar' | 'line'
+  bool _loadingTrend = false;
+  String? _trendError;
+  bool _trendLoaded = false; // load cycle completed
+  bool _trendIsEmpty = false; // last load returned empty data
+  // Disease trend state (daily percentages)
+  List<String> _trendLabels = const [];
+  Map<String, List<double>> _seriesByDisease = const {};
+  List<String> _topDiseasesOrder = const [];
+  List<double> _healthySeries = const [];
 
   String _monthName(int m) {
     const names = [
@@ -6046,6 +6056,28 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
           _lastSnapshot = snap;
           _scheduleDebouncedRecompute();
         });
+    // Load saved chart mode preference
+    () async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final saved = prefs.getString('chart_mode_distribution');
+        if (saved == 'bar' || saved == 'line') {
+          if (mounted) {
+            setState(() {
+              _chartMode = saved!;
+              if (saved == 'line') {
+                _loadingTrend = true;
+                _trendLoaded = false;
+                _trendIsEmpty = false;
+              }
+            });
+            if (saved == 'line') {
+              _loadTrend();
+            }
+          }
+        }
+      } catch (_) {}
+    }();
   }
 
   @override
@@ -6060,6 +6092,14 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
       setState(() {
         _liveAggregated = agg;
       });
+      if (_chartMode == 'line') {
+        setState(() {
+          _loadingTrend = true;
+          _trendLoaded = false;
+          _trendIsEmpty = false;
+        });
+        _loadTrend();
+      }
     }
   }
 
@@ -6081,7 +6121,347 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
       setState(() {
         _liveAggregated = agg;
       });
+      if (_chartMode == 'line') {
+        setState(() {
+          _loadingTrend = true;
+          _trendLoaded = false;
+          _trendIsEmpty = false;
+        });
+        _loadTrend();
+      }
     });
+  }
+
+  Future<void> _loadTrend() async {
+    setState(() {
+      _loadingTrend = true;
+      _trendError = null;
+      _trendLoaded = false;
+      _trendIsEmpty = false;
+    });
+    try {
+      // Compute disease daily percentages similar to PDF
+      final range = _resolveDateRange(widget.selectedTimeRange);
+      final DateTime start = DateTime(
+        range.start.year,
+        range.start.month,
+        range.start.day,
+      );
+      final DateTime endEx = DateTime(
+        range.end.year,
+        range.end.month,
+        range.end.day,
+      );
+
+      final all = await ScanRequestsService.getScanRequests();
+      final Map<String, int> diseaseByDay = {};
+      final Map<String, int> healthyByDay = {};
+      final Map<String, Map<String, int>> diseaseDayCounts = {};
+
+      for (final r in all) {
+        if ((r['status'] ?? '') != 'completed') continue;
+        final createdAt = r['createdAt'];
+        DateTime? dt;
+        if (createdAt is Timestamp) dt = createdAt.toDate();
+        if (createdAt is String) dt = DateTime.tryParse(createdAt);
+        if (dt == null) continue;
+        if (dt.isBefore(start) || !dt.isBefore(endEx)) continue;
+        final key =
+            '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+
+        List<dynamic> diseaseSummary =
+            (r['diseaseSummary'] as List<dynamic>?) ?? const [];
+        if (diseaseSummary.isEmpty) {
+          healthyByDay[key] = (healthyByDay[key] ?? 0) + 1;
+          continue;
+        }
+        for (final d in diseaseSummary) {
+          String name = 'Unknown';
+          int count = 1;
+          if (d is Map<String, dynamic>) {
+            name =
+                (d['name'] ?? d['label'] ?? d['disease'] ?? 'Unknown')
+                    .toString();
+            final c = d['count'] ?? d['confidence'] ?? 1;
+            if (c is num) count = c.round();
+          } else if (d is String) {
+            name = d;
+          }
+          final lower = name.toLowerCase();
+          if (lower == 'healthy') {
+            healthyByDay[key] = (healthyByDay[key] ?? 0) + count;
+            continue;
+          }
+          if (lower.contains('tip burn') || lower.contains('unknown')) continue;
+          diseaseByDay[key] = (diseaseByDay[key] ?? 0) + count;
+          final perDay = diseaseDayCounts[lower] ?? <String, int>{};
+          perDay[key] = (perDay[key] ?? 0) + count;
+          diseaseDayCounts[lower] = perDay;
+        }
+      }
+
+      final keys =
+          <String>{}
+            ..addAll(diseaseByDay.keys)
+            ..addAll(healthyByDay.keys);
+      final labels = keys.toList()..sort();
+      final totals =
+          diseaseDayCounts.entries
+              .map(
+                (e) => MapEntry(
+                  e.key,
+                  e.value.values.fold<int>(0, (s, v) => s + v),
+                ),
+              )
+              .toList()
+            ..sort((a, b) => b.value.compareTo(a.value));
+      final top = totals.take(4).map((e) => e.key).toList();
+
+      final Map<String, List<double>> series = {};
+      for (final name in top) {
+        final perDay = diseaseDayCounts[name] ?? const <String, int>{};
+        final s = <double>[];
+        for (final k in labels) {
+          final dCount = (perDay[k] ?? 0).toDouble();
+          final hCount = (healthyByDay[k] ?? 0).toDouble();
+          final total = dCount + hCount;
+          s.add(total > 0 ? (dCount / total) * 100.0 : 0.0);
+        }
+        series[name] = s;
+      }
+
+      // Healthy series (% healthy per day)
+      final healthySeries = <double>[];
+      for (final k in labels) {
+        final d = (diseaseByDay[k] ?? 0).toDouble();
+        final h = (healthyByDay[k] ?? 0).toDouble();
+        final t = d + h;
+        healthySeries.add(t > 0 ? (h / t) * 100.0 : 0.0);
+      }
+
+      setState(() {
+        _trendLabels = labels;
+        _seriesByDisease = series;
+        _topDiseasesOrder = top;
+        _healthySeries = healthySeries;
+        _trendIsEmpty = labels.isEmpty || series.isEmpty;
+        _loadingTrend = false;
+        _trendLoaded = true;
+      });
+    } catch (e) {
+      setState(() {
+        _trendError = e.toString();
+        _loadingTrend = false;
+        _trendLoaded = true;
+        // keep _trendIsEmpty as-is
+      });
+    }
+  }
+
+  Widget _buildTrendLine() {
+    if (_loadingTrend) {
+      return _buildLoading('Loading data…');
+    }
+    if (_trendError != null) {
+      return Center(child: Text('Failed to load: $_trendError'));
+    }
+    // Only show "No data" after load completed and confirmed empty
+    if (_trendLoaded && _trendIsEmpty) {
+      return const Center(child: Text('No data available for this range.'));
+    }
+    // Downsample labels to ~8 ticks like the PDF
+    List<String> _downsample(List<String> sorted) {
+      if (sorted.length <= 8) return sorted;
+      final step = (sorted.length / 8).ceil();
+      final out = <String>[];
+      for (int i = 0; i < sorted.length; i += step) {
+        out.add(sorted[i]);
+      }
+      if (out.last != sorted.last) out.add(sorted.last);
+      return out;
+    }
+
+    final displayKeys = _downsample(_trendLabels);
+    final keyIndex = {
+      for (int i = 0; i < _trendLabels.length; i++) _trendLabels[i]: i,
+    };
+
+    final datasets = <LineChartBarData>[];
+    final legendItems = <Map<String, dynamic>>[]; // {name,color}
+    final seriesLabels = <String>[]; // parallel to datasets order
+    for (final name in _topDiseasesOrder) {
+      final values = _seriesByDisease[name] ?? const <double>[];
+      final spots = <FlSpot>[];
+      for (final k in displayKeys) {
+        final i = keyIndex[k] ?? 0;
+        final v =
+            (i >= 0 && i < values.length)
+                ? (values[i].isFinite ? values[i] : 0.0)
+                : 0.0;
+        spots.add(FlSpot(spots.length.toDouble(), v));
+      }
+      final color = _getDiseaseColor(name);
+      datasets.add(
+        LineChartBarData(
+          spots: spots,
+          isCurved: true,
+          color: color,
+          barWidth: 3,
+          dotData: FlDotData(show: false),
+        ),
+      );
+      legendItems.add({'name': name, 'color': color});
+      seriesLabels.add(name);
+    }
+
+    // Healthy line
+    if (_healthySeries.isNotEmpty) {
+      final spots = <FlSpot>[];
+      for (final k in displayKeys) {
+        final i = keyIndex[k] ?? 0;
+        final v =
+            (i >= 0 && i < _healthySeries.length)
+                ? (_healthySeries[i].isFinite ? _healthySeries[i] : 0.0)
+                : 0.0;
+        spots.add(FlSpot(spots.length.toDouble(), v));
+      }
+      datasets.add(
+        LineChartBarData(
+          spots: spots,
+          isCurved: true,
+          color: const Color.fromARGB(255, 2, 119, 252), // Healthy blue
+          barWidth: 3,
+          dotData: FlDotData(show: false),
+        ),
+      );
+      legendItems.add({
+        'name': 'Healthy',
+        'color': const Color.fromARGB(255, 2, 119, 252),
+      });
+      seriesLabels.add('Healthy');
+    }
+    // Limit bottom axis labels to at most 10 by stepping
+    final int labelStep =
+        displayKeys.length <= 10 ? 1 : (displayKeys.length / 10).ceil();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildLegend(legendItems),
+        const SizedBox(height: 8),
+        Expanded(
+          child: LineChart(
+            LineChartData(
+              minX: 0,
+              maxX: displayKeys.isNotEmpty ? displayKeys.length - 1.0 : 0,
+              minY: 0,
+              maxY: 100,
+              gridData: FlGridData(show: true, drawVerticalLine: false),
+              lineTouchData: LineTouchData(
+                touchTooltipData: LineTouchTooltipData(
+                  tooltipBgColor: const Color.fromARGB(255, 193, 221, 240),
+                  getTooltipItems: (touchedSpots) {
+                    return touchedSpots.map((spot) {
+                      final label =
+                          (spot.barIndex >= 0 &&
+                                  spot.barIndex < seriesLabels.length)
+                              ? seriesLabels[spot.barIndex]
+                              : '';
+                      final valueStr = '${spot.y.toStringAsFixed(1)}%';
+                      final Color seriesColor =
+                          (spot.barIndex >= 0 &&
+                                  spot.barIndex < datasets.length)
+                              ? (datasets[spot.barIndex].color ?? Colors.white)
+                              : Colors.white;
+                      return LineTooltipItem(
+                        '$label ($valueStr)',
+                        TextStyle(
+                          color: seriesColor,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      );
+                    }).toList();
+                  },
+                ),
+              ),
+              titlesData: FlTitlesData(
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 36,
+                    interval: labelStep.toDouble(),
+                    getTitlesWidget: (value, meta) {
+                      final i = value.round();
+                      if (i < 0 || i >= displayKeys.length)
+                        return const SizedBox.shrink();
+                      if (i % labelStep != 0) return const SizedBox.shrink();
+                      final date = displayKeys[i];
+                      // Reuse month/day label like bar labels used elsewhere
+                      final parts = date.split('-');
+                      final label =
+                          parts.length > 2 ? '${parts[1]}/${parts[2]}' : date;
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          label,
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 40,
+                    interval: 25,
+                    getTitlesWidget: (v, m) => Text('${v.toInt()}%'),
+                  ),
+                ),
+                topTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                rightTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+              ),
+              lineBarsData: datasets,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLegend(List<Map<String, dynamic>> items) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children:
+          items.map((e) {
+            final Color c = e['color'] as Color;
+            final String name = e['name'] as String;
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.black87,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            );
+          }).toList(),
+    );
   }
 
   List<Map<String, dynamic>> _aggregateFromSnapshot(
@@ -6227,16 +6607,16 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Distribution',
-                  style: TextStyle(
+                Text(
+                  _chartMode == 'line' ? 'Trend' : 'Distribution',
+                  style: const TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                     color: Colors.black87,
                   ),
                 ),
+                const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -6254,219 +6634,162 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                     ),
                   ),
                 ),
+                const SizedBox(width: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey[300]!),
+                  ),
+                  child: DropdownButton<String>(
+                    value: _chartMode,
+                    underline: const SizedBox(),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'bar',
+                        child: Text('Distribution (Bar)'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'line',
+                        child: Text('Trend (Line)'),
+                      ),
+                    ],
+                    onChanged: (v) async {
+                      if (v == null) return;
+                      setState(() {
+                        _chartMode = v;
+                        if (v == 'line') {
+                          _loadingTrend = true;
+                          _trendLoaded = false;
+                          _trendIsEmpty = false;
+                        }
+                      });
+                      if (v == 'line' && _seriesByDisease.isEmpty) {
+                        _loadTrend();
+                      }
+                      try {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setString('chart_mode_distribution', v);
+                      } catch (_) {}
+                    },
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 32),
-            // Disease Distribution Chart
+            const SizedBox(height: 24),
+            // Disease Distribution Chart or Trend Line
             Container(
               height: widget.height ?? 400,
               width: double.infinity,
-              child: Row(
-                children: [
-                  // Diseases Chart
-                  Expanded(
-                    flex: 3,
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[50],
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey[200]!),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+              child:
+                  _chartMode == 'line'
+                      ? Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: _buildTrendLine(),
+                      )
+                      : Row(
                         children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.red[50],
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.warning_rounded,
-                                      size: 16,
-                                      color: Colors.red[700],
-                                    ),
-                                    const SizedBox(width: 6),
-                                    const Text(
-                                      'Diseases',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.red,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const Spacer(),
-                              Text(
-                                'Total: ${diseaseData.isEmpty ? 0 : diseaseData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey[600],
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 24),
+                          // Diseases Chart
                           Expanded(
-                            child:
-                                diseaseData.isEmpty
-                                    ? const Center(
-                                      child: Text(
-                                        'No disease data available',
-                                        style: TextStyle(
-                                          color: Colors.grey,
-                                          fontSize: 16,
+                            flex: 3,
+                            child: Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.grey[50],
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.grey[200]!),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red[50],
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.warning_rounded,
+                                              size: 16,
+                                              color: Colors.red[700],
+                                            ),
+                                            const SizedBox(width: 6),
+                                            const Text(
+                                              'Diseases',
+                                              style: TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.red,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                    )
-                                    : BarChart(
-                                      BarChartData(
-                                        alignment:
-                                            BarChartAlignment.spaceAround,
-                                        maxY:
-                                            diseaseData.isEmpty
-                                                ? 100.0
-                                                : diseaseData
-                                                        .map(
-                                                          (d) =>
-                                                              d['count']
-                                                                  .toDouble(),
-                                                        )
-                                                        .reduce(
-                                                          (a, b) =>
-                                                              a > b ? a : b,
-                                                        ) *
-                                                    1.2,
-                                        barTouchData: BarTouchData(
-                                          enabled: true,
-                                          touchTooltipData: BarTouchTooltipData(
-                                            tooltipBgColor: Colors.blueGrey,
-                                            getTooltipItem: (
-                                              group,
-                                              groupIndex,
-                                              rod,
-                                              rodIndex,
-                                            ) {
-                                              if (groupIndex < 0 ||
-                                                  groupIndex >=
-                                                      diseaseData.length ||
-                                                  diseaseData.isEmpty) {
-                                                return null;
-                                              }
-                                              final disease =
-                                                  diseaseData[groupIndex];
-                                              return BarTooltipItem(
-                                                '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
-                                                const TextStyle(
-                                                  color: Colors.white,
-                                                ),
-                                              );
-                                            },
-                                          ),
+                                      const Spacer(),
+                                      Text(
+                                        'Total: ${diseaseData.isEmpty ? 0 : diseaseData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.grey[600],
+                                          fontWeight: FontWeight.w500,
                                         ),
-                                        titlesData: FlTitlesData(
-                                          show: true,
-                                          bottomTitles: AxisTitles(
-                                            sideTitles: SideTitles(
-                                              showTitles: true,
-                                              getTitlesWidget: (value, meta) {
-                                                if (value < 0 ||
-                                                    value >=
-                                                        diseaseData.length ||
-                                                    diseaseData.isEmpty) {
-                                                  return const SizedBox.shrink();
-                                                }
-                                                final disease =
-                                                    diseaseData[value.toInt()];
-                                                return Padding(
-                                                  padding:
-                                                      const EdgeInsets.only(
-                                                        top: 8.0,
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 24),
+                                  Expanded(
+                                    child:
+                                        (diseaseData.isEmpty &&
+                                                _lastSnapshot == null)
+                                            ? _buildLoading('Loading data…')
+                                            : diseaseData.isEmpty
+                                            ? const Center(
+                                              child: Text(
+                                                'No disease data available',
+                                                style: TextStyle(
+                                                  color: Colors.grey,
+                                                  fontSize: 16,
+                                                ),
+                                              ),
+                                            )
+                                            : Builder(
+                                              builder: (context) {
+                                                // Sort diseases by count ascending so it reads left → right (low → high)
+                                                final List<Map<String, dynamic>>
+                                                sortedDiseases = [
+                                                  ...diseaseData,
+                                                ]..sort(
+                                                  (a, b) => (a['count'] as int)
+                                                      .compareTo(
+                                                        b['count'] as int,
                                                       ),
-                                                  child: Column(
-                                                    mainAxisSize:
-                                                        MainAxisSize.min,
-                                                    children: [
-                                                      Text(
-                                                        disease['name'],
-                                                        style: TextStyle(
-                                                          color:
-                                                              _getDiseaseColor(
-                                                                disease['name'],
-                                                              ),
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                          fontSize: 14,
-                                                        ),
-                                                        textAlign:
-                                                            TextAlign.center,
-                                                      ),
-                                                      const SizedBox(height: 6),
-                                                      Container(
-                                                        padding:
-                                                            const EdgeInsets.symmetric(
-                                                              horizontal: 8,
-                                                              vertical: 2,
-                                                            ),
-                                                        decoration: BoxDecoration(
-                                                          color:
-                                                              _getDiseaseColor(
-                                                                disease['name'],
-                                                              ).withOpacity(
-                                                                0.1,
-                                                              ),
-                                                          borderRadius:
-                                                              BorderRadius.circular(
-                                                                12,
-                                                              ),
-                                                        ),
-                                                        child: Text(
-                                                          '${(disease['percentage'] * 100).toStringAsFixed(1)}%',
-                                                          style: TextStyle(
-                                                            color:
-                                                                _getDiseaseColor(
-                                                                  disease['name'],
-                                                                ),
-                                                            fontWeight:
-                                                                FontWeight.w500,
-                                                            fontSize: 12,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
                                                 );
-                                              },
-                                              reservedSize: 72,
-                                            ),
-                                          ),
-                                          leftTitles: AxisTitles(
-                                            sideTitles: SideTitles(
-                                              showTitles: true,
-                                              reservedSize: 40,
-                                              interval:
-                                                  (() {
-                                                    // Use the same maxY calculation as the chart
-                                                    final double chartMaxY =
-                                                        diseaseData.isEmpty
+                                                return BarChart(
+                                                  BarChartData(
+                                                    alignment:
+                                                        BarChartAlignment
+                                                            .spaceAround,
+                                                    maxY:
+                                                        sortedDiseases.isEmpty
                                                             ? 100.0
-                                                            : diseaseData
+                                                            : sortedDiseases
                                                                     .map(
                                                                       (d) =>
-                                                                          (d['count']
-                                                                                  as num)
+                                                                          d['count']
                                                                               .toDouble(),
                                                                     )
                                                                     .reduce(
@@ -6475,478 +6798,732 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                                               ? a
                                                                               : b,
                                                                     ) *
-                                                                1.2;
-
-                                                    // Calculate interval based on chart's actual maxY
-                                                    if (chartMaxY <= 12)
-                                                      return 2.0;
-                                                    if (chartMaxY <= 24)
-                                                      return 5.0;
-                                                    if (chartMaxY <= 60)
-                                                      return 10.0;
-                                                    if (chartMaxY <= 120)
-                                                      return 25.0;
-                                                    if (chartMaxY <= 240)
-                                                      return 50.0;
-                                                    if (chartMaxY <= 600)
-                                                      return 100.0;
-                                                    if (chartMaxY <= 1200)
-                                                      return 200.0;
-                                                    if (chartMaxY <= 2400)
-                                                      return 500.0;
-                                                    if (chartMaxY <= 6000)
-                                                      return 1000.0;
-                                                    if (chartMaxY <= 12000)
-                                                      return 2000.0;
-                                                    if (chartMaxY <= 24000)
-                                                      return 5000.0;
-                                                    if (chartMaxY <= 60000)
-                                                      return 10000.0;
-                                                    // For extremely large numbers, use dynamic calculation
-                                                    return (chartMaxY / 5)
-                                                        .ceilToDouble();
-                                                  })(),
-                                              getTitlesWidget: (value, meta) {
-                                                return Text(
-                                                  value.toInt().toString(),
-                                                  style: TextStyle(
-                                                    color: Colors.grey[600],
-                                                    fontWeight: FontWeight.w500,
-                                                    fontSize: 12,
-                                                  ),
-                                                );
-                                              },
-                                            ),
-                                          ),
-                                          topTitles: AxisTitles(
-                                            sideTitles: SideTitles(
-                                              showTitles: false,
-                                            ),
-                                          ),
-                                          rightTitles: AxisTitles(
-                                            sideTitles: SideTitles(
-                                              showTitles: false,
-                                            ),
-                                          ),
-                                        ),
-                                        borderData: FlBorderData(show: false),
-                                        gridData: FlGridData(
-                                          show: true,
-                                          drawVerticalLine: false,
-                                          horizontalInterval:
-                                              (() {
-                                                final double maxVal =
-                                                    diseaseData.isEmpty
-                                                        ? 100
-                                                        : diseaseData
-                                                            .map(
-                                                              (d) =>
-                                                                  (d['count']
-                                                                          as num)
-                                                                      .toDouble(),
-                                                            )
-                                                            .reduce(
-                                                              (a, b) =>
-                                                                  a > b ? a : b,
-                                                            );
-                                                if (maxVal <= 10) return 2.0;
-                                                if (maxVal <= 20) return 5.0;
-                                                if (maxVal <= 50) return 10.0;
-                                                return 20.0;
-                                              })(),
-                                          getDrawingHorizontalLine: (value) {
-                                            return FlLine(
-                                              color: Colors.grey[200],
-                                              strokeWidth: 1,
-                                            );
-                                          },
-                                        ),
-                                        barGroups:
-                                            diseaseData.isEmpty
-                                                ? []
-                                                : diseaseData.asMap().entries.map((
-                                                  entry,
-                                                ) {
-                                                  final index = entry.key;
-                                                  final disease = entry.value;
-                                                  return BarChartGroupData(
-                                                    x: index,
-                                                    barRods: [
-                                                      BarChartRodData(
-                                                        toY:
-                                                            disease['count']
-                                                                .toDouble(),
-                                                        color: _getDiseaseColor(
-                                                          disease['name'],
-                                                        ),
-                                                        width: 36,
-                                                        borderRadius:
-                                                            const BorderRadius.vertical(
-                                                              top:
-                                                                  Radius.circular(
-                                                                    8,
+                                                                1.2,
+                                                    barTouchData: BarTouchData(
+                                                      enabled: true,
+                                                      touchTooltipData: BarTouchTooltipData(
+                                                        tooltipBgColor:
+                                                            Colors.blueGrey,
+                                                        getTooltipItem: (
+                                                          group,
+                                                          groupIndex,
+                                                          rod,
+                                                          rodIndex,
+                                                        ) {
+                                                          if (groupIndex < 0 ||
+                                                              groupIndex >=
+                                                                  sortedDiseases
+                                                                      .length ||
+                                                              sortedDiseases
+                                                                  .isEmpty) {
+                                                            return null;
+                                                          }
+                                                          final disease =
+                                                              sortedDiseases[groupIndex];
+                                                          return BarTooltipItem(
+                                                            '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                            const TextStyle(
+                                                              color:
+                                                                  Colors.white,
+                                                            ),
+                                                          );
+                                                        },
+                                                      ),
+                                                    ),
+                                                    titlesData: FlTitlesData(
+                                                      show: true,
+                                                      bottomTitles: AxisTitles(
+                                                        sideTitles: SideTitles(
+                                                          showTitles: true,
+                                                          getTitlesWidget: (
+                                                            value,
+                                                            meta,
+                                                          ) {
+                                                            if (value < 0 ||
+                                                                value >=
+                                                                    sortedDiseases
+                                                                        .length ||
+                                                                sortedDiseases
+                                                                    .isEmpty) {
+                                                              return const SizedBox.shrink();
+                                                            }
+                                                            final disease =
+                                                                sortedDiseases[value
+                                                                    .toInt()];
+                                                            return Padding(
+                                                              padding:
+                                                                  const EdgeInsets.only(
+                                                                    top: 8.0,
                                                                   ),
-                                                            ),
-                                                      ),
-                                                    ],
-                                                  );
-                                                }).toList(),
-                                      ),
-                                      swapAnimationDuration: Duration(
-                                        milliseconds: 0,
-                                      ),
-                                      swapAnimationCurve: Curves.linear,
-                                    ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 24),
-                  // Healthy Plants Chart
-                  Expanded(
-                    flex: 1,
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[50],
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey[200]!),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.green[50],
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.check_circle_rounded,
-                                      size: 16,
-                                      color: Colors.green[700],
-                                    ),
-                                    const SizedBox(width: 6),
-                                    const Text(
-                                      'Healthy',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const Spacer(),
-                              Text(
-                                'Total: ${healthyData.isEmpty ? 0 : healthyData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey[600],
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 24),
-                          Expanded(
-                            child:
-                                healthyData.isEmpty
-                                    ? const Center(
-                                      child: Text(
-                                        'No healthy data available',
-                                        style: TextStyle(
-                                          color: Colors.grey,
-                                          fontSize: 16,
-                                        ),
-                                      ),
-                                    )
-                                    : BarChart(
-                                      BarChartData(
-                                        alignment:
-                                            BarChartAlignment.spaceAround,
-                                        maxY:
-                                            healthyData.isEmpty
-                                                ? 100.0
-                                                : healthyData
-                                                        .map(
-                                                          (d) =>
-                                                              d['count']
-                                                                  .toDouble(),
-                                                        )
-                                                        .reduce(
-                                                          (a, b) =>
-                                                              a > b ? a : b,
-                                                        ) *
-                                                    1.2,
-                                        barTouchData: BarTouchData(
-                                          enabled: true,
-                                          touchTooltipData: BarTouchTooltipData(
-                                            tooltipBgColor: Colors.blueGrey,
-                                            getTooltipItem: (
-                                              group,
-                                              groupIndex,
-                                              rod,
-                                              rodIndex,
-                                            ) {
-                                              if (groupIndex < 0 ||
-                                                  groupIndex >=
-                                                      healthyData.length ||
-                                                  healthyData.isEmpty) {
-                                                return null;
-                                              }
-                                              final disease =
-                                                  healthyData[groupIndex];
-                                              return BarTooltipItem(
-                                                '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
-                                                const TextStyle(
-                                                  color: Colors.white,
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                        ),
-                                        titlesData: FlTitlesData(
-                                          show: true,
-                                          bottomTitles: AxisTitles(
-                                            sideTitles: SideTitles(
-                                              showTitles: true,
-                                              getTitlesWidget: (value, meta) {
-                                                if (value < 0 ||
-                                                    value >=
-                                                        healthyData.length ||
-                                                    healthyData.isEmpty) {
-                                                  return const SizedBox.shrink();
-                                                }
-                                                final disease =
-                                                    healthyData[value.toInt()];
-                                                return Padding(
-                                                  padding:
-                                                      const EdgeInsets.only(
-                                                        top: 8.0,
-                                                      ),
-                                                  child: Column(
-                                                    mainAxisSize:
-                                                        MainAxisSize.min,
-                                                    children: [
-                                                      Text(
-                                                        disease['name'],
-                                                        style: TextStyle(
-                                                          color:
-                                                              _getDiseaseColor(
-                                                                disease['name'],
+                                                              child: Column(
+                                                                mainAxisSize:
+                                                                    MainAxisSize
+                                                                        .min,
+                                                                children: [
+                                                                  Text(
+                                                                    disease['name'],
+                                                                    style: TextStyle(
+                                                                      color: _getDiseaseColor(
+                                                                        disease['name'],
+                                                                      ),
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .w600,
+                                                                      fontSize:
+                                                                          14,
+                                                                    ),
+                                                                    textAlign:
+                                                                        TextAlign
+                                                                            .center,
+                                                                  ),
+                                                                  const SizedBox(
+                                                                    height: 6,
+                                                                  ),
+                                                                  Container(
+                                                                    padding: const EdgeInsets.symmetric(
+                                                                      horizontal:
+                                                                          8,
+                                                                      vertical:
+                                                                          2,
+                                                                    ),
+                                                                    decoration: BoxDecoration(
+                                                                      color: _getDiseaseColor(
+                                                                        disease['name'],
+                                                                      ).withOpacity(
+                                                                        0.1,
+                                                                      ),
+                                                                      borderRadius:
+                                                                          BorderRadius.circular(
+                                                                            12,
+                                                                          ),
+                                                                    ),
+                                                                    child: Text(
+                                                                      '${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                                      style: TextStyle(
+                                                                        color: _getDiseaseColor(
+                                                                          disease['name'],
+                                                                        ),
+                                                                        fontWeight:
+                                                                            FontWeight.w500,
+                                                                        fontSize:
+                                                                            12,
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                ],
                                                               ),
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                          fontSize: 14,
-                                                        ),
-                                                        textAlign:
-                                                            TextAlign.center,
-                                                      ),
-                                                      const SizedBox(height: 6),
-                                                      Container(
-                                                        padding:
-                                                            const EdgeInsets.symmetric(
-                                                              horizontal: 8,
-                                                              vertical: 2,
-                                                            ),
-                                                        decoration: BoxDecoration(
-                                                          color:
-                                                              _getDiseaseColor(
-                                                                disease['name'],
-                                                              ).withOpacity(
-                                                                0.1,
-                                                              ),
-                                                          borderRadius:
-                                                              BorderRadius.circular(
-                                                                12,
-                                                              ),
-                                                        ),
-                                                        child: Text(
-                                                          '${(disease['percentage'] * 100).toStringAsFixed(1)}%',
-                                                          style: TextStyle(
-                                                            color:
-                                                                _getDiseaseColor(
-                                                                  disease['name'],
-                                                                ),
-                                                            fontWeight:
-                                                                FontWeight.w500,
-                                                            fontSize: 12,
-                                                          ),
+                                                            );
+                                                          },
+                                                          reservedSize: 72,
                                                         ),
                                                       ),
-                                                    ],
-                                                  ),
-                                                );
-                                              },
-                                              reservedSize: 72,
-                                            ),
-                                          ),
-                                          leftTitles: AxisTitles(
-                                            sideTitles: SideTitles(
-                                              showTitles: true,
-                                              reservedSize: 40,
-                                              interval:
-                                                  (() {
-                                                    // Use the same maxY calculation as the chart
-                                                    final double chartMaxY =
-                                                        healthyData.isEmpty
-                                                            ? 100.0
-                                                            : healthyData
-                                                                    .map(
-                                                                      (d) =>
-                                                                          (d['count']
-                                                                                  as num)
-                                                                              .toDouble(),
-                                                                    )
-                                                                    .reduce(
-                                                                      (a, b) =>
-                                                                          a > b
-                                                                              ? a
-                                                                              : b,
-                                                                    ) *
-                                                                1.2;
+                                                      leftTitles: AxisTitles(
+                                                        sideTitles: SideTitles(
+                                                          showTitles: true,
+                                                          reservedSize: 40,
+                                                          interval:
+                                                              (() {
+                                                                // Use the same maxY calculation as the chart
+                                                                final double
+                                                                chartMaxY =
+                                                                    sortedDiseases
+                                                                            .isEmpty
+                                                                        ? 100.0
+                                                                        : sortedDiseases
+                                                                                .map(
+                                                                                  (
+                                                                                    d,
+                                                                                  ) =>
+                                                                                      (d['count']
+                                                                                              as num)
+                                                                                          .toDouble(),
+                                                                                )
+                                                                                .reduce(
+                                                                                  (
+                                                                                    a,
+                                                                                    b,
+                                                                                  ) =>
+                                                                                      a >
+                                                                                              b
+                                                                                          ? a
+                                                                                          : b,
+                                                                                ) *
+                                                                            1.2;
 
-                                                    // Calculate interval based on chart's actual maxY
-                                                    if (chartMaxY <= 12)
-                                                      return 2.0;
-                                                    if (chartMaxY <= 24)
-                                                      return 5.0;
-                                                    if (chartMaxY <= 60)
-                                                      return 10.0;
-                                                    if (chartMaxY <= 120)
-                                                      return 25.0;
-                                                    if (chartMaxY <= 240)
-                                                      return 50.0;
-                                                    if (chartMaxY <= 600)
-                                                      return 100.0;
-                                                    if (chartMaxY <= 1200)
-                                                      return 200.0;
-                                                    if (chartMaxY <= 2400)
-                                                      return 500.0;
-                                                    if (chartMaxY <= 6000)
-                                                      return 1000.0;
-                                                    if (chartMaxY <= 12000)
-                                                      return 2000.0;
-                                                    if (chartMaxY <= 24000)
-                                                      return 5000.0;
-                                                    if (chartMaxY <= 60000)
-                                                      return 10000.0;
-                                                    // For extremely large numbers, use dynamic calculation
-                                                    return (chartMaxY / 5)
-                                                        .ceilToDouble();
-                                                  })(),
-                                              getTitlesWidget: (value, meta) {
-                                                return Text(
-                                                  value.toInt().toString(),
-                                                  style: TextStyle(
-                                                    color: Colors.grey[600],
-                                                    fontWeight: FontWeight.w500,
-                                                    fontSize: 12,
+                                                                // Calculate interval based on chart's actual maxY
+                                                                if (chartMaxY <=
+                                                                    12)
+                                                                  return 2.0;
+                                                                if (chartMaxY <=
+                                                                    24)
+                                                                  return 5.0;
+                                                                if (chartMaxY <=
+                                                                    60)
+                                                                  return 10.0;
+                                                                if (chartMaxY <=
+                                                                    120)
+                                                                  return 25.0;
+                                                                if (chartMaxY <=
+                                                                    240)
+                                                                  return 50.0;
+                                                                if (chartMaxY <=
+                                                                    600)
+                                                                  return 100.0;
+                                                                if (chartMaxY <=
+                                                                    1200)
+                                                                  return 200.0;
+                                                                if (chartMaxY <=
+                                                                    2400)
+                                                                  return 500.0;
+                                                                if (chartMaxY <=
+                                                                    6000)
+                                                                  return 1000.0;
+                                                                if (chartMaxY <=
+                                                                    12000)
+                                                                  return 2000.0;
+                                                                if (chartMaxY <=
+                                                                    24000)
+                                                                  return 5000.0;
+                                                                if (chartMaxY <=
+                                                                    60000)
+                                                                  return 10000.0;
+                                                                // For extremely large numbers, use dynamic calculation
+                                                                return (chartMaxY /
+                                                                        5)
+                                                                    .ceilToDouble();
+                                                              })(),
+                                                          getTitlesWidget: (
+                                                            value,
+                                                            meta,
+                                                          ) {
+                                                            return Text(
+                                                              value
+                                                                  .toInt()
+                                                                  .toString(),
+                                                              style: TextStyle(
+                                                                color:
+                                                                    Colors
+                                                                        .grey[600],
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w500,
+                                                                fontSize: 12,
+                                                              ),
+                                                            );
+                                                          },
+                                                        ),
+                                                      ),
+                                                      topTitles: AxisTitles(
+                                                        sideTitles: SideTitles(
+                                                          showTitles: false,
+                                                        ),
+                                                      ),
+                                                      rightTitles: AxisTitles(
+                                                        sideTitles: SideTitles(
+                                                          showTitles: false,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    borderData: FlBorderData(
+                                                      show: false,
+                                                    ),
+                                                    gridData: FlGridData(
+                                                      show: true,
+                                                      drawVerticalLine: false,
+                                                      horizontalInterval:
+                                                          (() {
+                                                            final double
+                                                            maxVal =
+                                                                sortedDiseases
+                                                                        .isEmpty
+                                                                    ? 100
+                                                                    : sortedDiseases
+                                                                        .map(
+                                                                          (d) =>
+                                                                              (d['count']
+                                                                                      as num)
+                                                                                  .toDouble(),
+                                                                        )
+                                                                        .reduce(
+                                                                          (
+                                                                            a,
+                                                                            b,
+                                                                          ) =>
+                                                                              a > b
+                                                                                  ? a
+                                                                                  : b,
+                                                                        );
+                                                            if (maxVal <= 10)
+                                                              return 2.0;
+                                                            if (maxVal <= 20)
+                                                              return 5.0;
+                                                            if (maxVal <= 50)
+                                                              return 10.0;
+                                                            return 20.0;
+                                                          })(),
+                                                      getDrawingHorizontalLine: (
+                                                        value,
+                                                      ) {
+                                                        return FlLine(
+                                                          color:
+                                                              Colors.grey[200],
+                                                          strokeWidth: 1,
+                                                        );
+                                                      },
+                                                    ),
+                                                    barGroups:
+                                                        sortedDiseases.isEmpty
+                                                            ? []
+                                                            : sortedDiseases.asMap().entries.map((
+                                                              entry,
+                                                            ) {
+                                                              final index =
+                                                                  entry.key;
+                                                              final disease =
+                                                                  entry.value;
+                                                              return BarChartGroupData(
+                                                                x: index,
+                                                                barRods: [
+                                                                  BarChartRodData(
+                                                                    toY:
+                                                                        disease['count']
+                                                                            .toDouble(),
+                                                                    color: _getDiseaseColor(
+                                                                      disease['name'],
+                                                                    ),
+                                                                    width: 36,
+                                                                    borderRadius:
+                                                                        const BorderRadius.vertical(
+                                                                          top: Radius.circular(
+                                                                            8,
+                                                                          ),
+                                                                        ),
+                                                                  ),
+                                                                ],
+                                                              );
+                                                            }).toList(),
                                                   ),
+                                                  swapAnimationDuration:
+                                                      Duration(milliseconds: 0),
+                                                  swapAnimationCurve:
+                                                      Curves.linear,
                                                 );
                                               },
                                             ),
-                                          ),
-                                          topTitles: AxisTitles(
-                                            sideTitles: SideTitles(
-                                              showTitles: false,
-                                            ),
-                                          ),
-                                          rightTitles: AxisTitles(
-                                            sideTitles: SideTitles(
-                                              showTitles: false,
-                                            ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 24),
+                          // Healthy Plants Chart
+                          Expanded(
+                            flex: 1,
+                            child: Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.grey[50],
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.grey[200]!),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green[50],
+                                          borderRadius: BorderRadius.circular(
+                                            20,
                                           ),
                                         ),
-                                        borderData: FlBorderData(show: false),
-                                        gridData: FlGridData(
-                                          show: true,
-                                          drawVerticalLine: false,
-                                          horizontalInterval:
-                                              (() {
-                                                final double maxVal =
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.check_circle_rounded,
+                                              size: 16,
+                                              color: Colors.green[700],
+                                            ),
+                                            const SizedBox(width: 6),
+                                            const Text(
+                                              'Healthy',
+                                              style: TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.green,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      Text(
+                                        'Total: ${healthyData.isEmpty ? 0 : healthyData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.grey[600],
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 24),
+                                  Expanded(
+                                    child:
+                                        healthyData.isEmpty
+                                            ? const Center(
+                                              child: Text(
+                                                'No healthy data available',
+                                                style: TextStyle(
+                                                  color: Colors.grey,
+                                                  fontSize: 16,
+                                                ),
+                                              ),
+                                            )
+                                            : BarChart(
+                                              BarChartData(
+                                                alignment:
+                                                    BarChartAlignment
+                                                        .spaceAround,
+                                                maxY:
                                                     healthyData.isEmpty
-                                                        ? 100
+                                                        ? 100.0
                                                         : healthyData
-                                                            .map(
-                                                              (d) =>
-                                                                  (d['count']
-                                                                          as num)
-                                                                      .toDouble(),
-                                                            )
-                                                            .reduce(
-                                                              (a, b) =>
-                                                                  a > b ? a : b,
-                                                            );
-                                                if (maxVal <= 10) return 2.0;
-                                                if (maxVal <= 20) return 5.0;
-                                                if (maxVal <= 50) return 10.0;
-                                                return 20.0;
-                                              })(),
-                                          getDrawingHorizontalLine: (value) {
-                                            return FlLine(
-                                              color: Colors.grey[200],
-                                              strokeWidth: 1,
-                                            );
-                                          },
-                                        ),
-                                        barGroups:
-                                            healthyData.isEmpty
-                                                ? []
-                                                : healthyData.asMap().entries.map((
-                                                  entry,
-                                                ) {
-                                                  final index = entry.key;
-                                                  final disease = entry.value;
-                                                  return BarChartGroupData(
-                                                    x: index,
-                                                    barRods: [
-                                                      BarChartRodData(
-                                                        toY:
-                                                            disease['count']
-                                                                .toDouble(),
-                                                        color: _getDiseaseColor(
-                                                          disease['name'],
+                                                                .map(
+                                                                  (d) =>
+                                                                      d['count']
+                                                                          .toDouble(),
+                                                                )
+                                                                .reduce(
+                                                                  (a, b) =>
+                                                                      a > b
+                                                                          ? a
+                                                                          : b,
+                                                                ) *
+                                                            1.2,
+                                                barTouchData: BarTouchData(
+                                                  enabled: true,
+                                                  touchTooltipData: BarTouchTooltipData(
+                                                    tooltipBgColor:
+                                                        Colors.blueGrey,
+                                                    getTooltipItem: (
+                                                      group,
+                                                      groupIndex,
+                                                      rod,
+                                                      rodIndex,
+                                                    ) {
+                                                      if (groupIndex < 0 ||
+                                                          groupIndex >=
+                                                              healthyData
+                                                                  .length ||
+                                                          healthyData.isEmpty) {
+                                                        return null;
+                                                      }
+                                                      final disease =
+                                                          healthyData[groupIndex];
+                                                      return BarTooltipItem(
+                                                        '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                        const TextStyle(
+                                                          color: Colors.white,
                                                         ),
-                                                        width: 36,
-                                                        borderRadius:
-                                                            const BorderRadius.vertical(
-                                                              top:
-                                                                  Radius.circular(
-                                                                    8,
+                                                      );
+                                                    },
+                                                  ),
+                                                ),
+                                                titlesData: FlTitlesData(
+                                                  show: true,
+                                                  bottomTitles: AxisTitles(
+                                                    sideTitles: SideTitles(
+                                                      showTitles: true,
+                                                      getTitlesWidget: (
+                                                        value,
+                                                        meta,
+                                                      ) {
+                                                        if (value < 0 ||
+                                                            value >=
+                                                                healthyData
+                                                                    .length ||
+                                                            healthyData
+                                                                .isEmpty) {
+                                                          return const SizedBox.shrink();
+                                                        }
+                                                        final disease =
+                                                            healthyData[value
+                                                                .toInt()];
+                                                        return Padding(
+                                                          padding:
+                                                              const EdgeInsets.only(
+                                                                top: 8.0,
+                                                              ),
+                                                          child: Column(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Text(
+                                                                disease['name'],
+                                                                style: TextStyle(
+                                                                  color: _getDiseaseColor(
+                                                                    disease['name'],
                                                                   ),
-                                                            ),
-                                                      ),
-                                                    ],
-                                                  );
-                                                }).toList(),
-                                      ),
-                                      swapAnimationDuration: Duration(
-                                        milliseconds: 0,
-                                      ),
-                                      swapAnimationCurve: Curves.linear,
-                                    ),
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w600,
+                                                                  fontSize: 14,
+                                                                ),
+                                                                textAlign:
+                                                                    TextAlign
+                                                                        .center,
+                                                              ),
+                                                              const SizedBox(
+                                                                height: 6,
+                                                              ),
+                                                              Container(
+                                                                padding:
+                                                                    const EdgeInsets.symmetric(
+                                                                      horizontal:
+                                                                          8,
+                                                                      vertical:
+                                                                          2,
+                                                                    ),
+                                                                decoration: BoxDecoration(
+                                                                  color: _getDiseaseColor(
+                                                                    disease['name'],
+                                                                  ).withOpacity(
+                                                                    0.1,
+                                                                  ),
+                                                                  borderRadius:
+                                                                      BorderRadius.circular(
+                                                                        12,
+                                                                      ),
+                                                                ),
+                                                                child: Text(
+                                                                  '${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                                  style: TextStyle(
+                                                                    color: _getDiseaseColor(
+                                                                      disease['name'],
+                                                                    ),
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w500,
+                                                                    fontSize:
+                                                                        12,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        );
+                                                      },
+                                                      reservedSize: 72,
+                                                    ),
+                                                  ),
+                                                  leftTitles: AxisTitles(
+                                                    sideTitles: SideTitles(
+                                                      showTitles: true,
+                                                      reservedSize: 40,
+                                                      interval:
+                                                          (() {
+                                                            // Use the same maxY calculation as the chart
+                                                            final double
+                                                            chartMaxY =
+                                                                healthyData
+                                                                        .isEmpty
+                                                                    ? 100.0
+                                                                    : healthyData
+                                                                            .map(
+                                                                              (
+                                                                                d,
+                                                                              ) =>
+                                                                                  (d['count']
+                                                                                          as num)
+                                                                                      .toDouble(),
+                                                                            )
+                                                                            .reduce((a, b) => a > b ? a : b) *
+                                                                        1.2;
+
+                                                            // Calculate interval based on chart's actual maxY
+                                                            if (chartMaxY <= 12)
+                                                              return 2.0;
+                                                            if (chartMaxY <= 24)
+                                                              return 5.0;
+                                                            if (chartMaxY <= 60)
+                                                              return 10.0;
+                                                            if (chartMaxY <=
+                                                                120)
+                                                              return 25.0;
+                                                            if (chartMaxY <=
+                                                                240)
+                                                              return 50.0;
+                                                            if (chartMaxY <=
+                                                                600)
+                                                              return 100.0;
+                                                            if (chartMaxY <=
+                                                                1200)
+                                                              return 200.0;
+                                                            if (chartMaxY <=
+                                                                2400)
+                                                              return 500.0;
+                                                            if (chartMaxY <=
+                                                                6000)
+                                                              return 1000.0;
+                                                            if (chartMaxY <=
+                                                                12000)
+                                                              return 2000.0;
+                                                            if (chartMaxY <=
+                                                                24000)
+                                                              return 5000.0;
+                                                            if (chartMaxY <=
+                                                                60000)
+                                                              return 10000.0;
+                                                            // For extremely large numbers, use dynamic calculation
+                                                            return (chartMaxY /
+                                                                    5)
+                                                                .ceilToDouble();
+                                                          })(),
+                                                      getTitlesWidget: (
+                                                        value,
+                                                        meta,
+                                                      ) {
+                                                        return Text(
+                                                          value
+                                                              .toInt()
+                                                              .toString(),
+                                                          style: TextStyle(
+                                                            color:
+                                                                Colors
+                                                                    .grey[600],
+                                                            fontWeight:
+                                                                FontWeight.w500,
+                                                            fontSize: 12,
+                                                          ),
+                                                        );
+                                                      },
+                                                    ),
+                                                  ),
+                                                  topTitles: AxisTitles(
+                                                    sideTitles: SideTitles(
+                                                      showTitles: false,
+                                                    ),
+                                                  ),
+                                                  rightTitles: AxisTitles(
+                                                    sideTitles: SideTitles(
+                                                      showTitles: false,
+                                                    ),
+                                                  ),
+                                                ),
+                                                borderData: FlBorderData(
+                                                  show: false,
+                                                ),
+                                                gridData: FlGridData(
+                                                  show: true,
+                                                  drawVerticalLine: false,
+                                                  horizontalInterval:
+                                                      (() {
+                                                        final double maxVal =
+                                                            healthyData.isEmpty
+                                                                ? 100
+                                                                : healthyData
+                                                                    .map(
+                                                                      (d) =>
+                                                                          (d['count']
+                                                                                  as num)
+                                                                              .toDouble(),
+                                                                    )
+                                                                    .reduce(
+                                                                      (a, b) =>
+                                                                          a > b
+                                                                              ? a
+                                                                              : b,
+                                                                    );
+                                                        if (maxVal <= 10)
+                                                          return 2.0;
+                                                        if (maxVal <= 20)
+                                                          return 5.0;
+                                                        if (maxVal <= 50)
+                                                          return 10.0;
+                                                        return 20.0;
+                                                      })(),
+                                                  getDrawingHorizontalLine: (
+                                                    value,
+                                                  ) {
+                                                    return FlLine(
+                                                      color: Colors.grey[200],
+                                                      strokeWidth: 1,
+                                                    );
+                                                  },
+                                                ),
+                                                barGroups:
+                                                    healthyData.isEmpty
+                                                        ? []
+                                                        : healthyData.asMap().entries.map((
+                                                          entry,
+                                                        ) {
+                                                          final index =
+                                                              entry.key;
+                                                          final disease =
+                                                              entry.value;
+                                                          return BarChartGroupData(
+                                                            x: index,
+                                                            barRods: [
+                                                              BarChartRodData(
+                                                                toY:
+                                                                    disease['count']
+                                                                        .toDouble(),
+                                                                color: _getDiseaseColor(
+                                                                  disease['name'],
+                                                                ),
+                                                                width: 36,
+                                                                borderRadius:
+                                                                    const BorderRadius.vertical(
+                                                                      top:
+                                                                          Radius.circular(
+                                                                            8,
+                                                                          ),
+                                                                    ),
+                                                              ),
+                                                            ],
+                                                          );
+                                                        }).toList(),
+                                              ),
+                                              swapAnimationDuration: Duration(
+                                                milliseconds: 0,
+                                              ),
+                                              swapAnimationCurve: Curves.linear,
+                                            ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                ],
-              ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildLoading(String message) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(strokeWidth: 3),
+          ),
+          const SizedBox(height: 12),
+          Text(message, style: const TextStyle(color: Colors.grey)),
+        ],
       ),
     );
   }
@@ -6964,11 +7541,22 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
   List<Map<String, dynamic>> _trendData = [];
   bool _loading = true;
   String? _error;
+  String _chartMode = 'bar'; // 'bar' | 'line'
 
   @override
   void initState() {
     super.initState();
     _loadTrend();
+    // Load persisted chart mode to keep in sync with Reports/Dashboard
+    () async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final saved = prefs.getString('chart_mode_distribution');
+        if (saved == 'bar' || saved == 'line') {
+          if (mounted) setState(() => _chartMode = saved!);
+        }
+      } catch (_) {}
+    }();
   }
 
   Future<void> _loadTrend() async {
@@ -7039,6 +7627,40 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
                 ),
                 Row(
                   children: [
+                    // Chart mode selector
+                    Container(
+                      margin: const EdgeInsets.only(right: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey[300]!),
+                      ),
+                      child: DropdownButton<String>(
+                        value: _chartMode,
+                        underline: const SizedBox(),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'bar',
+                            child: Text('Distribution (Bar)'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'line',
+                            child: Text('Trend (Line)'),
+                          ),
+                        ],
+                        onChanged: (v) async {
+                          if (v == null) return;
+                          setState(() {
+                            _chartMode = v;
+                          });
+                          try {
+                            final prefs = await SharedPreferences.getInstance();
+                            await prefs.setString('chart_mode_distribution', v);
+                          } catch (_) {}
+                        },
+                      ),
+                    ),
                     ElevatedButton.icon(
                       icon: const Icon(Icons.list),
                       label: const Text('User activity'),
@@ -7144,17 +7766,21 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
               SizedBox(
                 height: 400,
                 child:
-                    isManyBars
-                        ? SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: SizedBox(
-                            width: chartWidth,
-                            child: _buildBarChart(
-                              key: ValueKey(_selectedTimeRange),
-                            ),
-                          ),
-                        )
-                        : _buildBarChart(key: ValueKey(_selectedTimeRange)),
+                    _chartMode == 'bar'
+                        ? (isManyBars
+                            ? SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: SizedBox(
+                                width: chartWidth,
+                                child: _buildBarChart(
+                                  key: ValueKey(_selectedTimeRange),
+                                ),
+                              ),
+                            )
+                            : _buildBarChart(key: ValueKey(_selectedTimeRange)))
+                        : _buildLineChartFromAggregated(
+                          key: ValueKey('line_${_selectedTimeRange}'),
+                        ),
               ),
           ],
         ),
@@ -7272,6 +7898,81 @@ class _ReportsTrendDialogState extends State<ReportsTrendDialog> {
         extraLinesData: ExtraLinesData(),
         groupsSpace: 12,
       ),
+    );
+  }
+
+  // Simple line chart based on the same aggregated data used by the bar chart
+  Widget _buildLineChartFromAggregated({Key? key}) {
+    if (_aggregatedData.isEmpty) {
+      return const Center(child: Text('No data available for this range.'));
+    }
+
+    final List<FlSpot> spots = [];
+    for (int i = 0; i < _aggregatedData.length; i++) {
+      final y = (_aggregatedData[i]['count'] as num).toDouble();
+      spots.add(FlSpot(i.toDouble(), y));
+    }
+
+    final maxY = spots.map((e) => e.y).fold<double>(0, (a, b) => a > b ? a : b);
+
+    return LineChart(
+      LineChartData(
+        minX: 0,
+        maxX: spots.isNotEmpty ? spots.length - 1.0 : 0,
+        minY: 0,
+        maxY: maxY * 1.2,
+        gridData: FlGridData(show: true, drawVerticalLine: false),
+        titlesData: FlTitlesData(
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 36,
+              interval:
+                  (() {
+                    final len = _aggregatedData.length;
+                    return (len <= 10 ? 1 : (len / 10).ceil()).toDouble();
+                  })(),
+              getTitlesWidget: (value, meta) {
+                final int idx = value.round();
+                if (idx < 0 || idx >= _aggregatedData.length)
+                  return const SizedBox.shrink();
+                final step =
+                    _aggregatedData.length <= 10
+                        ? 1
+                        : (_aggregatedData.length / 10).ceil();
+                if (idx % step != 0) return const SizedBox.shrink();
+                final date = _aggregatedData[idx]['date'];
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: Text(
+                    _barLabel(idx, date),
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                );
+              },
+            ),
+          ),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(showTitles: true, reservedSize: 40),
+          ),
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+        ),
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            color: const Color(0xFF2D7204),
+            barWidth: 3,
+            dotData: FlDotData(show: false),
+          ),
+        ],
+      ),
+      key: key,
     );
   }
 
@@ -8233,7 +8934,7 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
               final endStr = end.toIso8601String().substring(0, 10);
               range = 'Custom ($startStr to $endStr)';
             }
-            
+
             // Show confirmation dialog before generating PDF
             _showConfirmationDialog(context, range);
           },
@@ -8245,7 +8946,9 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
   String _formatRangeForDisplay(String range) {
     // Check if it's a Monthly range
     if (range.startsWith('Monthly (')) {
-      final regex = RegExp(r'Monthly \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)');
+      final regex = RegExp(
+        r'Monthly \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
       final match = regex.firstMatch(range);
       if (match != null) {
         final startDate = DateTime.parse(match.group(1)!);
@@ -8255,7 +8958,9 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
     }
     // Check if it's a Custom range
     if (range.startsWith('Custom (')) {
-      final regex = RegExp(r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)');
+      final regex = RegExp(
+        r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
       final match = regex.firstMatch(range);
       if (match != null) {
         final startDate = DateTime.parse(match.group(1)!);
@@ -8269,130 +8974,122 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
 
   void _showConfirmationDialog(BuildContext context, String range) {
     final displayRange = _formatRangeForDisplay(range);
-    
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
-        title: Row(
-          children: [
-            const Icon(
-              Icons.info_outline,
-              color: Color(0xFF2D7204),
-              size: 28,
+      builder:
+          (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
             ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Text(
-                'Confirm PDF Generation',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+            title: Row(
+              children: [
+                const Icon(
+                  Icons.info_outline,
+                  color: Color(0xFF2D7204),
+                  size: 28,
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Confirm PDF Generation',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Are you sure you want to generate this PDF report?',
+                  style: TextStyle(fontSize: 16, color: Colors.black87),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green[50],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green[200]!),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.calendar_today,
+                        color: Color(0xFF2D7204),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              range.startsWith('Monthly')
+                                  ? 'Selected Month:'
+                                  : 'Selected Time Range:',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.black54,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              displayRange,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                color: Color(0xFF2D7204),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'This will generate and download a PDF report with disease statistics, trends, and weather summary for the selected period.',
+                  style: TextStyle(fontSize: 13, color: Colors.black54),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(fontSize: 15, color: Colors.grey),
                 ),
               ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Are you sure you want to generate this PDF report?',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.green[50],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.green[200]!),
-              ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.calendar_today,
-                    color: Color(0xFF2D7204),
-                    size: 20,
+              ElevatedButton.icon(
+                icon: const Icon(Icons.check_circle, size: 20),
+                label: const Text('Yes, Generate PDF'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2D7204),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          range.startsWith('Monthly')
-                              ? 'Selected Month:'
-                              : 'Selected Time Range:',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.black54,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          displayRange,
-                          style: const TextStyle(
-                            fontSize: 15,
-                            color: Color(0xFF2D7204),
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
                   ),
-                ],
+                ),
+                onPressed: () {
+                  Navigator.of(ctx).pop(); // Close confirmation dialog
+                  Navigator.pop(context, {
+                    'range': range,
+                    'pageSize': 'A4',
+                  }); // Close main dialog and return result
+                },
               ),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'This will generate and download a PDF report with disease statistics, trends, and weather summary for the selected period.',
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.black54,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text(
-              'Cancel',
-              style: TextStyle(
-                fontSize: 15,
-                color: Colors.grey,
-              ),
-            ),
+            ],
           ),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.check_circle, size: 20),
-            label: const Text('Yes, Generate PDF'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2D7204),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 12,
-              ),
-            ),
-            onPressed: () {
-              Navigator.of(ctx).pop(); // Close confirmation dialog
-              Navigator.pop(context, {'range': range, 'pageSize': 'A4'}); // Close main dialog and return result
-            },
-          ),
-        ],
-      ),
     );
   }
 
