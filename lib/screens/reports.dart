@@ -5913,6 +5913,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   String? _trendError;
   bool _trendLoaded = false; // load cycle completed
   bool _trendIsEmpty = false; // last load returned empty data
+  Timer? _trendEmptyGuardTimer; // avoids brief empty-state flash
   // Disease trend state (daily percentages)
   List<String> _trendLabels = const [];
   Map<String, List<double>> _seriesByDisease = const {};
@@ -6105,6 +6106,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
 
   @override
   void dispose() {
+    _trendEmptyGuardTimer?.cancel();
     _streamSub?.cancel();
     super.dispose();
   }
@@ -6139,6 +6141,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
       _trendLoaded = false;
       _trendIsEmpty = false;
     });
+    _trendEmptyGuardTimer?.cancel();
     try {
       // Compute disease daily percentages similar to PDF
       final range = _resolveDateRange(widget.selectedTimeRange);
@@ -6239,15 +6242,32 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
         healthySeries.add(t > 0 ? (h / t) * 100.0 : 0.0);
       }
 
-      setState(() {
-        _trendLabels = labels;
-        _seriesByDisease = series;
-        _topDiseasesOrder = top;
-        _healthySeries = healthySeries;
-        _trendIsEmpty = labels.isEmpty || series.isEmpty;
-        _loadingTrend = false;
-        _trendLoaded = true;
-      });
+      final bool computedEmpty = labels.isEmpty || series.isEmpty;
+      if (computedEmpty) {
+        // Delay declaring empty a bit to avoid flicker right after loading
+        _trendEmptyGuardTimer = Timer(const Duration(milliseconds: 7500), () {
+          if (!mounted) return;
+          setState(() {
+            _trendLabels = labels;
+            _seriesByDisease = series;
+            _topDiseasesOrder = top;
+            _healthySeries = healthySeries;
+            _trendIsEmpty = true;
+            _loadingTrend = false;
+            _trendLoaded = true;
+          });
+        });
+      } else {
+        setState(() {
+          _trendLabels = labels;
+          _seriesByDisease = series;
+          _topDiseasesOrder = top;
+          _healthySeries = healthySeries;
+          _trendIsEmpty = false;
+          _loadingTrend = false;
+          _trendLoaded = true;
+        });
+      }
     } catch (e) {
       setState(() {
         _trendError = e.toString();
@@ -6259,14 +6279,15 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   }
 
   Widget _buildTrendLine() {
-    if (_loadingTrend) {
+    // Treat view as loading until a load cycle fully completes
+    if (_loadingTrend || !_trendLoaded) {
       return _buildLoading('Loading data…');
     }
     if (_trendError != null) {
       return Center(child: Text('Failed to load: $_trendError'));
     }
     // Only show "No data" after load completed and confirmed empty
-    if (_trendLoaded && _trendIsEmpty) {
+    if (_trendIsEmpty) {
       return const Center(child: Text('No data available for this range.'));
     }
     // Downsample labels to ~8 ticks like the PDF
