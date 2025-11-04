@@ -8233,10 +8233,166 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
               final endStr = end.toIso8601String().substring(0, 10);
               range = 'Custom ($startStr to $endStr)';
             }
-            Navigator.pop(context, {'range': range, 'pageSize': 'A4'});
+            
+            // Show confirmation dialog before generating PDF
+            _showConfirmationDialog(context, range);
           },
         ),
       ],
+    );
+  }
+
+  String _formatRangeForDisplay(String range) {
+    // Check if it's a Monthly range
+    if (range.startsWith('Monthly (')) {
+      final regex = RegExp(r'Monthly \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)');
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        final startDate = DateTime.parse(match.group(1)!);
+        // Format as "August 2025" for monthly reports
+        return _formatMonthYear(startDate);
+      }
+    }
+    // Check if it's a Custom range
+    if (range.startsWith('Custom (')) {
+      final regex = RegExp(r'Custom \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)');
+      final match = regex.firstMatch(range);
+      if (match != null) {
+        final startDate = DateTime.parse(match.group(1)!);
+        final endDate = DateTime.parse(match.group(2)!);
+        return _formatDateRange(startDate, endDate);
+      }
+    }
+    // For preset ranges like "Last 7 Days", return as is
+    return range;
+  }
+
+  void _showConfirmationDialog(BuildContext context, String range) {
+    final displayRange = _formatRangeForDisplay(range);
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Row(
+          children: [
+            const Icon(
+              Icons.info_outline,
+              color: Color(0xFF2D7204),
+              size: 28,
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Confirm PDF Generation',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Are you sure you want to generate this PDF report?',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green[200]!),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.calendar_today,
+                    color: Color(0xFF2D7204),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          range.startsWith('Monthly')
+                              ? 'Selected Month:'
+                              : 'Selected Time Range:',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.black54,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          displayRange,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            color: Color(0xFF2D7204),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'This will generate and download a PDF report with disease statistics, trends, and weather summary for the selected period.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.black54,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                fontSize: 15,
+                color: Colors.grey,
+              ),
+            ),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.check_circle, size: 20),
+            label: const Text('Yes, Generate PDF'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2D7204),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+            ),
+            onPressed: () {
+              Navigator.of(ctx).pop(); // Close confirmation dialog
+              Navigator.pop(context, {'range': range, 'pageSize': 'A4'}); // Close main dialog and return result
+            },
+          ),
+        ],
+      ),
     );
   }
 
