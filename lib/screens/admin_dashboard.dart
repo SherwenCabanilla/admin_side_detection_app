@@ -12,7 +12,6 @@ import '../services/scan_requests_service.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'settings.dart' as admin_settings;
-import 'package:shared_preferences/shared_preferences.dart';
 
 // --- Custom snapshot wrappers ---
 class UsersSnapshot {
@@ -77,9 +76,8 @@ class _AdminDashboardState extends State<AdminDashboard>
     'averageResponseTime': '0 hours',
   };
 
-  // Add selected time range for disease distribution
-  String _selectedTimeRange = 'Last 7 Days';
-
+  // Dashboard always shows current month data - no time range selection needed
+  
   // Dynamic admin name that updates from Firestore
   String _currentAdminName = '';
 
@@ -230,7 +228,7 @@ class _AdminDashboardState extends State<AdminDashboard>
     super.initState();
     _currentAdminName =
         widget.adminUser.username; // Initialize with current name
-    _loadSavedTimeRange();
+    // Dashboard always shows current month - no need to load saved time range
     _loadData();
     _listenToAdminNameChanges(); // Listen for real-time updates
   }
@@ -238,51 +236,11 @@ class _AdminDashboardState extends State<AdminDashboard>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Reload time range when navigating back to dashboard
-    _checkAndUpdateTimeRange();
+    // Dashboard always shows current month - no need to check saved time range
   }
 
-  Future<void> _checkAndUpdateTimeRange() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedRange = prefs.getString('selected_time_range');
-      if (savedRange != null &&
-          savedRange.isNotEmpty &&
-          savedRange != _selectedTimeRange) {
-        setState(() {
-          _selectedTimeRange = savedRange;
-        });
-        // Reload data with new time range
-        _loadDiseaseStats();
-        _loadReportsTrend();
-      }
-    } catch (e) {
-      print('Error checking time range in dashboard: $e');
-    }
-  }
-
-  Future<void> _loadSavedTimeRange() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedRange = prefs.getString('selected_time_range');
-      if (savedRange != null && savedRange.isNotEmpty) {
-        setState(() {
-          _selectedTimeRange = savedRange;
-        });
-      }
-    } catch (e) {
-      print('Error loading saved time range in dashboard: $e');
-    }
-  }
-
-  Future<void> _saveTimeRange(String timeRange) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('selected_time_range', timeRange);
-    } catch (e) {
-      print('Error saving time range in dashboard: $e');
-    }
-  }
+  // Removed time range sync methods - Dashboard always shows current month only
+  // The Reports page has its own independent time range management
 
   // Listen for real-time admin name changes
   void _listenToAdminNameChanges() {
@@ -345,9 +303,11 @@ class _AdminDashboardState extends State<AdminDashboard>
       final completedReports =
           await ScanRequestsService.getCompletedReportsCount();
       final pendingReports = await ScanRequestsService.getPendingReportsCount();
+      // Dashboard always shows current month data only
+      final currentMonthRange = _getCurrentMonthTimeRange();
       final averageResponseTime =
           await ScanRequestsService.getAverageResponseTime(
-            timeRange: 'Last 7 Days',
+            timeRange: currentMonthRange,
           );
 
       setState(() {
@@ -362,8 +322,10 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   Future<void> _loadReportsTrend() async {
     try {
+      // Dashboard always shows current month data only
+      final currentMonthRange = _getCurrentMonthTimeRange();
       final trend = await ScanRequestsService.getReportsTrend(
-        timeRange: 'Last 7 Days',
+        timeRange: currentMonthRange,
       );
       setState(() {
         _reportsTrend = trend;
@@ -373,10 +335,24 @@ class _AdminDashboardState extends State<AdminDashboard>
     }
   }
 
+  /// Get the current month time range string for dashboard
+  String _getCurrentMonthTimeRange() {
+    final now = DateTime.now();
+    final firstDayOfMonth = DateTime(now.year, now.month, 1);
+    final lastDayOfMonth = DateTime(now.year, now.month + 1, 0);
+    
+    final startStr = '${firstDayOfMonth.year}-${firstDayOfMonth.month.toString().padLeft(2, '0')}-${firstDayOfMonth.day.toString().padLeft(2, '0')}';
+    final endStr = '${lastDayOfMonth.year}-${lastDayOfMonth.month.toString().padLeft(2, '0')}-${lastDayOfMonth.day.toString().padLeft(2, '0')}';
+    
+    return 'Monthly ($startStr to $endStr)';
+  }
+
   Future<void> _loadDiseaseStats() async {
     try {
+      // Dashboard always shows current month data only
+      final currentMonthRange = _getCurrentMonthTimeRange();
       final stats = await ScanRequestsService.getDiseaseStats(
-        timeRange: _selectedTimeRange,
+        timeRange: currentMonthRange,
       );
       setState(() {
         _diseaseStats = stats;
@@ -387,8 +363,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Widget _buildDashboard() {
-    // Check if time range changed when building dashboard
-    _checkAndUpdateTimeRange();
+    // Dashboard always shows current month - no need to check for time range changes
 
     return SingleChildScrollView(
       child: Padding(
@@ -518,19 +493,11 @@ class _AdminDashboardState extends State<AdminDashboard>
             ),
             const SizedBox(height: 24),
 
-            // Disease Distribution Chart
+            // Disease Distribution Chart - Dashboard always shows current month
             DiseaseDistributionChart(
               diseaseStats: _diseaseStats,
-              selectedTimeRange: _selectedTimeRange,
-              onTimeRangeChanged: (String newTimeRange) async {
-                // Save and apply the time range without logging activity
-                await _saveTimeRange(newTimeRange);
-                setState(() {
-                  _selectedTimeRange = newTimeRange;
-                });
-                _loadDiseaseStats();
-                _loadReportsTrend();
-              },
+              selectedTimeRange: _getCurrentMonthTimeRange(),
+              onTimeRangeChanged: null, // Disable time range change in dashboard
             ),
             const SizedBox(height: 24),
 

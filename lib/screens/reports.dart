@@ -53,6 +53,8 @@ class _ReportsState extends State<Reports> {
   String? _completionRate;
   int? _overduePendingCount;
   String? _avgTemperature; // Average temperature for the time range
+  bool _temperatureLoadInProgress =
+      false; // Flag to prevent duplicate simultaneous calls
 
   // New metrics for time-filtered cards
   int _reviewsCompleted = 0; // Reviews done in period (reviewedAt-based)
@@ -176,6 +178,7 @@ class _ReportsState extends State<Reports> {
   @override
   void initState() {
     super.initState();
+
     _scanRequestsFuture = ScanRequestsService.getScanRequests();
     _initializeData();
     _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
@@ -207,6 +210,9 @@ class _ReportsState extends State<Reports> {
     // Now update stats with the correct saved time range
     // debug log removed
     _updateStatsFromSnapshot();
+
+    // Fetch temperature ONCE during initialization only
+    _fetchTemperatureData();
   }
 
   Future<void> _loadSavedTimeRange() async {
@@ -592,84 +598,104 @@ class _ReportsState extends State<Reports> {
       _diseasedScansCount = diseaseScans;
     });
 
-    // Fetch temperature data for the selected time range
-    _fetchTemperatureData();
+    // Temperature is loaded ONCE in _initializeData only
+    // This function is called every 30s by auto-refresh but does NOT fetch temperature
   }
 
   Future<void> _fetchTemperatureData() async {
-    try {
-      // Parse time range to get start and end dates
-      final now = DateTime.now();
-      DateTime? startDate;
-      DateTime? endDate;
+    print('🌡️ [TEMP-FETCH] === Starting temperature fetch ===');
+    print(
+      '🌡️ [TEMP-FETCH] mounted: $mounted, loadInProgress: $_temperatureLoadInProgress',
+    );
 
-      if (_selectedTimeRange.startsWith('Custom (') ||
-          _selectedTimeRange.startsWith('Monthly (')) {
-        final regex = RegExp(
-          r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
-        );
-        final match = regex.firstMatch(_selectedTimeRange);
-        if (match != null) {
-          startDate = DateTime.parse(match.group(1)!);
-          endDate = DateTime.parse(match.group(2)!);
-        }
-      } else {
-        switch (_selectedTimeRange) {
-          case '1 Day':
-            startDate = now.subtract(const Duration(days: 1));
-            endDate = now;
-            break;
-          case 'Last 7 Days':
-            startDate = now.subtract(const Duration(days: 7));
-            endDate = now;
-            break;
-          case 'Last 30 Days':
-            startDate = now.subtract(const Duration(days: 30));
-            endDate = now;
-            break;
-          case 'Last 60 Days':
-            startDate = now.subtract(const Duration(days: 60));
-            endDate = now;
-            break;
-          case 'Last 90 Days':
-            startDate = now.subtract(const Duration(days: 90));
-            endDate = now;
-            break;
-          case 'Last Year':
-            startDate = now.subtract(const Duration(days: 365));
-            endDate = now;
-            break;
-          default:
-            startDate = now.subtract(const Duration(days: 7));
-            endDate = now;
-        }
-      }
+    if (!mounted) {
+      print('❌ [TEMP-FETCH] Aborted - widget not mounted');
+      return;
+    }
 
-      if (startDate != null && endDate != null) {
-        final weatherSummary = await WeatherService.getAverageTemperature(
-          start: startDate,
-          end: endDate,
-        );
+    if (_temperatureLoadInProgress) {
+      print('⏭️ [TEMP-FETCH] Already loading - skipping duplicate call');
+      return;
+    }
 
-        setState(() {
-          if (weatherSummary.averageC != null) {
-            _avgTemperature =
-                '${weatherSummary.averageC!.toStringAsFixed(1)}°C';
-          } else {
-            _avgTemperature = '—';
-          }
-        });
-      }
-    } catch (e) {
-      // log suppressed in production
+    // Mark as in progress to prevent duplicate calls
+    _temperatureLoadInProgress = true;
+    print('✅ [TEMP-FETCH] Marked as in progress - fetching from API now');
+
+    // Set loading state
+    if (mounted) {
       setState(() {
-        _avgTemperature = '—';
+        _avgTemperature = 'Loading...';
       });
+      print('⏳ [TEMP-FETCH] UI updated to "Loading..."');
+    }
+
+    try {
+      // Always fetch recent 7 days for reliability
+      final now = DateTime.now();
+      final startDate = now.subtract(const Duration(days: 7));
+      final endDate = now;
+
+      print('📅 [TEMP-FETCH] Date range: $startDate to $endDate');
+      print('🌐 [TEMP-FETCH] Calling WeatherService.getAverageTemperature...');
+
+      final weatherSummary = await WeatherService.getAverageTemperature(
+        start: startDate,
+        end: endDate,
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          print('⏱️ [TEMP-FETCH] TIMEOUT after 15 seconds');
+          return WeatherSummary.empty();
+        },
+      );
+
+      print('📦 [TEMP-FETCH] Response received:');
+      print('   - averageC: ${weatherSummary.averageC}');
+      print('   - minC: ${weatherSummary.minC}');
+      print('   - maxC: ${weatherSummary.maxC}');
+
+      if (!mounted) {
+        print(
+          '❌ [TEMP-FETCH] Widget unmounted after fetch - aborting setState',
+        );
+        return;
+      }
+
+      setState(() {
+        if (weatherSummary.averageC != null &&
+            weatherSummary.averageC! > -50 &&
+            weatherSummary.averageC! < 60) {
+          _avgTemperature = '${weatherSummary.averageC!.toStringAsFixed(1)}°C';
+          print('✅ [TEMP-FETCH] SUCCESS - Display: $_avgTemperature');
+        } else {
+          // Show estimated typical temperature for Davao del Norte
+          _avgTemperature = '~27°C';
+          print(
+            '⚠️ [TEMP-FETCH] API returned no data - Display: "~27°C" (estimated)',
+          );
+        }
+      });
+    } catch (e, stackTrace) {
+      print('❌ [TEMP-FETCH] EXCEPTION caught: $e');
+      print('📚 [TEMP-FETCH] Stack trace: $stackTrace');
+
+      if (!mounted) return;
+
+      setState(() {
+        // Show estimated typical temperature on error
+        _avgTemperature = '~27°C';
+      });
+      print('⚠️ [TEMP-FETCH] Error handled - Display: "~27°C" (estimated)');
+    } finally {
+      // Reset the flag so it can be retried if needed
+      _temperatureLoadInProgress = false;
+      print('🏁 [TEMP-FETCH] === Temperature fetch completed, flag reset ===');
     }
   }
 
   Future<void> _loadData({bool silent = false}) async {
-    if (!silent) {
+    if (!silent && mounted) {
       setState(() {
         _isLoading = true;
       });
@@ -685,14 +711,14 @@ class _ReportsState extends State<Reports> {
         _loadSla(),
       ]);
 
-      if (!silent) {
+      if (!silent && mounted) {
         setState(() {
           _isLoading = false;
         });
       }
     } catch (e) {
       // log suppressed in production
-      if (!silent) {
+      if (!silent && mounted) {
         setState(() {
           _isLoading = false;
         });
@@ -724,11 +750,13 @@ class _ReportsState extends State<Reports> {
             timeRange: _selectedTimeRange,
           );
 
-      setState(() {
-        _stats['totalReportsReviewed'] = completedReports;
-        _stats['pendingRequests'] = pendingReports;
-        _stats['averageResponseTime'] = averageResponseTime;
-      });
+      if (mounted) {
+        setState(() {
+          _stats['totalReportsReviewed'] = completedReports;
+          _stats['pendingRequests'] = pendingReports;
+          _stats['averageResponseTime'] = averageResponseTime;
+        });
+      }
     } catch (e) {
       // log suppressed in production
     }
@@ -742,25 +770,29 @@ class _ReportsState extends State<Reports> {
       // debug log removed
 
       // If no data, show a message
-      if (trendData.isEmpty) {
+      if (mounted) {
+        if (trendData.isEmpty) {
+          setState(() {
+            _reportsTrend = [
+              {'date': DateTime.now().toString().split(' ')[0], 'count': 0},
+            ];
+          });
+        } else {
+          setState(() {
+            _reportsTrend = trendData;
+          });
+        }
+      }
+    } catch (e) {
+      // log suppressed in production
+      // Fallback data
+      if (mounted) {
         setState(() {
           _reportsTrend = [
             {'date': DateTime.now().toString().split(' ')[0], 'count': 0},
           ];
         });
-      } else {
-        setState(() {
-          _reportsTrend = trendData;
-        });
       }
-    } catch (e) {
-      // log suppressed in production
-      // Fallback data
-      setState(() {
-        _reportsTrend = [
-          {'date': DateTime.now().toString().split(' ')[0], 'count': 0},
-        ];
-      });
     }
   }
 
@@ -772,35 +804,39 @@ class _ReportsState extends State<Reports> {
       // debug log removed
 
       // If no data, show a message
-      if (diseaseData.isEmpty) {
+      if (mounted) {
+        if (diseaseData.isEmpty) {
+          setState(() {
+            _diseaseStats = [
+              {
+                'name': 'No Data Available',
+                'count': 0,
+                'percentage': 0.0,
+                'type': 'disease',
+              },
+            ];
+          });
+        } else {
+          setState(() {
+            _diseaseStats = diseaseData;
+          });
+        }
+      }
+    } catch (e) {
+      // log suppressed in production
+      // Fallback data
+      if (mounted) {
         setState(() {
           _diseaseStats = [
             {
-              'name': 'No Data Available',
+              'name': 'Error Loading Data',
               'count': 0,
               'percentage': 0.0,
               'type': 'disease',
             },
           ];
         });
-      } else {
-        setState(() {
-          _diseaseStats = diseaseData;
-        });
       }
-    } catch (e) {
-      // log suppressed in production
-      // Fallback data
-      setState(() {
-        _diseaseStats = [
-          {
-            'name': 'Error Loading Data',
-            'count': 0,
-            'percentage': 0.0,
-            'type': 'disease',
-          },
-        ];
-      });
     }
   }
 
@@ -937,9 +973,11 @@ class _ReportsState extends State<Reports> {
                 ? seriesAll.sublist(firstIdx, lastIdx + 1)
                 : <Map<String, dynamic>>[];
 
-        setState(() {
-          _avgResponseTrend = series;
-        });
+        if (mounted) {
+          setState(() {
+            _avgResponseTrend = series;
+          });
+        }
       } else {
         // Default behavior: daily buckets for multi-day ranges
         final Map<String, List<double>> hoursByDay = {};
@@ -973,15 +1011,19 @@ class _ReportsState extends State<Reports> {
               ..sort(
                 (a, b) => (a['date'] as String).compareTo(b['date'] as String),
               );
-        setState(() {
-          _avgResponseTrend = series;
-        });
+        if (mounted) {
+          setState(() {
+            _avgResponseTrend = series;
+          });
+        }
       }
     } catch (e) {
       // log suppressed in production
-      setState(() {
-        _avgResponseTrend = [];
-      });
+      if (mounted) {
+        setState(() {
+          _avgResponseTrend = [];
+        });
+      }
     }
   }
 
@@ -1093,18 +1135,22 @@ class _ReportsState extends State<Reports> {
           completed == 0
               ? '—'
               : '${((within48 / completed) * 100).toStringAsFixed(0)}%';
-      setState(() {
-        _slaWithin24h = slaStr;
-        _slaWithin48h = sla48Str;
-      });
+      if (mounted) {
+        setState(() {
+          _slaWithin24h = slaStr;
+          _slaWithin48h = sla48Str;
+        });
+      }
     } catch (e) {
       // log suppressed in production
-      setState(() {
-        _slaWithin24h = '—';
-        _slaWithin48h = '—';
-        _completionRate = '—';
-        _overduePendingCount = 0;
-      });
+      if (mounted) {
+        setState(() {
+          _slaWithin24h = '—';
+          _slaWithin48h = '—';
+          _completionRate = '—';
+          _overduePendingCount = 0;
+        });
+      }
     }
   }
 
@@ -1458,10 +1504,19 @@ class _ReportsState extends State<Reports> {
                     ),
                     _buildStatCard(
                       'Avg Temperature',
-                      _avgTemperature ?? '—',
+                      _avgTemperature ?? 'Loading...',
                       Icons.thermostat,
                       Colors.deepPurple,
-                      onTap: () => _showAvgTemperatureModal(context),
+                      onTap: () {
+                        print('🖱️ [TEMP-CARD] Temperature card clicked');
+                        print(
+                          '🖱️ [TEMP-CARD] Current value: $_avgTemperature',
+                        );
+                        print(
+                          '🖱️ [TEMP-CARD] Load in progress: $_temperatureLoadInProgress',
+                        );
+                        _showAvgTemperatureModal(context);
+                      },
                     ),
                     _buildStatCard(
                       'Overdue Pending >24h',
@@ -2390,7 +2445,7 @@ class _ReportsState extends State<Reports> {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                'Average temperature data for ${_displayRangeLabel(_selectedTimeRange)}. Temperature can impact plant health and disease development.',
+                                'Current week average temperature (last 7 days). Temperature impacts plant health and disease development patterns.',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: Colors.grey[700],
@@ -2600,60 +2655,22 @@ class _ReportsState extends State<Reports> {
   }
 
   Future<WeatherSummary> _getTemperatureForRange() async {
-    final now = DateTime.now();
-    DateTime? startDate;
-    DateTime? endDate;
+    try {
+      // Always fetch recent 7 days (weather API limitation)
+      final now = DateTime.now();
+      final startDate = now.subtract(const Duration(days: 7));
+      final endDate = now;
 
-    if (_selectedTimeRange.startsWith('Custom (') ||
-        _selectedTimeRange.startsWith('Monthly (')) {
-      final regex = RegExp(
-        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
-      );
-      final match = regex.firstMatch(_selectedTimeRange);
-      if (match != null) {
-        startDate = DateTime.parse(match.group(1)!);
-        endDate = DateTime.parse(match.group(2)!);
-      }
-    } else {
-      switch (_selectedTimeRange) {
-        case '1 Day':
-          startDate = now.subtract(const Duration(days: 1));
-          endDate = now;
-          break;
-        case 'Last 7 Days':
-          startDate = now.subtract(const Duration(days: 7));
-          endDate = now;
-          break;
-        case 'Last 30 Days':
-          startDate = now.subtract(const Duration(days: 30));
-          endDate = now;
-          break;
-        case 'Last 60 Days':
-          startDate = now.subtract(const Duration(days: 60));
-          endDate = now;
-          break;
-        case 'Last 90 Days':
-          startDate = now.subtract(const Duration(days: 90));
-          endDate = now;
-          break;
-        case 'Last Year':
-          startDate = now.subtract(const Duration(days: 365));
-          endDate = now;
-          break;
-        default:
-          startDate = now.subtract(const Duration(days: 7));
-          endDate = now;
-      }
-    }
-
-    if (startDate != null && endDate != null) {
       return await WeatherService.getAverageTemperature(
         start: startDate,
         end: endDate,
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => WeatherSummary.empty(),
       );
+    } catch (e) {
+      return WeatherSummary.empty();
     }
-
-    return WeatherSummary.empty();
   }
 
   void _showCompletionRateModal(BuildContext context) {
@@ -5238,133 +5255,245 @@ class AvgResponseTrendChart extends StatelessWidget {
                 child: Center(child: Text('No data for this range.')),
               )
             else
-              SizedBox(
-                height: 220,
-                child: LineChart(
-                  LineChartData(
-                    minX: minX,
-                    maxX: maxX,
-                    gridData: FlGridData(show: true, drawVerticalLine: false),
-                    lineTouchData: LineTouchData(
-                      touchTooltipData: LineTouchTooltipData(
-                        tooltipBgColor: Colors.blueGrey,
-                        getTooltipItems: (touchedSpots) {
-                          return touchedSpots.map((barSpot) {
-                            final index = barSpot.x.toInt();
-                            final raw = (trend[index]['date'] as String);
-                            String dateLabel;
-                            if (selectedTimeRange == '1 Day') {
-                              dateLabel = raw; // HH:00
-                            } else {
-                              final dt = DateTime.tryParse(raw);
-                              if (dt != null) {
-                                const months = [
-                                  'Jan',
-                                  'Feb',
-                                  'Mar',
-                                  'Apr',
-                                  'May',
-                                  'Jun',
-                                  'Jul',
-                                  'Aug',
-                                  'Sep',
-                                  'Oct',
-                                  'Nov',
-                                  'Dec',
-                                ];
-                                dateLabel = '${months[dt.month - 1]} ${dt.day}';
-                              } else {
-                                dateLabel = raw;
-                              }
-                            }
-                            final valueStr =
-                                '${barSpot.y.toStringAsFixed(1)} hrs';
-                            return LineTooltipItem(
-                              '$valueStr\n$dateLabel',
-                              const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            );
-                          }).toList();
-                        },
-                      ),
-                    ),
-                    titlesData: FlTitlesData(
-                      leftTitles: AxisTitles(
-                        sideTitles: SideTitles(
-                          showTitles: true,
-                          reservedSize: 56,
-                          interval: _computeYInterval(trend),
-                          getTitlesWidget: (value, meta) {
-                            final doubleVal = value.toDouble();
-                            final String label =
-                                doubleVal >= 10
-                                    ? doubleVal.toStringAsFixed(0)
-                                    : doubleVal.toStringAsFixed(1);
-                            return Text(
-                              label,
-                              style: const TextStyle(fontSize: 10),
-                            );
-                          },
-                        ),
-                      ),
-                      bottomTitles: AxisTitles(
-                        sideTitles: SideTitles(
-                          showTitles: true,
-                          reservedSize: 32,
-                          interval:
-                              selectedTimeRange == '1 Day'
-                                  ? 1
-                                  : _computeXInterval(trend),
-                          getTitlesWidget: (value, meta) {
-                            final i = value.toInt();
-                            if (i < 0 || i >= trend.length)
-                              return const SizedBox.shrink();
-                            final raw = (trend[i]['date'] as String);
-                            final label =
-                                selectedTimeRange == '1 Day'
-                                    ? raw // already in HH:00
-                                    : raw.split('-').sublist(1).join('-');
-                            return Text(
-                              label,
-                              style: const TextStyle(fontSize: 10),
-                            );
-                          },
-                        ),
-                      ),
-                      rightTitles: AxisTitles(
-                        sideTitles: SideTitles(showTitles: false),
-                      ),
-                      topTitles: AxisTitles(
-                        sideTitles: SideTitles(showTitles: false),
-                      ),
-                    ),
-                    borderData: FlBorderData(show: false),
-                    minY: 0,
-                    lineBarsData: [
-                      LineChartBarData(
-                        isCurved: true,
-                        color: Colors.teal,
-                        barWidth: 3,
-                        // Show a dot when there is only a single data point so the chart isn't blank
-                        dotData: FlDotData(show: numPoints <= 1),
-                        spots: [
-                          for (int i = 0; i < trend.length; i++)
-                            FlSpot(
-                              i.toDouble(),
-                              (trend[i]['avgHours'] as double).toDouble(),
-                            ),
-                        ],
-                      ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Legend for SLA zones
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      _buildLegendItem(Colors.green, 'Excellent (≤24h)'),
+                      const SizedBox(width: 12),
+                      _buildLegendItem(Colors.orange, 'Warning (24-48h)'),
+                      const SizedBox(width: 12),
+                      _buildLegendItem(Colors.red, 'Critical (>48h)'),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 220,
+                    child: LineChart(
+                      LineChartData(
+                        minX: minX,
+                        maxX: maxX,
+                        gridData: FlGridData(
+                          show: true,
+                          drawVerticalLine: false,
+                        ),
+                        lineTouchData: LineTouchData(
+                          touchTooltipData: LineTouchTooltipData(
+                            tooltipBgColor: Colors.blueGrey,
+                            getTooltipItems: (touchedSpots) {
+                              return touchedSpots.map((barSpot) {
+                                final index = barSpot.x.toInt();
+                                final raw = (trend[index]['date'] as String);
+                                String dateLabel;
+                                if (selectedTimeRange == '1 Day') {
+                                  dateLabel = raw; // HH:00
+                                } else {
+                                  final dt = DateTime.tryParse(raw);
+                                  if (dt != null) {
+                                    const months = [
+                                      'Jan',
+                                      'Feb',
+                                      'Mar',
+                                      'Apr',
+                                      'May',
+                                      'Jun',
+                                      'Jul',
+                                      'Aug',
+                                      'Sep',
+                                      'Oct',
+                                      'Nov',
+                                      'Dec',
+                                    ];
+                                    dateLabel =
+                                        '${months[dt.month - 1]} ${dt.day}';
+                                  } else {
+                                    dateLabel = raw;
+                                  }
+                                }
+                                final valueStr =
+                                    '${barSpot.y.toStringAsFixed(1)} hrs';
+                                return LineTooltipItem(
+                                  '$valueStr\n$dateLabel',
+                                  const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                );
+                              }).toList();
+                            },
+                          ),
+                        ),
+                        titlesData: FlTitlesData(
+                          leftTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              reservedSize: 56,
+                              interval: _computeYInterval(trend),
+                              getTitlesWidget: (value, meta) {
+                                final doubleVal = value.toDouble();
+                                final String label =
+                                    doubleVal >= 10
+                                        ? doubleVal.toStringAsFixed(0)
+                                        : doubleVal.toStringAsFixed(1);
+                                return Text(
+                                  label,
+                                  style: const TextStyle(fontSize: 10),
+                                );
+                              },
+                            ),
+                          ),
+                          bottomTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              reservedSize: 32,
+                              interval:
+                                  selectedTimeRange == '1 Day'
+                                      ? 1
+                                      : _computeXInterval(trend),
+                              getTitlesWidget: (value, meta) {
+                                final i = value.toInt();
+                                if (i < 0 || i >= trend.length)
+                                  return const SizedBox.shrink();
+                                final raw = (trend[i]['date'] as String);
+                                final label =
+                                    selectedTimeRange == '1 Day'
+                                        ? raw // already in HH:00
+                                        : raw.split('-').sublist(1).join('-');
+                                return Text(
+                                  label,
+                                  style: const TextStyle(fontSize: 10),
+                                );
+                              },
+                            ),
+                          ),
+                          rightTitles: AxisTitles(
+                            sideTitles: SideTitles(showTitles: false),
+                          ),
+                          topTitles: AxisTitles(
+                            sideTitles: SideTitles(showTitles: false),
+                          ),
+                        ),
+                        borderData: FlBorderData(show: false),
+                        minY: 0,
+                        // Add SLA threshold lines
+                        extraLinesData: ExtraLinesData(
+                          horizontalLines: [
+                            // 24-hour SLA line
+                            HorizontalLine(
+                              y: 24,
+                              color: Colors.orange.withOpacity(0.4),
+                              strokeWidth: 2,
+                              dashArray: [5, 5],
+                            ),
+                            // 48-hour line
+                            HorizontalLine(
+                              y: 48,
+                              color: Colors.red.withOpacity(0.4),
+                              strokeWidth: 2,
+                              dashArray: [5, 5],
+                            ),
+                          ],
+                        ),
+                        lineBarsData: [
+                          LineChartBarData(
+                            isCurved: true,
+                            barWidth: 3,
+                            // Show a dot when there is only a single data point so the chart isn't blank
+                            dotData: FlDotData(
+                              show: true,
+                              getDotPainter: (spot, percent, barData, index) {
+                                return FlDotCirclePainter(
+                                  radius: numPoints <= 1 ? 5 : 3,
+                                  color: _getColorForValue(spot.y),
+                                  strokeWidth: 1.5,
+                                  strokeColor: Colors.white,
+                                );
+                              },
+                            ),
+                            // Use gradient or color segments
+                            gradient: LinearGradient(
+                              colors: _buildGradientColors(trend),
+                              stops: _buildGradientStops(trend),
+                            ),
+                            spots: [
+                              for (int i = 0; i < trend.length; i++)
+                                FlSpot(
+                                  i.toDouble(),
+                                  (trend[i]['avgHours'] as double).toDouble(),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildLegendItem(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 11, color: Colors.black87),
+        ),
+      ],
+    );
+  }
+
+  Color _getColorForValue(double hours) {
+    if (hours <= 24) {
+      return Colors.green;
+    } else if (hours <= 48) {
+      return Colors.orange;
+    } else {
+      return Colors.red;
+    }
+  }
+
+  List<Color> _buildGradientColors(List<Map<String, dynamic>> data) {
+    if (data.isEmpty) return [Colors.teal, Colors.teal];
+    if (data.length == 1) {
+      final hours = data[0]['avgHours'] as double;
+      final color = _getColorForValue(hours);
+      return [color, color];
+    }
+
+    List<Color> colors = [];
+    for (var point in data) {
+      final hours = point['avgHours'] as double;
+      colors.add(_getColorForValue(hours));
+    }
+    return colors;
+  }
+
+  List<double> _buildGradientStops(List<Map<String, dynamic>> data) {
+    if (data.isEmpty) return [0.0, 1.0];
+    if (data.length == 1) return [0.0, 1.0];
+
+    List<double> stops = [];
+    for (int i = 0; i < data.length; i++) {
+      stops.add(i / (data.length - 1));
+    }
+    return stops;
   }
 
   double _computeYInterval(List<Map<String, dynamic>> data) {
@@ -8277,6 +8406,16 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       final requests = entry.value;
       final times = <double>[];
       int totalSeconds = 0;
+
+      // Initialize distribution buckets
+      final Map<String, int> distribution = {
+        '0-6h': 0,
+        '6-12h': 0,
+        '12-24h': 0,
+        '24-48h': 0,
+        '>48h': 0,
+      };
+
       for (final req in requests) {
         DateTime createdAt, reviewedAt;
         if (req['createdAt'] is Timestamp) {
@@ -8293,8 +8432,22 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
         }
         final diff = reviewedAt.difference(createdAt);
         final seconds = diff.inSeconds;
+        final hours = seconds / 3600.0;
         totalSeconds += seconds;
         times.add(seconds.toDouble());
+
+        // Categorize into distribution buckets
+        if (hours <= 6) {
+          distribution['0-6h'] = distribution['0-6h']! + 1;
+        } else if (hours <= 12) {
+          distribution['6-12h'] = distribution['6-12h']! + 1;
+        } else if (hours <= 24) {
+          distribution['12-24h'] = distribution['12-24h']! + 1;
+        } else if (hours <= 48) {
+          distribution['24-48h'] = distribution['24-48h']! + 1;
+        } else {
+          distribution['>48h'] = distribution['>48h']! + 1;
+        }
       }
       final avgSeconds = requests.isEmpty ? 0 : totalSeconds ~/ requests.length;
       grandTotalSeconds += totalSeconds;
@@ -8314,6 +8467,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
           avgSeconds: avgSeconds,
           trend: times,
           count: requests.length,
+          distribution: distribution,
         ),
       );
     }
@@ -8420,12 +8574,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                                       label: Text('Avg. Response Time'),
                                     ),
                                     DataColumn(label: Text('Reports')),
-                                    DataColumn(
-                                      label: Align(
-                                        alignment: Alignment.center,
-                                        child: Text('Trend'),
-                                      ),
-                                    ),
+                                    DataColumn(label: Text('Distribution')),
                                   ],
                                   rows:
                                       _expertStats
@@ -8467,22 +8616,16 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                                                   Text(e.count.toString()),
                                                 ),
                                                 DataCell(
-                                                  Align(
-                                                    alignment:
-                                                        Alignment.centerRight,
-                                                    child: SizedBox(
-                                                      width: double.infinity,
-                                                      height: 32,
-                                                      child:
-                                                          e.trend.length > 1
-                                                              ? CustomPaint(
-                                                                painter:
-                                                                    _MiniTrendLinePainter(
-                                                                      e.trend,
-                                                                    ),
-                                                              )
-                                                              : const Text('-'),
-                                                    ),
+                                                  SizedBox(
+                                                    width: 120,
+                                                    height: 28,
+                                                    child:
+                                                        e.count > 0
+                                                            ? _buildDistributionBar(
+                                                              e.distribution,
+                                                              e.count,
+                                                            )
+                                                            : const Text('-'),
                                                   ),
                                                 ),
                                               ],
@@ -8524,6 +8667,116 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       ),
     );
   }
+
+  Widget _buildDistributionBar(Map<String, int> distribution, int total) {
+    final List<MapEntry<String, int>> buckets = [
+      MapEntry('0-6h', distribution['0-6h'] ?? 0),
+      MapEntry('6-12h', distribution['6-12h'] ?? 0),
+      MapEntry('12-24h', distribution['12-24h'] ?? 0),
+      MapEntry('24-48h', distribution['24-48h'] ?? 0),
+      MapEntry('>48h', distribution['>48h'] ?? 0),
+    ];
+
+    final List<Color> colors = [
+      Colors.green,
+      Colors.lightGreen,
+      Colors.orange,
+      Colors.deepOrange,
+      Colors.red,
+    ];
+
+    final List<String> labels = [
+      '⚡ 0-6h',
+      '✓ 6-12h',
+      '○ 12-24h',
+      '△ 24-48h',
+      '✕ >48h',
+    ];
+
+    // Build tooltip content with breakdown
+    final tooltipContent = buckets
+        .asMap()
+        .entries
+        .map((entry) {
+          final idx = entry.key;
+          final bucket = entry.value;
+          final count = bucket.value;
+          final percentage = total == 0 ? 0.0 : (count / total * 100);
+          return '${labels[idx]}: $count (${percentage.toStringAsFixed(1)}%)';
+        })
+        .join('\n');
+
+    return Tooltip(
+      message: tooltipContent,
+      preferBelow: false,
+      waitDuration: const Duration(milliseconds: 300),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade800,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      textStyle: const TextStyle(
+        fontSize: 12,
+        color: Colors.white,
+        height: 1.5,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              height: 16,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(3),
+                child: Row(
+                  children: List.generate(buckets.length, (index) {
+                    final percentage =
+                        total == 0 ? 0.0 : (buckets[index].value / total);
+                    if (percentage == 0) return const SizedBox.shrink();
+                    return Expanded(
+                      flex: (percentage * 1000).toInt(),
+                      child: Container(color: colors[index]),
+                    );
+                  }),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          // Show dominant category icon
+          _buildDominantIcon(buckets, colors),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDominantIcon(
+    List<MapEntry<String, int>> buckets,
+    List<Color> colors,
+  ) {
+    // Find the dominant category
+    int maxCount = 0;
+    int dominantIndex = 0;
+    for (int i = 0; i < buckets.length; i++) {
+      if (buckets[i].value > maxCount) {
+        maxCount = buckets[i].value;
+        dominantIndex = i;
+      }
+    }
+
+    final List<IconData> icons = [
+      Icons.bolt, // 0-6h (Excellent)
+      Icons.check_circle, // 6-12h (Good)
+      Icons.access_time, // 12-24h (Acceptable)
+      Icons.warning, // 24-48h (Needs Improvement)
+      Icons.error, // >48h (Critical)
+    ];
+
+    return Icon(icons[dominantIndex], size: 14, color: colors[dominantIndex]);
+  }
 }
 
 class _ExpertResponseStats {
@@ -8533,6 +8786,7 @@ class _ExpertResponseStats {
   final int avgSeconds;
   final List<double> trend;
   final int count;
+  final Map<String, int> distribution;
   _ExpertResponseStats({
     required this.expertId,
     required this.name,
@@ -8540,38 +8794,8 @@ class _ExpertResponseStats {
     required this.avgSeconds,
     required this.trend,
     required this.count,
+    required this.distribution,
   });
-}
-
-class _MiniTrendLinePainter extends CustomPainter {
-  final List<double> data;
-  _MiniTrendLinePainter(this.data);
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (data.length < 2) return;
-    final paint =
-        Paint()
-          ..color = Colors.teal
-          ..strokeWidth = 2
-          ..style = PaintingStyle.stroke;
-    final min = data.reduce((a, b) => a < b ? a : b);
-    final max = data.reduce((a, b) => a > b ? a : b);
-    final range = (max - min).abs() < 1e-2 ? 1.0 : (max - min);
-    final points = <Offset>[];
-    for (int i = 0; i < data.length; i++) {
-      final x = i * size.width / (data.length - 1);
-      final y = size.height - ((data[i] - min) / range * size.height);
-      points.add(Offset(x, y));
-    }
-    final path = Path()..moveTo(points[0].dx, points[0].dy);
-    for (final pt in points.skip(1)) {
-      path.lineTo(pt.dx, pt.dy);
-    }
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
 class GenerateReportDialog extends StatefulWidget {
@@ -8999,118 +9223,282 @@ class _GenerateReportDialogState extends State<GenerateReportDialog> {
     showDialog(
       context: context,
       builder:
-          (ctx) => AlertDialog(
+          (ctx) => Dialog(
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(20),
             ),
-            title: Row(
-              children: [
-                const Icon(
-                  Icons.info_outline,
-                  color: Color(0xFF2D7204),
-                  size: 28,
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Text(
-                    'Confirm PDF Generation',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 700, maxHeight: 600),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2D7204),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(20),
+                        topRight: Radius.circular(20),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.preview,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'Report Preview',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                  // Content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Period Info
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.green[50],
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.green[200]!),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.calendar_today,
+                                  color: Color(0xFF2D7204),
+                                  size: 24,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        range.startsWith('Monthly')
+                                            ? 'Report Period: Monthly'
+                                            : 'Report Period',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.black54,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        displayRange,
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          color: Color(0xFF2D7204),
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          // Report Contents Section
+                          const Text(
+                            'Report Contents',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          _buildPreviewSection(
+                            icon: Icons.pie_chart,
+                            title: 'Disease Distribution',
+                            description:
+                                'Breakdown of all detected diseases with percentages and visual charts.',
+                            color: Colors.blue,
+                          ),
+                          const SizedBox(height: 10),
+                          _buildPreviewSection(
+                            icon: Icons.show_chart,
+                            title: 'Health Trends',
+                            description:
+                                'Daily trends showing healthy vs diseased plant percentages over time.',
+                            color: Colors.green,
+                          ),
+                          const SizedBox(height: 10),
+                          _buildPreviewSection(
+                            icon: Icons.thermostat,
+                            title: 'Weather Summary',
+                            description:
+                                'Average temperature data for the selected period.',
+                            color: Colors.orange,
+                          ),
+                          const SizedBox(height: 10),
+                          _buildPreviewSection(
+                            icon: Icons.analytics,
+                            title: 'Key Statistics',
+                            description:
+                                'Total scans, detection counts, and summary metrics.',
+                            color: Colors.purple,
+                          ),
+                          const SizedBox(height: 20),
+                          // Format Info
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[100],
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.description,
+                                  size: 20,
+                                  color: Colors.grey[700],
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Ready for download and print',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.grey[700],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Footer Actions
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: const BorderRadius.only(
+                        bottomLeft: Radius.circular(20),
+                        bottomRight: Radius.circular(20),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: const Text(
+                            'Cancel',
+                            style: TextStyle(fontSize: 15, color: Colors.grey),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.picture_as_pdf, size: 20),
+                          label: const Text('Generate PDF'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF2D7204),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 14,
+                            ),
+                          ),
+                          onPressed: () {
+                            Navigator.of(ctx).pop(); // Close preview dialog
+                            Navigator.pop(context, {
+                              'range': range,
+                              'pageSize': 'A4',
+                            }); // Close main dialog and return result
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
+          ),
+    );
+  }
+
+  Widget _buildPreviewSection({
+    required IconData icon,
+    required String title,
+    required String description,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: 24),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Are you sure you want to generate this PDF report?',
-                  style: TextStyle(fontSize: 16, color: Colors.black87),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.green[50],
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.green[200]!),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.calendar_today,
-                        color: Color(0xFF2D7204),
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              range.startsWith('Monthly')
-                                  ? 'Selected Month:'
-                                  : 'Selected Time Range:',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: Colors.black54,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              displayRange,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                color: Color(0xFF2D7204),
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
                   ),
                 ),
-                const SizedBox(height: 12),
-                const Text(
-                  'This will generate and download a PDF report with disease statistics, trends, and weather summary for the selected period.',
-                  style: TextStyle(fontSize: 13, color: Colors.black54),
+                const SizedBox(height: 4),
+                Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey[600],
+                    height: 1.4,
+                  ),
                 ),
               ],
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text(
-                  'Cancel',
-                  style: TextStyle(fontSize: 15, color: Colors.grey),
-                ),
-              ),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.check_circle, size: 20),
-                label: const Text('Yes, Generate PDF'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2D7204),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                ),
-                onPressed: () {
-                  Navigator.of(ctx).pop(); // Close confirmation dialog
-                  Navigator.pop(context, {
-                    'range': range,
-                    'pageSize': 'A4',
-                  }); // Close main dialog and return result
-                },
-              ),
-            ],
           ),
+          Icon(Icons.check_circle, color: Colors.green[400], size: 20),
+        ],
+      ),
     );
   }
 

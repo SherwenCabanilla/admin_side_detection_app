@@ -171,9 +171,12 @@ class WeatherService {
     );
 
     try {
+      print('🌐 Weather API Request: $uri');
       final resp = await http.get(uri);
+      print('📡 Weather API Response: ${resp.statusCode}');
 
       if (resp.statusCode != 200) {
+        print('❌ Weather API Error: ${resp.statusCode} - ${resp.body}');
         // If archive fails, try forecast as fallback (for edge cases)
         if (endpoint == 'archive') {
           // Try forecast endpoint as fallback (though it won't work for old dates)
@@ -202,16 +205,27 @@ class WeatherService {
 
       final data = json.decode(resp.body) as Map<String, dynamic>;
       final daily = data['daily'] as Map<String, dynamic>?;
-      if (daily == null) return WeatherSummary.empty();
+      if (daily == null) {
+        print('❌ No daily data in response');
+        return WeatherSummary.empty();
+      }
 
       final List tempsMax = daily['temperature_2m_max'] as List? ?? [];
       final List tempsMin = daily['temperature_2m_min'] as List? ?? [];
 
-      // Check if we have any valid data (arrays might contain null values)
-      if (tempsMax.isEmpty && tempsMin.isEmpty) return WeatherSummary.empty();
+      print('🌡️ API returned temps - Max: $tempsMax, Min: $tempsMin');
 
-      return _processTemperatureData(tempsMax, tempsMin);
+      // Check if we have any valid data (arrays might contain null values)
+      if (tempsMax.isEmpty && tempsMin.isEmpty) {
+        print('❌ Temperature arrays are empty');
+        return WeatherSummary.empty();
+      }
+
+      final result = _processTemperatureData(tempsMax, tempsMin);
+      print('✅ Processed temperature: ${result.averageC}°C');
+      return result;
     } catch (e) {
+      print('❌ Weather API Exception: $e');
       // If archive fails, try forecast as fallback (though unlikely to work for historical dates)
       if (endpoint == 'archive') {
         try {
