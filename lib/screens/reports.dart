@@ -2115,35 +2115,35 @@ class _ReportsState extends State<Reports> {
                                 child: Column(
                                   children: [
                                     _buildResponseTimeBucket(
-                                      '⚡ 0-6 hours (Excellent)',
+                                      ' 0-6 hours (Excellent)',
                                       buckets['0-6h']!,
                                       completed,
                                       Colors.green,
                                     ),
                                     const SizedBox(height: 8),
                                     _buildResponseTimeBucket(
-                                      '✓ 6-12 hours (Good)',
+                                      ' 6-12 hours (Good)',
                                       buckets['6-12h']!,
                                       completed,
                                       Colors.lightGreen,
                                     ),
                                     const SizedBox(height: 8),
                                     _buildResponseTimeBucket(
-                                      '○ 12-24 hours (Acceptable)',
+                                      ' 12-24 hours (Acceptable)',
                                       buckets['12-24h']!,
                                       completed,
                                       Colors.orange,
                                     ),
                                     const SizedBox(height: 8),
                                     _buildResponseTimeBucket(
-                                      '△ 24-48 hours (Needs Improvement)',
+                                      ' 24-48 hours (Needs Improvement)',
                                       buckets['24-48h']!,
                                       completed,
                                       Colors.deepOrange,
                                     ),
                                     const SizedBox(height: 8),
                                     _buildResponseTimeBucket(
-                                      '✕ >48 hours (Critical)',
+                                      ' >48 hours (Critical)',
                                       buckets['>48h']!,
                                       completed,
                                       Colors.red,
@@ -5248,7 +5248,7 @@ class _StatCardWithWarningState extends State<_StatCardWithWarning>
   }
 }
 
-class AvgResponseTrendChart extends StatelessWidget {
+class AvgResponseTrendChart extends StatefulWidget {
   final List<Map<String, dynamic>> trend;
   final String selectedTimeRange;
 
@@ -5257,6 +5257,32 @@ class AvgResponseTrendChart extends StatelessWidget {
     required this.trend,
     required this.selectedTimeRange,
   }) : super(key: key);
+
+  @override
+  State<AvgResponseTrendChart> createState() => _AvgResponseTrendChartState();
+}
+
+class _AvgResponseTrendChartState extends State<AvgResponseTrendChart> {
+  String _chartMode = 'line'; // 'line' | 'bar'
+  late Future<List<Map<String, dynamic>>> _scanRequestsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    // Cache the future to prevent infinite loading
+    _scanRequestsFuture = ScanRequestsService.getScanRequests();
+
+    // Load persisted chart mode
+    () async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final saved = prefs.getString('chart_mode_avg_response');
+        if (saved == 'bar' || saved == 'line') {
+          if (mounted) setState(() => _chartMode = saved!);
+        }
+      } catch (_) {}
+    }();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -5326,8 +5352,8 @@ class AvgResponseTrendChart extends StatelessWidget {
       return range;
     }
 
-    final isEmpty = trend.isEmpty;
-    final int numPoints = trend.length;
+    final isEmpty = widget.trend.isEmpty;
+    final int numPoints = widget.trend.length;
     final double minX = numPoints == 1 ? -0.5 : 0.0;
     final double maxX =
         numPoints == 1
@@ -5344,10 +5370,16 @@ class AvgResponseTrendChart extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Avg Expert Response (hrs)',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                Text(
+                  _chartMode == 'line'
+                      ? 'Avg Expert Response (hrs)'
+                      : 'Response Time Distribution',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
+                const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -5358,11 +5390,47 @@ class AvgResponseTrendChart extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    _displayRangeLabel(selectedTimeRange),
+                    _displayRangeLabel(widget.selectedTimeRange),
                     style: TextStyle(
                       color: Colors.grey[700],
                       fontWeight: FontWeight.w500,
                     ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey[300]!),
+                  ),
+                  child: DropdownButton<String>(
+                    value: _chartMode,
+                    underline: const SizedBox(),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'line',
+                        child: Text('Trend (Line)'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'bar',
+                        child: Text('Distribution (Bar)'),
+                      ),
+                    ],
+                    onChanged: (v) async {
+                      if (v == null) return;
+                      setState(() {
+                        _chartMode = v;
+                      });
+                      try {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setString('chart_mode_avg_response', v);
+                      } catch (_) {}
+                    },
                   ),
                 ),
               ],
@@ -5374,222 +5442,523 @@ class AvgResponseTrendChart extends StatelessWidget {
                 child: Center(child: Text('No data for this range.')),
               )
             else
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Legend for SLA zones
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+              _chartMode == 'line'
+                  ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildLegendItem(Colors.green, 'Excellent (≤24h)'),
-                      const SizedBox(width: 12),
-                      _buildLegendItem(Colors.orange, 'Warning (24-48h)'),
-                      const SizedBox(width: 12),
-                      _buildLegendItem(Colors.red, 'Critical (>48h)'),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    height: 220,
-                    child: LineChart(
-                      LineChartData(
-                        minX: minX,
-                        maxX: maxX,
-                        gridData: FlGridData(
-                          show: true,
-                          drawVerticalLine: false,
-                        ),
-                        lineTouchData: LineTouchData(
-                          touchTooltipData: LineTouchTooltipData(
-                            tooltipBgColor: Colors.blueGrey,
-                            getTooltipItems: (touchedSpots) {
-                              return touchedSpots.map((barSpot) {
-                                final index = barSpot.x.toInt();
-                                final raw = (trend[index]['date'] as String);
-                                String dateLabel;
-                                if (selectedTimeRange == '1 Day') {
-                                  dateLabel = raw; // HH:00
-                                } else {
-                                  final dt = DateTime.tryParse(raw);
-                                  if (dt != null) {
-                                    const months = [
-                                      'Jan',
-                                      'Feb',
-                                      'Mar',
-                                      'Apr',
-                                      'May',
-                                      'Jun',
-                                      'Jul',
-                                      'Aug',
-                                      'Sep',
-                                      'Oct',
-                                      'Nov',
-                                      'Dec',
-                                    ];
-                                    dateLabel =
-                                        '${months[dt.month - 1]} ${dt.day}';
-                                  } else {
-                                    dateLabel = raw;
-                                  }
-                                }
-                                final valueStr =
-                                    '${barSpot.y.toStringAsFixed(1)} hrs';
-                                return LineTooltipItem(
-                                  '$valueStr\n$dateLabel',
-                                  const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                );
-                              }).toList();
-                            },
-                          ),
-                        ),
-                        titlesData: FlTitlesData(
-                          leftTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              reservedSize: 56,
-                              interval: () {
-                                // Calculate the max value and use it as interval
-                                // This ensures we get called at 0 and maxVal
-                                if (trend.isEmpty) return 1.0;
-                                final maxVal = trend
-                                    .map((e) => (e['avgHours'] as double))
-                                    .reduce((a, b) => a > b ? a : b);
-                                return maxVal > 0 ? maxVal : 1.0;
-                              }(),
-                              getTitlesWidget: (value, meta) {
-                                // Only show 0 and max value labels
-                                if (trend.isEmpty)
-                                  return const SizedBox.shrink();
-                                final maxVal = trend
-                                    .map((e) => (e['avgHours'] as double))
-                                    .reduce((a, b) => a > b ? a : b);
-
-                                if (value == 0) {
-                                  return const Text(
-                                    '0',
-                                    style: TextStyle(fontSize: 10),
-                                  );
-                                }
-                                if (value >= maxVal * 0.99 &&
-                                    value <= maxVal * 1.01) {
-                                  final String label =
-                                      maxVal >= 10
-                                          ? maxVal.toStringAsFixed(0)
-                                          : maxVal.toStringAsFixed(1);
-                                  return Text(
-                                    label,
-                                    style: const TextStyle(fontSize: 10),
-                                  );
-                                }
-                                return const SizedBox.shrink();
-                              },
-                            ),
-                          ),
-                          bottomTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              reservedSize: 32,
-                              interval:
-                                  selectedTimeRange == '1 Day'
-                                      ? 1
-                                      : _computeXInterval(trend),
-                              getTitlesWidget: (value, meta) {
-                                final i = value.toInt();
-                                if (i < 0 || i >= trend.length)
-                                  return const SizedBox.shrink();
-                                final raw = (trend[i]['date'] as String);
-                                final label =
-                                    selectedTimeRange == '1 Day'
-                                        ? raw // already in HH:00
-                                        : raw.split('-').sublist(1).join('-');
-                                return Padding(
-                                  padding: const EdgeInsets.only(top: 8.0),
-                                  child: Text(
-                                    label,
-                                    style: const TextStyle(fontSize: 10),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                          rightTitles: AxisTitles(
-                            sideTitles: SideTitles(showTitles: false),
-                          ),
-                          topTitles: AxisTitles(
-                            sideTitles: SideTitles(showTitles: false),
-                          ),
-                        ),
-                        borderData: FlBorderData(show: false),
-                        minY: 0,
-                        maxY: () {
-                          // Calculate max value from trend data
-                          if (trend.isEmpty) return 50.0;
-                          final maxVal = trend
-                              .map((e) => (e['avgHours'] as double))
-                              .reduce((a, b) => a > b ? a : b);
-                          // Add 15% padding above the max value for breathing room
-                          return (maxVal * 1.15).toDouble();
-                        }(),
-                        // Add SLA threshold lines
-                        extraLinesData: ExtraLinesData(
-                          horizontalLines: [
-                            // 24-hour SLA line
-                            HorizontalLine(
-                              y: 24,
-                              color: Colors.orange.withOpacity(0.4),
-                              strokeWidth: 2,
-                              dashArray: [5, 5],
-                            ),
-                            // 48-hour line
-                            HorizontalLine(
-                              y: 48,
-                              color: Colors.red.withOpacity(0.4),
-                              strokeWidth: 2,
-                              dashArray: [5, 5],
-                            ),
-                          ],
-                        ),
-                        lineBarsData: [
-                          LineChartBarData(
-                            isCurved: true,
-                            barWidth: 3,
-                            // Show a dot when there is only a single data point so the chart isn't blank
-                            dotData: FlDotData(
-                              show: true,
-                              getDotPainter: (spot, percent, barData, index) {
-                                return FlDotCirclePainter(
-                                  radius: numPoints <= 1 ? 5 : 3,
-                                  color: _getColorForValue(spot.y),
-                                  strokeWidth: 1.5,
-                                  strokeColor: Colors.white,
-                                );
-                              },
-                            ),
-                            // Use gradient or color segments
-                            gradient: LinearGradient(
-                              colors: _buildGradientColors(trend),
-                              stops: _buildGradientStops(trend),
-                            ),
-                            spots: [
-                              for (int i = 0; i < trend.length; i++)
-                                FlSpot(
-                                  i.toDouble(),
-                                  (trend[i]['avgHours'] as double).toDouble(),
-                                ),
-                            ],
-                          ),
+                      // Legend for SLA zones
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          _buildLegendItem(Colors.green, 'Excellent (≤24h)'),
+                          const SizedBox(width: 12),
+                          _buildLegendItem(Colors.orange, 'Warning (24-48h)'),
+                          const SizedBox(width: 12),
+                          _buildLegendItem(Colors.red, 'Critical (>48h)'),
                         ],
                       ),
-                    ),
-                  ),
-                ],
-              ),
+                      const SizedBox(height: 12),
+                      SizedBox(height: 220, child: _buildLineChart(minX, maxX)),
+                    ],
+                  )
+                  : _buildBarChart(),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildLineChart(double minX, double maxX) {
+    return LineChart(
+      LineChartData(
+        minX: minX,
+        maxX: maxX,
+        gridData: FlGridData(show: true, drawVerticalLine: false),
+        lineTouchData: LineTouchData(
+          touchTooltipData: LineTouchTooltipData(
+            tooltipBgColor: Colors.blueGrey,
+            getTooltipItems: (touchedSpots) {
+              return touchedSpots.map((barSpot) {
+                final index = barSpot.x.toInt();
+                final raw = (widget.trend[index]['date'] as String);
+                String dateLabel;
+                if (widget.selectedTimeRange == '1 Day') {
+                  dateLabel = raw; // HH:00
+                } else {
+                  final dt = DateTime.tryParse(raw);
+                  if (dt != null) {
+                    const months = [
+                      'Jan',
+                      'Feb',
+                      'Mar',
+                      'Apr',
+                      'May',
+                      'Jun',
+                      'Jul',
+                      'Aug',
+                      'Sep',
+                      'Oct',
+                      'Nov',
+                      'Dec',
+                    ];
+                    dateLabel = '${months[dt.month - 1]} ${dt.day}';
+                  } else {
+                    dateLabel = raw;
+                  }
+                }
+                final valueStr = '${barSpot.y.toStringAsFixed(1)} hrs';
+                return LineTooltipItem(
+                  '$valueStr\n$dateLabel',
+                  const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                );
+              }).toList();
+            },
+          ),
+        ),
+        titlesData: FlTitlesData(
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 56,
+              interval: () {
+                // Calculate the max value and use it as interval
+                // This ensures we get called at 0 and maxVal
+                if (widget.trend.isEmpty) return 1.0;
+                final maxVal = widget.trend
+                    .map((e) => (e['avgHours'] as double))
+                    .reduce((a, b) => a > b ? a : b);
+                return maxVal > 0 ? maxVal : 1.0;
+              }(),
+              getTitlesWidget: (value, meta) {
+                // Only show 0 and max value labels
+                if (widget.trend.isEmpty) return const SizedBox.shrink();
+                final maxVal = widget.trend
+                    .map((e) => (e['avgHours'] as double))
+                    .reduce((a, b) => a > b ? a : b);
+
+                if (value == 0) {
+                  return const Text('0', style: TextStyle(fontSize: 10));
+                }
+                if (value >= maxVal * 0.99 && value <= maxVal * 1.01) {
+                  final String label =
+                      maxVal >= 10
+                          ? maxVal.toStringAsFixed(0)
+                          : maxVal.toStringAsFixed(1);
+                  return Text(label, style: const TextStyle(fontSize: 10));
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 32,
+              interval:
+                  widget.selectedTimeRange == '1 Day'
+                      ? 1
+                      : _computeXInterval(widget.trend),
+              getTitlesWidget: (value, meta) {
+                final i = value.toInt();
+                if (i < 0 || i >= widget.trend.length)
+                  return const SizedBox.shrink();
+                final raw = (widget.trend[i]['date'] as String);
+                final label =
+                    widget.selectedTimeRange == '1 Day'
+                        ? raw // already in HH:00
+                        : raw.split('-').sublist(1).join('-');
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: Text(label, style: const TextStyle(fontSize: 10)),
+                );
+              },
+            ),
+          ),
+          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        ),
+        borderData: FlBorderData(show: false),
+        minY: -5,
+        maxY: () {
+          // Calculate max value from trend data
+          if (widget.trend.isEmpty) return 50.0;
+          final maxVal = widget.trend
+              .map((e) => (e['avgHours'] as double))
+              .reduce((a, b) => a > b ? a : b);
+          // Add 15% padding above the max value for breathing room
+          return (maxVal * 1.15).toDouble();
+        }(),
+        // Add SLA threshold lines
+        extraLinesData: ExtraLinesData(
+          horizontalLines: [
+            // 24-hour SLA line
+            HorizontalLine(
+              y: 24,
+              color: Colors.orange.withOpacity(0.4),
+              strokeWidth: 2,
+              dashArray: [5, 5],
+            ),
+            // 48-hour line
+            HorizontalLine(
+              y: 48,
+              color: Colors.red.withOpacity(0.4),
+              strokeWidth: 2,
+              dashArray: [5, 5],
+            ),
+          ],
+        ),
+        lineBarsData: [
+          LineChartBarData(
+            isCurved: true,
+            barWidth: 3,
+            // Show a dot when there is only a single data point so the chart isn't blank
+            dotData: FlDotData(
+              show: true,
+              getDotPainter: (spot, percent, barData, index) {
+                return FlDotCirclePainter(
+                  radius: widget.trend.length <= 1 ? 5 : 3,
+                  color: _getColorForValue(spot.y),
+                  strokeWidth: 1.5,
+                  strokeColor: Colors.white,
+                );
+              },
+            ),
+            // Use gradient or color segments
+            gradient: LinearGradient(
+              colors: _buildGradientColors(widget.trend),
+              stops: _buildGradientStops(widget.trend),
+            ),
+            spots: [
+              for (int i = 0; i < widget.trend.length; i++)
+                FlSpot(
+                  i.toDouble(),
+                  (widget.trend[i]['avgHours'] as double).toDouble(),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBarChart() {
+    // We need to calculate from actual scan requests, not aggregated trend data
+    // This will be done with FutureBuilder to fetch the raw data
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _scanRequestsFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: CircularProgressIndicator(),
+            ),
+          );
+        }
+
+        if (!snapshot.hasData) {
+          return const Center(child: Text('No data available'));
+        }
+
+        final all = snapshot.data!;
+
+        // Build time window matching the selected range
+        final DateTime now = DateTime.now();
+        DateTime startInclusive;
+        DateTime endExclusive;
+
+        if (widget.selectedTimeRange.startsWith('Custom (') ||
+            widget.selectedTimeRange.startsWith('Monthly (')) {
+          final regex = RegExp(
+            r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+          );
+          final match = regex.firstMatch(widget.selectedTimeRange);
+          if (match != null) {
+            final s = DateTime.parse(match.group(1)!);
+            final e = DateTime.parse(match.group(2)!);
+            startInclusive = DateTime(s.year, s.month, s.day);
+            endExclusive = DateTime(
+              e.year,
+              e.month,
+              e.day,
+            ).add(const Duration(days: 1));
+          } else {
+            startInclusive = now.subtract(const Duration(days: 7));
+            endExclusive = now;
+          }
+        } else {
+          switch (widget.selectedTimeRange) {
+            case '1 Day':
+              startInclusive = now.subtract(const Duration(days: 1));
+              break;
+            case 'Last 7 Days':
+              startInclusive = now.subtract(const Duration(days: 7));
+              break;
+            case 'Last 30 Days':
+              startInclusive = now.subtract(const Duration(days: 30));
+              break;
+            case 'Last 60 Days':
+              startInclusive = now.subtract(const Duration(days: 60));
+              break;
+            case 'Last 90 Days':
+              startInclusive = now.subtract(const Duration(days: 90));
+              break;
+            case 'Last Year':
+              startInclusive = DateTime(now.year - 1, now.month, now.day);
+              break;
+            default:
+              startInclusive = now.subtract(const Duration(days: 7));
+          }
+          endExclusive = now;
+        }
+
+        // Calculate buckets from individual reviews
+        final Map<String, int> buckets = {
+          '0-6h': 0,
+          '6-12h': 0,
+          '12-24h': 0,
+          '24-48h': 0,
+          '>48h': 0,
+        };
+
+        for (final r in all) {
+          if ((r['status'] ?? '') != 'completed') continue;
+
+          final createdAt = r['createdAt'];
+          final reviewedAt = r['reviewedAt'];
+          if (createdAt == null || reviewedAt == null) continue;
+
+          DateTime? created;
+          DateTime? reviewed;
+
+          if (createdAt is Timestamp) created = createdAt.toDate();
+          if (createdAt is String) created = DateTime.tryParse(createdAt);
+          if (reviewedAt is Timestamp) reviewed = reviewedAt.toDate();
+          if (reviewedAt is String) reviewed = DateTime.tryParse(reviewedAt);
+
+          if (created == null || reviewed == null) continue;
+
+          // Filter by reviewedAt within window
+          final inWindow =
+              !reviewed.isBefore(startInclusive) &&
+              reviewed.isBefore(endExclusive);
+          if (!inWindow) continue;
+
+          final hours = reviewed.difference(created).inMinutes / 60.0;
+
+          if (hours <= 6) {
+            buckets['0-6h'] = buckets['0-6h']! + 1;
+          } else if (hours <= 12) {
+            buckets['6-12h'] = buckets['6-12h']! + 1;
+          } else if (hours <= 24) {
+            buckets['12-24h'] = buckets['12-24h']! + 1;
+          } else if (hours <= 48) {
+            buckets['24-48h'] = buckets['24-48h']! + 1;
+          } else {
+            buckets['>48h'] = buckets['>48h']! + 1;
+          }
+        }
+
+        final maxCount =
+            buckets.values.isEmpty
+                ? 0
+                : buckets.values.reduce((a, b) => a > b ? a : b);
+        final double chartMaxY = maxCount > 0 ? maxCount * 1.2 : 10.0;
+
+        return _buildBarChartWidget(buckets, chartMaxY);
+      },
+    );
+  }
+
+  Widget _buildBarChartWidget(Map<String, int> buckets, double chartMaxY) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Legend - aligned to the right to match line chart
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Flexible(
+              child: Wrap(
+                spacing: 16,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
+                children: [
+                  _buildBucketLegend(
+                    ' 0-6h',
+                    'Excellent',
+                    const Color(0xFF4CAF50),
+                  ),
+                  _buildBucketLegend(' 6-12h', 'Good', const Color(0xFF8BC34A)),
+                  _buildBucketLegend(
+                    ' 12-24h',
+                    'Acceptable',
+                    const Color(0xFFFF9800),
+                  ),
+                  _buildBucketLegend(
+                    ' 24-48h',
+                    'Needs Improvement',
+                    const Color(0xFFFF5722),
+                  ),
+                  _buildBucketLegend(
+                    ' >48h',
+                    'Critical',
+                    const Color(0xFFF44336),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 280,
+          child: BarChart(
+            BarChartData(
+              alignment: BarChartAlignment.spaceAround,
+              maxY: chartMaxY,
+              minY: 0,
+              barTouchData: BarTouchData(
+                touchTooltipData: BarTouchTooltipData(
+                  tooltipBgColor: Colors.blueGrey,
+                  getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                    final label =
+                        ['0-6h', '6-12h', '12-24h', '24-48h', '>48h'][group.x
+                            .toInt()];
+                    return BarTooltipItem(
+                      '$label\n${rod.toY.toInt()} reviews',
+                      const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    );
+                  },
+                ),
+              ),
+              titlesData: FlTitlesData(
+                show: true,
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    getTitlesWidget: (value, meta) {
+                      const labels = [
+                        '0-6h',
+                        '6-12h',
+                        '12-24h',
+                        '24-48h',
+                        '>48h',
+                      ];
+                      if (value.toInt() >= 0 && value.toInt() < labels.length) {
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 8.0),
+                          child: Text(
+                            labels[value.toInt()],
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        );
+                      }
+                      return const SizedBox.shrink();
+                    },
+                  ),
+                ),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 40,
+                    getTitlesWidget: (value, meta) {
+                      return Text(
+                        value.toInt().toString(),
+                        style: const TextStyle(fontSize: 10),
+                      );
+                    },
+                  ),
+                ),
+                topTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                rightTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+              ),
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                horizontalInterval:
+                    chartMaxY > 10 ? (chartMaxY / 5).ceilToDouble() : 2,
+              ),
+              borderData: FlBorderData(show: false),
+              barGroups: [
+                _buildBarGroup(
+                  0,
+                  buckets['0-6h']!.toDouble(),
+                  const Color(0xFF4CAF50),
+                ),
+                _buildBarGroup(
+                  1,
+                  buckets['6-12h']!.toDouble(),
+                  const Color(0xFF8BC34A),
+                ),
+                _buildBarGroup(
+                  2,
+                  buckets['12-24h']!.toDouble(),
+                  const Color(0xFFFF9800),
+                ),
+                _buildBarGroup(
+                  3,
+                  buckets['24-48h']!.toDouble(),
+                  const Color(0xFFFF5722),
+                ),
+                _buildBarGroup(
+                  4,
+                  buckets['>48h']!.toDouble(),
+                  const Color(0xFFF44336),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  BarChartGroupData _buildBarGroup(int x, double y, Color color) {
+    return BarChartGroupData(
+      x: x,
+      barRods: [
+        BarChartRodData(
+          toY: y,
+          color: color,
+          width: 32,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBucketLegend(String label, String description, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 14,
+          height: 14,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          '$label ($description)',
+          style: const TextStyle(fontSize: 11, color: Colors.black87),
+        ),
+      ],
     );
   }
 
@@ -6712,9 +7081,13 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                   sideTitles: SideTitles(
                     showTitles: true,
                     reservedSize: 40,
+                    interval: 25,
                     getTitlesWidget: (v, m) {
-                      // Only show 0% and 100% labels
+                      // Show 0%, 25%, 50%, 75%, 100% labels
                       if (v == 0) return const Text('0%');
+                      if (v == 25) return const Text('25%');
+                      if (v == 50) return const Text('50%');
+                      if (v == 75) return const Text('75%');
                       if (v == 100) return const Text('100%');
                       return const SizedBox.shrink();
                     },
@@ -8842,11 +9215,11 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
     ];
 
     final List<String> labels = [
-      '⚡ 0-6h',
-      '✓ 6-12h',
-      '○ 12-24h',
-      '△ 24-48h',
-      '✕ >48h',
+      ' 0-6h',
+      ' 6-12h',
+      ' 12-24h',
+      ' 24-48h',
+      ' >48h',
     ];
 
     // Build tooltip content with breakdown
