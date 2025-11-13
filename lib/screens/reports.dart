@@ -5450,17 +5450,41 @@ class AvgResponseTrendChart extends StatelessWidget {
                             sideTitles: SideTitles(
                               showTitles: true,
                               reservedSize: 56,
-                              interval: _computeYInterval(trend),
+                              interval: () {
+                                // Calculate the max value and use it as interval
+                                // This ensures we get called at 0 and maxVal
+                                if (trend.isEmpty) return 1.0;
+                                final maxVal = trend
+                                    .map((e) => (e['avgHours'] as double))
+                                    .reduce((a, b) => a > b ? a : b);
+                                return maxVal > 0 ? maxVal : 1.0;
+                              }(),
                               getTitlesWidget: (value, meta) {
-                                final doubleVal = value.toDouble();
-                                final String label =
-                                    doubleVal >= 10
-                                        ? doubleVal.toStringAsFixed(0)
-                                        : doubleVal.toStringAsFixed(1);
-                                return Text(
-                                  label,
-                                  style: const TextStyle(fontSize: 10),
-                                );
+                                // Only show 0 and max value labels
+                                if (trend.isEmpty)
+                                  return const SizedBox.shrink();
+                                final maxVal = trend
+                                    .map((e) => (e['avgHours'] as double))
+                                    .reduce((a, b) => a > b ? a : b);
+
+                                if (value == 0) {
+                                  return const Text(
+                                    '0',
+                                    style: TextStyle(fontSize: 10),
+                                  );
+                                }
+                                if (value >= maxVal * 0.99 &&
+                                    value <= maxVal * 1.01) {
+                                  final String label =
+                                      maxVal >= 10
+                                          ? maxVal.toStringAsFixed(0)
+                                          : maxVal.toStringAsFixed(1);
+                                  return Text(
+                                    label,
+                                    style: const TextStyle(fontSize: 10),
+                                  );
+                                }
+                                return const SizedBox.shrink();
                               },
                             ),
                           ),
@@ -5481,9 +5505,12 @@ class AvgResponseTrendChart extends StatelessWidget {
                                     selectedTimeRange == '1 Day'
                                         ? raw // already in HH:00
                                         : raw.split('-').sublist(1).join('-');
-                                return Text(
-                                  label,
-                                  style: const TextStyle(fontSize: 10),
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 8.0),
+                                  child: Text(
+                                    label,
+                                    style: const TextStyle(fontSize: 10),
+                                  ),
                                 );
                               },
                             ),
@@ -5497,6 +5524,15 @@ class AvgResponseTrendChart extends StatelessWidget {
                         ),
                         borderData: FlBorderData(show: false),
                         minY: 0,
+                        maxY: () {
+                          // Calculate max value from trend data
+                          if (trend.isEmpty) return 50.0;
+                          final maxVal = trend
+                              .map((e) => (e['avgHours'] as double))
+                              .reduce((a, b) => a > b ? a : b);
+                          // Add 15% padding above the max value for breathing room
+                          return (maxVal * 1.15).toDouble();
+                        }(),
                         // Add SLA threshold lines
                         extraLinesData: ExtraLinesData(
                           horizontalLines: [
@@ -5613,16 +5649,6 @@ class AvgResponseTrendChart extends StatelessWidget {
       stops.add(i / (data.length - 1));
     }
     return stops;
-  }
-
-  double _computeYInterval(List<Map<String, dynamic>> data) {
-    if (data.isEmpty) return 1;
-    final maxVal = data
-        .map((e) => (e['avgHours'] as double))
-        .reduce((a, b) => a > b ? a : b);
-    if (maxVal <= 4) return 1;
-    if (maxVal <= 8) return 2;
-    return (maxVal / 4).ceilToDouble();
   }
 
   double _computeXInterval(List<Map<String, dynamic>> data) {
@@ -6626,8 +6652,8 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
             LineChartData(
               minX: 0,
               maxX: displayKeys.isNotEmpty ? displayKeys.length - 1.0 : 0,
-              minY: 0,
-              maxY: 100,
+              minY: -15,
+              maxY: 115,
               gridData: FlGridData(show: true, drawVerticalLine: false),
               lineTouchData: LineTouchData(
                 touchTooltipData: LineTouchTooltipData(
@@ -6686,8 +6712,12 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                   sideTitles: SideTitles(
                     showTitles: true,
                     reservedSize: 40,
-                    interval: 25,
-                    getTitlesWidget: (v, m) => Text('${v.toInt()}%'),
+                    getTitlesWidget: (v, m) {
+                      // Only show 0% and 100% labels
+                      if (v == 0) return const Text('0%');
+                      if (v == 100) return const Text('100%');
+                      return const SizedBox.shrink();
+                    },
                   ),
                 ),
                 topTitles: const AxisTitles(
@@ -6936,9 +6966,12 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                       setState(() {
                         _chartMode = v;
                         if (v == 'line') {
-                          _loadingTrend = true;
-                          _trendLoaded = false;
-                          _trendIsEmpty = false;
+                          // Only set loading if we don't have data yet
+                          if (_seriesByDisease.isEmpty) {
+                            _loadingTrend = true;
+                            _trendLoaded = false;
+                            _trendIsEmpty = false;
+                          }
                         }
                       });
                       if (v == 'line' && _seriesByDisease.isEmpty) {
