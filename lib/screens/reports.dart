@@ -602,6 +602,122 @@ class _ReportsState extends State<Reports> {
     // This function is called every 30s by auto-refresh but does NOT fetch temperature
   }
 
+  // Helper method to parse time range into start and end dates
+  Map<String, DateTime> _parseTimeRange(String timeRange) {
+    final DateTime now = DateTime.now();
+    DateTime startDate;
+    DateTime endDate = now;
+
+    // Check for custom or monthly range format
+    if (timeRange.startsWith('Custom (') || timeRange.startsWith('Monthly (')) {
+      final regex = RegExp(
+        r'(?:Custom|Monthly) \((\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})\)',
+      );
+      final match = regex.firstMatch(timeRange);
+      if (match != null) {
+        final s = DateTime.parse(match.group(1)!);
+        final e = DateTime.parse(match.group(2)!);
+        startDate = DateTime(s.year, s.month, s.day);
+        endDate = DateTime(e.year, e.month, e.day);
+        return {'start': startDate, 'end': endDate};
+      }
+    }
+
+    // Standard time range options
+    switch (timeRange) {
+      case '1 Day':
+        startDate = now.subtract(const Duration(days: 1));
+        break;
+      case 'Last 7 Days':
+        startDate = now.subtract(const Duration(days: 7));
+        break;
+      case 'Last 30 Days':
+        startDate = now.subtract(const Duration(days: 30));
+        break;
+      case 'Last 60 Days':
+        startDate = now.subtract(const Duration(days: 60));
+        break;
+      case 'Last 90 Days':
+        startDate = now.subtract(const Duration(days: 90));
+        break;
+      case 'Last Year':
+        startDate = DateTime(now.year - 1, now.month, now.day);
+        break;
+      default:
+        startDate = now.subtract(const Duration(days: 7));
+    }
+
+    return {'start': startDate, 'end': endDate};
+  }
+
+  // Helper method to format time range description for temperature card
+  String _formatTimeRangeDescription(String timeRange) {
+    const monthNames = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+
+    // Handle custom range
+    if (timeRange.startsWith('Custom (')) {
+      final regex = RegExp(
+        r'Custom \((\d{4})-(\d{2})-(\d{2}) to (\d{4})-(\d{2})-(\d{2})\)',
+      );
+      final match = regex.firstMatch(timeRange);
+      if (match != null) {
+        final startYear = match.group(1);
+        final startMonth = int.parse(match.group(2)!);
+        final startDay = int.parse(match.group(3)!);
+        final endYear = match.group(4);
+        final endMonth = int.parse(match.group(5)!);
+        final endDay = int.parse(match.group(6)!);
+
+        return 'from ${monthNames[startMonth - 1]} $startDay, $startYear to ${monthNames[endMonth - 1]} $endDay, $endYear';
+      }
+    }
+
+    // Handle monthly range
+    if (timeRange.startsWith('Monthly (')) {
+      final regex = RegExp(
+        r'Monthly \((\d{4})-(\d{2})-(\d{2}) to (\d{4})-(\d{2})-(\d{2})\)',
+      );
+      final match = regex.firstMatch(timeRange);
+      if (match != null) {
+        final year = match.group(1);
+        final month = int.parse(match.group(2)!);
+
+        return 'for ${monthNames[month - 1]} $year';
+      }
+    }
+
+    // Handle standard ranges
+    switch (timeRange) {
+      case '1 Day':
+        return 'for the past day';
+      case 'Last 7 Days':
+        return 'for the past 7 days';
+      case 'Last 30 Days':
+        return 'for the past 30 days';
+      case 'Last 60 Days':
+        return 'for the past 60 days';
+      case 'Last 90 Days':
+        return 'for the past 90 days';
+      case 'Last Year':
+        return 'for the past year';
+      default:
+        return 'for the selected period';
+    }
+  }
+
   Future<void> _fetchTemperatureData() async {
     print('🌡️ [TEMP-FETCH] === Starting temperature fetch ===');
     print(
@@ -631,12 +747,14 @@ class _ReportsState extends State<Reports> {
     }
 
     try {
-      // Always fetch recent 7 days for reliability
-      final now = DateTime.now();
-      final startDate = now.subtract(const Duration(days: 7));
-      final endDate = now;
+      // Use the selected time range instead of hardcoding 7 days
+      final dateRange = _parseTimeRange(_selectedTimeRange);
+      final startDate = dateRange['start']!;
+      final endDate = dateRange['end']!;
 
-      print('📅 [TEMP-FETCH] Date range: $startDate to $endDate');
+      print(
+        '📅 [TEMP-FETCH] Date range: $startDate to $endDate (from $_selectedTimeRange)',
+      );
       print('🌐 [TEMP-FETCH] Calling WeatherService.getAverageTemperature...');
 
       final weatherSummary = await WeatherService.getAverageTemperature(
@@ -1195,6 +1313,7 @@ class _ReportsState extends State<Reports> {
       _loadDiseaseStats(),
       _loadAvgResponseTrend(),
       _loadSla(),
+      _fetchTemperatureData(), // Refresh temperature data when time range changes
     ]);
     _updateStatsFromSnapshot();
   }
@@ -2445,7 +2564,7 @@ class _ReportsState extends State<Reports> {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                'Current week average temperature (last 7 days). Temperature impacts plant health and disease development patterns.',
+                                'Average temperature ${_formatTimeRangeDescription(_selectedTimeRange)}. Temperature impacts plant health and disease development patterns.',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: Colors.grey[700],
@@ -2656,10 +2775,10 @@ class _ReportsState extends State<Reports> {
 
   Future<WeatherSummary> _getTemperatureForRange() async {
     try {
-      // Always fetch recent 7 days (weather API limitation)
-      final now = DateTime.now();
-      final startDate = now.subtract(const Duration(days: 7));
-      final endDate = now;
+      // Use the selected time range instead of hardcoding 7 days
+      final dateRange = _parseTimeRange(_selectedTimeRange);
+      final startDate = dateRange['start']!;
+      final endDate = dateRange['end']!;
 
       return await WeatherService.getAverageTemperature(
         start: startDate,
@@ -6354,10 +6473,14 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
         final perDay = diseaseDayCounts[name] ?? const <String, int>{};
         final s = <double>[];
         for (final k in labels) {
-          final dCount = (perDay[k] ?? 0).toDouble();
+          final dCount =
+              (perDay[k] ?? 0).toDouble(); // This specific disease count
+          final allDiseasesCount =
+              (diseaseByDay[k] ?? 0).toDouble(); // ALL diseases for that day
           final hCount = (healthyByDay[k] ?? 0).toDouble();
-          final total = dCount + hCount;
-          s.add(total > 0 ? (dCount / total) * 100.0 : 0.0);
+          final totalScans =
+              allDiseasesCount + hCount; // Total scans = all diseases + healthy
+          s.add(totalScans > 0 ? (dCount / totalScans) * 100.0 : 0.0);
         }
         series[name] = s;
       }
