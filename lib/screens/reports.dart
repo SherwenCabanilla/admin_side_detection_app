@@ -441,7 +441,7 @@ class _ReportsState extends State<Reports> {
     final averageResponseTimeStr =
         completedInWindow == 0
             ? '0 hours'
-            : '${(totalHoursInWindow / completedInWindow).toStringAsFixed(2)} hours';
+            : _formatHoursToReadable(totalHoursInWindow / completedInWindow);
     final String sla24Str =
         completedInWindow == 0
             ? '—'
@@ -715,6 +715,32 @@ class _ReportsState extends State<Reports> {
         return 'for the past year';
       default:
         return 'for the selected period';
+    }
+  }
+
+  // Helper method to format hours as days/hours/minutes
+  String _formatHoursToReadable(double hours) {
+    final totalSeconds = (hours * 3600).round();
+    final days = totalSeconds ~/ 86400;
+    final hr = (totalSeconds % 86400) ~/ 3600;
+    final min = (totalSeconds % 3600) ~/ 60;
+
+    if (days > 0) {
+      if (hr > 0) {
+        return '${days}d ${hr}hr';
+      } else {
+        return '${days}d';
+      }
+    } else if (hr > 0) {
+      if (min > 0) {
+        return '${hr}hr ${min}min';
+      } else {
+        return '${hr}hr';
+      }
+    } else if (min > 0) {
+      return '${min}min';
+    } else {
+      return '${totalSeconds}sec';
     }
   }
 
@@ -5180,39 +5206,43 @@ class _StatCardWithWarningState extends State<_StatCardWithWarning>
             // Main content - always centered
             SizedBox.expand(
               child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: widget.color.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
+                padding: const EdgeInsets.all(16),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: widget.color.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(widget.icon, size: 24, color: widget.color),
                       ),
-                      child: Icon(widget.icon, size: 24, color: widget.color),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      widget.value,
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
+                      const SizedBox(height: 16),
+                      Text(
+                        widget.value,
+                        style: const TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.title,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey,
-                        fontWeight: FontWeight.w500,
+                      const SizedBox(height: 8),
+                      Text(
+                        widget.title,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        textAlign: TextAlign.center,
                       ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -6975,7 +7005,17 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
           isCurved: true,
           color: color,
           barWidth: 3,
-          dotData: FlDotData(show: false),
+          dotData: FlDotData(
+            show: true,
+            getDotPainter: (spot, percent, barData, index) {
+              return FlDotCirclePainter(
+                radius: 3,
+                color: color,
+                strokeWidth: 1.5,
+                strokeColor: Colors.white,
+              );
+            },
+          ),
         ),
       );
       legendItems.add({'name': name, 'color': color});
@@ -6999,7 +7039,17 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
           isCurved: true,
           color: const Color.fromARGB(255, 2, 119, 252), // Healthy blue
           barWidth: 3,
-          dotData: FlDotData(show: false),
+          dotData: FlDotData(
+            show: true,
+            getDotPainter: (spot, percent, barData, index) {
+              return FlDotCirclePainter(
+                radius: 3,
+                color: const Color.fromARGB(255, 2, 119, 252),
+                strokeWidth: 1.5,
+                strokeColor: Colors.white,
+              );
+            },
+          ),
         ),
       );
       legendItems.add({
@@ -9001,7 +9051,9 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       );
     }
     // debug log removed
-    stats.sort((a, b) => a.avgSeconds.compareTo(b.avgSeconds));
+    stats.sort(
+      (a, b) => b.count.compareTo(a.count),
+    ); // Sort by count descending (highest first)
     setState(() {
       _expertStats = stats;
       _loading = false;
@@ -9014,16 +9066,41 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
   }
 
   String _formatDuration(int seconds) {
-    final hr = seconds ~/ 3600;
+    final days = seconds ~/ 86400; // 86400 seconds in a day
+    final hr = (seconds % 86400) ~/ 3600;
     final min = (seconds % 3600) ~/ 60;
     final sec = seconds % 60;
-    if (hr > 0) {
-      return '${hr} hr ${min.toString().padLeft(2, '0')} min ${sec.toString().padLeft(2, '0')} sec';
+
+    if (days > 0) {
+      // Show days and hours (e.g., "4d 4hr")
+      if (hr > 0) {
+        return '${days}d ${hr}hr';
+      } else {
+        return '${days}d';
+      }
+    } else if (hr > 0) {
+      // Show hours and minutes (e.g., "4hr 30min")
+      if (min > 0) {
+        return '${hr}hr ${min}min';
+      } else {
+        return '${hr}hr';
+      }
     } else if (min > 0) {
-      return '${min} min ${sec.toString().padLeft(2, '0')} sec';
+      // Show minutes and seconds (e.g., "30min 15sec")
+      if (sec > 0) {
+        return '${min}min ${sec}sec';
+      } else {
+        return '${min}min';
+      }
     } else {
-      return '${sec} sec';
+      return '${sec}sec';
     }
+  }
+
+  String _formatHoursDisplay(double hours) {
+    // Convert hours to seconds for consistent formatting
+    final totalSeconds = (hours * 3600).round();
+    return _formatDuration(totalSeconds);
   }
 
   @override
@@ -9034,13 +9111,13 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: 750,
+          maxWidth: 950,
           maxHeight: MediaQuery.of(context).size.height * 0.85,
         ),
         child: Container(
           width:
-              MediaQuery.of(context).size.width > 800
-                  ? 750
+              MediaQuery.of(context).size.width > 1000
+                  ? 950
                   : MediaQuery.of(context).size.width * 0.9,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -9096,14 +9173,39 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                             children: [
                               Expanded(
                                 child: DataTable(
-                                  columnSpacing: 8, // minimal extra space
-                                  columns: const [
-                                    DataColumn(label: Text('Expert')),
-                                    DataColumn(
+                                  columnSpacing:
+                                      16, // comfortable spacing for 5 columns
+                                  columns: [
+                                    const DataColumn(label: Text('Expert')),
+                                    const DataColumn(
                                       label: Text('Avg. Response Time'),
                                     ),
-                                    DataColumn(label: Text('Reports')),
-                                    DataColumn(label: Text('Distribution')),
+                                    const DataColumn(label: Text('Reports')),
+                                    DataColumn(
+                                      label: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Text('Performance'),
+                                          const SizedBox(width: 4),
+                                          InkWell(
+                                            onTap:
+                                                () =>
+                                                    _showPerformanceLevelsGuide(
+                                                      context,
+                                                      _weightedAverageHours,
+                                                    ),
+                                            child: const Icon(
+                                              Icons.info_outline,
+                                              size: 16,
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const DataColumn(
+                                      label: Text('Distribution'),
+                                    ),
                                   ],
                                   rows:
                                       _expertStats
@@ -9145,6 +9247,11 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                                                   Text(e.count.toString()),
                                                 ),
                                                 DataCell(
+                                                  _buildPerformanceChip(
+                                                    e.avgSeconds / 3600,
+                                                  ),
+                                                ),
+                                                DataCell(
                                                   SizedBox(
                                                     width: 120,
                                                     height: 28,
@@ -9180,7 +9287,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                       () {
                         final label = _displayRangeLabel(selectedRange);
                         return 'Overall (weighted) for $label: '
-                            '${_weightedAverageHours.toStringAsFixed(2)} hours '
+                            '${_formatHoursDisplay(_weightedAverageHours)} '
                             'across $_totalCompletedReports reports';
                       }(),
                       style: const TextStyle(
@@ -9193,6 +9300,364 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildPerformanceChip(double hours) {
+    String label;
+    Color color;
+    Color bgColor;
+    IconData icon;
+
+    if (hours <= 6) {
+      label = 'Excellent';
+      color = const Color(0xFF2E7D32); // Dark green
+      bgColor = const Color(0xFFE8F5E9); // Light green bg
+      icon = Icons.emoji_events; // Trophy
+    } else if (hours <= 24) {
+      label = 'Great';
+      color = const Color(0xFF558B2F); // Green
+      bgColor = const Color(0xFFF1F8E9); // Light green bg
+      icon = Icons.thumb_up;
+    } else if (hours <= 48) {
+      label = 'Good';
+      color = const Color(0xFF1976D2); // Blue
+      bgColor = const Color(0xFFE3F2FD); // Light blue bg
+      icon = Icons.check_circle;
+    } else if (hours <= 72) {
+      label = 'Room for Improvement';
+      color = const Color(0xFFF57C00); // Orange
+      bgColor = const Color(0xFFFFF3E0); // Light orange bg
+      icon = Icons.trending_up;
+    } else {
+      label = 'Needs Improvement';
+      color = const Color(0xFFD32F2F); // Red
+      bgColor = const Color(0xFFFFEBEE); // Light red bg
+      icon = Icons.warning;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPerformanceLevelsGuide(BuildContext context, double avgHours) {
+    // Determine which performance level is current based on avgHours
+    String currentLevel = '';
+    if (avgHours <= 6) {
+      currentLevel = 'Excellent';
+    } else if (avgHours <= 24) {
+      currentLevel = 'Great';
+    } else if (avgHours <= 48) {
+      currentLevel = 'Good';
+    } else if (avgHours <= 72) {
+      currentLevel = 'Room for Improvement';
+    } else {
+      currentLevel = 'Needs Improvement';
+    }
+
+    showDialog(
+      context: context,
+      builder:
+          (context) => Dialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: 480,
+                maxHeight: MediaQuery.of(context).size.height * 0.85,
+              ),
+              width: 480,
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(
+                              Icons.info_outline,
+                              color: Colors.blue.shade700,
+                              size: 24,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Text(
+                              'Performance\nTargets',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                height: 1.2,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 20),
+                            onPressed: () => Navigator.pop(context),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      // Performance Levels Title
+                      const Text(
+                        'Performance Levels',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // Excellent
+                      _buildPerformanceLevelItem(
+                        Icons.emoji_events,
+                        'Excellent',
+                        '0 - 6 hours',
+                        const Color(0xFF2E7D32),
+                        const Color(0xFFE8F5E9),
+                        currentLevel == 'Excellent',
+                      ),
+                      const SizedBox(height: 8),
+                      // Great
+                      _buildPerformanceLevelItem(
+                        Icons.thumb_up,
+                        'Great',
+                        '6 - 24 hours',
+                        const Color(0xFF558B2F),
+                        const Color(0xFFF1F8E9),
+                        currentLevel == 'Great',
+                      ),
+                      const SizedBox(height: 8),
+                      // Good
+                      _buildPerformanceLevelItem(
+                        Icons.check_circle,
+                        'Good',
+                        '24 - 48 hours',
+                        const Color(0xFF1976D2),
+                        const Color(0xFFE3F2FD),
+                        currentLevel == 'Good',
+                      ),
+                      const SizedBox(height: 8),
+                      // Room for Improvement
+                      _buildPerformanceLevelItem(
+                        Icons.trending_up,
+                        'Room for Improvement',
+                        '48 - 72 hours',
+                        const Color(0xFFF57C00),
+                        const Color(0xFFFFF3E0),
+                        currentLevel == 'Room for Improvement',
+                      ),
+                      const SizedBox(height: 8),
+                      // Needs Improvement
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFEBEE),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: const Color(0xFFD32F2F).withOpacity(0.3),
+                            width:
+                                currentLevel == 'Needs Improvement' ? 1.5 : 1.0,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFD32F2F).withOpacity(0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.warning,
+                                size: 20,
+                                color: Color(0xFFD32F2F),
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Needs Improvement',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFFD32F2F),
+                                    ),
+                                  ),
+                                  SizedBox(height: 3),
+                                  Text(
+                                    'More than 72 hours',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.black54,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (currentLevel == 'Needs Improvement') ...[
+                              const SizedBox(width: 8),
+                              const Chip(
+                                label: Text(
+                                  'CURRENT',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                backgroundColor: Color(0xFFD32F2F),
+                                padding: EdgeInsets.symmetric(horizontal: 6),
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      // Got It Button
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue.shade600,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text(
+                            'Got it',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+    );
+  }
+
+  Widget _buildPerformanceLevelItem(
+    IconData icon,
+    String title,
+    String timeRange,
+    Color color,
+    Color bgColor,
+    bool isCurrent,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: color.withOpacity(0.3),
+          width: isCurrent ? 1.5 : 1.0,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 20, color: color),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  timeRange,
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+          if (isCurrent) ...[
+            const SizedBox(width: 8),
+            Chip(
+              label: const Text(
+                'CURRENT',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              backgroundColor: color,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -9249,62 +9714,28 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
         height: 1.5,
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              height: 16,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade200,
-                borderRadius: BorderRadius.circular(3),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(3),
-                child: Row(
-                  children: List.generate(buckets.length, (index) {
-                    final percentage =
-                        total == 0 ? 0.0 : (buckets[index].value / total);
-                    if (percentage == 0) return const SizedBox.shrink();
-                    return Expanded(
-                      flex: (percentage * 1000).toInt(),
-                      child: Container(color: colors[index]),
-                    );
-                  }),
-                ),
-              ),
-            ),
+      child: Container(
+        height: 16,
+        decoration: BoxDecoration(
+          color: Colors.grey.shade200,
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: Row(
+            children: List.generate(buckets.length, (index) {
+              final percentage =
+                  total == 0 ? 0.0 : (buckets[index].value / total);
+              if (percentage == 0) return const SizedBox.shrink();
+              return Expanded(
+                flex: (percentage * 1000).toInt(),
+                child: Container(color: colors[index]),
+              );
+            }),
           ),
-          const SizedBox(width: 6),
-          // Show dominant category icon
-          _buildDominantIcon(buckets, colors),
-        ],
+        ),
       ),
     );
-  }
-
-  Widget _buildDominantIcon(
-    List<MapEntry<String, int>> buckets,
-    List<Color> colors,
-  ) {
-    // Find the dominant category
-    int maxCount = 0;
-    int dominantIndex = 0;
-    for (int i = 0; i < buckets.length; i++) {
-      if (buckets[i].value > maxCount) {
-        maxCount = buckets[i].value;
-        dominantIndex = i;
-      }
-    }
-
-    final List<IconData> icons = [
-      Icons.bolt, // 0-6h (Excellent)
-      Icons.check_circle, // 6-12h (Good)
-      Icons.access_time, // 12-24h (Acceptable)
-      Icons.warning, // 24-48h (Needs Improvement)
-      Icons.error, // >48h (Critical)
-    ];
-
-    return Icon(icons[dominantIndex], size: 14, color: colors[dominantIndex]);
   }
 }
 
