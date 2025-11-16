@@ -2739,7 +2739,7 @@ class _ReportsState extends State<Reports> {
                                     const SizedBox(width: 12),
                                     Expanded(
                                       child: Text(
-                                        'Temperature data is sourced from Open-Meteo API and represents average conditions for Carmen, Davao del Norte during the selected time range.',
+                                        'Temperature data is sourced from Open-Meteo and represents average conditions for Baragay Cebulano, Carmen, Davao del Norte during the selected time range.',
                                         style: TextStyle(
                                           fontSize: 12,
                                           color: Colors.grey.shade700,
@@ -9308,33 +9308,33 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
     String label;
     Color color;
     Color bgColor;
-    IconData icon;
+    dynamic iconOrEmoji; // Can be IconData or String (emoji)
 
     if (hours <= 6) {
       label = 'Excellent';
       color = const Color(0xFF2E7D32); // Dark green
       bgColor = const Color(0xFFE8F5E9); // Light green bg
-      icon = Icons.emoji_events; // Trophy
+      iconOrEmoji = '⭐'; // Smile emoji
     } else if (hours <= 24) {
       label = 'Great';
       color = const Color(0xFF558B2F); // Green
       bgColor = const Color(0xFFF1F8E9); // Light green bg
-      icon = Icons.thumb_up;
+      iconOrEmoji = Icons.trending_up; // Trending up (positive performance)
     } else if (hours <= 48) {
       label = 'Good';
       color = const Color(0xFF1976D2); // Blue
       bgColor = const Color(0xFFE3F2FD); // Light blue bg
-      icon = Icons.check_circle;
+      iconOrEmoji = Icons.check_circle;
     } else if (hours <= 72) {
       label = 'Room for Improvement';
       color = const Color(0xFFF57C00); // Orange
       bgColor = const Color(0xFFFFF3E0); // Light orange bg
-      icon = Icons.trending_up;
+      iconOrEmoji = Icons.error_outline; // Circle warning icon
     } else {
       label = 'Needs Improvement';
       color = const Color(0xFFD32F2F); // Red
       bgColor = const Color(0xFFFFEBEE); // Light red bg
-      icon = Icons.warning;
+      iconOrEmoji = Icons.warning;
     }
 
     return Container(
@@ -9347,7 +9347,9 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: color),
+          iconOrEmoji is String
+              ? Text(iconOrEmoji, style: const TextStyle(fontSize: 14))
+              : Icon(iconOrEmoji as IconData, size: 14, color: color),
           const SizedBox(width: 4),
           Flexible(
             child: Text(
@@ -9448,7 +9450,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                       const SizedBox(height: 16),
                       // Excellent
                       _buildPerformanceLevelItem(
-                        Icons.emoji_events,
+                        '⭐', // Emoji instead of icon
                         'Excellent',
                         '0 - 6 hours',
                         const Color(0xFF2E7D32),
@@ -9458,7 +9460,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                       const SizedBox(height: 8),
                       // Great
                       _buildPerformanceLevelItem(
-                        Icons.thumb_up,
+                        Icons.trending_up,
                         'Great',
                         '6 - 24 hours',
                         const Color(0xFF558B2F),
@@ -9478,7 +9480,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
                       const SizedBox(height: 8),
                       // Room for Improvement
                       _buildPerformanceLevelItem(
-                        Icons.trending_up,
+                        Icons.error_outline,
                         'Room for Improvement',
                         '48 - 72 hours',
                         const Color(0xFFF57C00),
@@ -9591,7 +9593,7 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
   }
 
   Widget _buildPerformanceLevelItem(
-    IconData icon,
+    dynamic iconOrEmoji, // Can be IconData or String (emoji)
     String title,
     String timeRange,
     Color color,
@@ -9617,7 +9619,15 @@ class _AvgResponseTimeModalState extends State<AvgResponseTimeModal> {
               color: color.withOpacity(0.1),
               shape: BoxShape.circle,
             ),
-            child: Icon(icon, size: 20, color: color),
+            child:
+                iconOrEmoji is String
+                    ? Center(
+                      child: Text(
+                        iconOrEmoji,
+                        style: const TextStyle(fontSize: 20),
+                      ),
+                    )
+                    : Icon(iconOrEmoji as IconData, size: 20, color: color),
           ),
           const SizedBox(width: 14),
           Expanded(

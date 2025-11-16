@@ -170,10 +170,34 @@ class ReportPdfService {
             return val.toDouble();
           }).toList();
       if (entries.isEmpty) return 'N/A';
-      final first = entries.first;
-      final last = entries.last;
-      final delta = last - first;
-      const double eps = 1.0; // threshold to ignore noise
+      if (entries.length < 2) return 'N/A';
+
+      // Split the time range into two halves and compare their averages
+      // This is intuitive: "first half vs second half of the period"
+      final n = entries.length;
+      final midPoint = n ~/ 2; // integer division
+
+      // Calculate average of first half
+      double firstHalfSum = 0.0;
+      for (int i = 0; i < midPoint; i++) {
+        firstHalfSum += entries[i];
+      }
+      final firstHalfAvg = midPoint > 0 ? firstHalfSum / midPoint : 0.0;
+
+      // Calculate average of second half
+      double secondHalfSum = 0.0;
+      final secondHalfCount = n - midPoint;
+      for (int i = midPoint; i < n; i++) {
+        secondHalfSum += entries[i];
+      }
+      final secondHalfAvg =
+          secondHalfCount > 0 ? secondHalfSum / secondHalfCount : 0.0;
+
+      // Compare the two halves
+      final delta = secondHalfAvg - firstHalfAvg;
+
+      // Threshold: if difference is more than 1 detection on average
+      const double eps = 1.0;
       if (delta > eps) return 'Increasing';
       if (delta < -eps) return 'Decreasing';
       return 'Stable';
@@ -548,7 +572,7 @@ class ReportPdfService {
               ),
               pw.Bullet(
                 text:
-                    'Conclusions highlight simple start-to-end changes and may not reflect mid-period variability.',
+                    'Trends compare the average of the first half versus the second half of the time range, providing a clear and intuitive measure of change over the period.',
                 style: tsCaption,
               ),
 
@@ -1336,38 +1360,95 @@ class ReportPdfService {
 
   static String _healthyConclusion(List<double> series) {
     if (series.isEmpty) return 'No data shown.';
-    final first = series.first.isFinite ? series.first : 0.0;
-    final last = series.last.isFinite ? series.last : 0.0;
-    final delta = last - first;
-    const double eps = 0.1; // 10% threshold for percentage data
-    String direction;
-    if (delta > eps) {
-      direction = 'slightly uptrend overall';
-    } else if (delta < -eps) {
-      direction = 'slightly downtrend overall';
-    } else {
-      direction = 'relatively flat across the period';
+
+    // Split the time range into two halves and compare averages
+    final n = series.length;
+    if (n < 2) return 'Insufficient data for trend analysis.';
+
+    final midPoint = n ~/ 2;
+
+    // Calculate average of first half
+    double firstHalfSum = 0.0;
+    for (int i = 0; i < midPoint; i++) {
+      final val = series[i].isFinite ? series[i] : 0.0;
+      firstHalfSum += val;
     }
+    final firstHalfAvg = midPoint > 0 ? firstHalfSum / midPoint : 0.0;
+
+    // Calculate average of second half
+    double secondHalfSum = 0.0;
+    final secondHalfCount = n - midPoint;
+    for (int i = midPoint; i < n; i++) {
+      final val = series[i].isFinite ? series[i] : 0.0;
+      secondHalfSum += val;
+    }
+    final secondHalfAvg =
+        secondHalfCount > 0 ? secondHalfSum / secondHalfCount : 0.0;
+
+    // Compare the two halves (values are already percentages 0-1)
+    final delta =
+        (secondHalfAvg - firstHalfAvg) * 100; // convert to percentage points
+    const double eps = 5.0; // 5 percentage point threshold
+
+    String direction;
+    String detail;
+    if (delta > eps) {
+      direction = 'an increasing trend';
+      detail =
+          'The second half of the period shows ${delta.toStringAsFixed(1)}% higher healthy prevalence than the first half.';
+    } else if (delta < -eps) {
+      direction = 'a decreasing trend';
+      detail =
+          'The second half of the period shows ${(-delta).toStringAsFixed(1)}% lower healthy prevalence than the first half.';
+    } else {
+      direction = 'relatively stable conditions';
+      detail =
+          'The average healthy prevalence remained consistent between the first and second half of the period.';
+    }
+
     final String summary =
-        'Healthy prevalence appears ' +
-        direction +
-        '. This view shows daily healthy percentage across the selected dates.';
+        'Healthy prevalence shows ' + direction + '. ' + detail;
     final String context =
-        'Short-term fluctuations may occur day-to-day; the overall direction compares the beginning versus the end of the period.';
-    return summary + ' ' + context;
+        ' This analysis compares the average of the first half versus the second half of the time range, providing a clear picture of the overall direction.';
+    return summary + context;
   }
 
   static String _diseaseConclusion(Map<String, List<double>> seriesByName) {
     if (seriesByName.isEmpty) return 'No disease lines to summarize.';
+
+    // Calculate first-half vs second-half change for each disease
     String? rising;
     double risingDelta = -1e9;
     String? falling;
     double fallingDelta = 1e9;
+
     seriesByName.forEach((name, s) {
-      if (s.isEmpty) return;
-      final first = s.first.isFinite ? s.first : 0.0;
-      final last = s.last.isFinite ? s.last : 0.0;
-      final delta = last - first;
+      if (s.isEmpty || s.length < 2) return;
+
+      final n = s.length;
+      final midPoint = n ~/ 2;
+
+      // Calculate average of first half
+      double firstHalfSum = 0.0;
+      for (int i = 0; i < midPoint; i++) {
+        final val = s[i].isFinite ? s[i] : 0.0;
+        firstHalfSum += val;
+      }
+      final firstHalfAvg = midPoint > 0 ? firstHalfSum / midPoint : 0.0;
+
+      // Calculate average of second half
+      double secondHalfSum = 0.0;
+      final secondHalfCount = n - midPoint;
+      for (int i = midPoint; i < n; i++) {
+        final val = s[i].isFinite ? s[i] : 0.0;
+        secondHalfSum += val;
+      }
+      final secondHalfAvg =
+          secondHalfCount > 0 ? secondHalfSum / secondHalfCount : 0.0;
+
+      // Calculate change (already in percentage form 0-1, convert to percentage points)
+      final delta = (secondHalfAvg - firstHalfAvg) * 100;
+
       if (delta > risingDelta) {
         risingDelta = delta;
         rising = name;
@@ -1377,21 +1458,26 @@ class ReportPdfService {
         falling = name;
       }
     });
-    final bool hasUp = rising != null && risingDelta > 0.1; // 10% threshold
-    final bool hasDown =
-        falling != null && fallingDelta < -0.1; // 10% threshold
+
+    const double eps = 3.0; // 3 percentage point threshold
+    final bool hasUp = rising != null && risingDelta > eps;
+    final bool hasDown = falling != null && fallingDelta < -eps;
+
     final String opening =
         hasUp
-            ? _titleCase(rising!) + ' shows the strongest increase'
-            : 'No clear increasing disease trends are observed';
+            ? _titleCase(rising!) +
+                ' shows the strongest increase (${risingDelta.toStringAsFixed(1)}% higher in second half)'
+            : 'No significant increasing disease trends are observed';
     final String middle =
         hasDown
-            ? ', while ' + _titleCase(falling!) + ' shows the sharpest decline.'
+            ? ', while ' +
+                _titleCase(falling!) +
+                ' shows the strongest decline (${(-fallingDelta).toStringAsFixed(1)}% lower in second half).'
             : '.';
     final String context =
-        ' Lines reflect daily disease prevalence percentages; comparing the start and end highlights the overall direction.';
+        ' This analysis compares the average prevalence in the first half versus the second half of the time range.';
     final String guidance =
-        ' Consider both the magnitude of change and baseline percentages when interpreting these movements.';
+        ' Diseases showing increases warrant closer monitoring and potential intervention.';
     return opening + middle + context + ' ' + guidance;
   }
 
