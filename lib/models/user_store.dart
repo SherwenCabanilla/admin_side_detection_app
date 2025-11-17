@@ -31,6 +31,12 @@ class UserStore {
           }
         }
 
+        // Get raw timestamp for sorting
+        Timestamp? createdAtRaw;
+        if (data['createdAt'] is Timestamp) {
+          createdAtRaw = data['createdAt'] as Timestamp;
+        }
+
         return {
           'id': doc.id,
           'name': _titleCase(data['fullName'] ?? ''),
@@ -42,6 +48,7 @@ class UserStore {
           'registeredAt': registered,
           'acceptedAt': acceptedDisplay,
           'profileImage': data['imageProfile'] ?? '',
+          'createdAtRaw': createdAtRaw, // For sorting purposes
         };
       }).toList();
     } catch (e) {

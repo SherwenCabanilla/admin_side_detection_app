@@ -471,21 +471,12 @@ class _UserManagementState extends State<UserManagement> {
                                     'role': selectedRole,
                                   });
 
-                              Navigator.pop(context);
+                              Navigator.pop(context); // Close loading
 
                               if (success) {
-                                Navigator.pop(context);
-                                _loadUsers();
-                                if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        '${user['name']} updated successfully',
-                                      ),
-                                      backgroundColor: Colors.green,
-                                    ),
-                                  );
-                                }
+                                Navigator.pop(context); // Close edit dialog
+
+                                // Log activity
                                 await cf.FirebaseFirestore.instance
                                     .collection('activities')
                                     .add({
@@ -497,26 +488,125 @@ class _UserManagementState extends State<UserManagement> {
                                       'timestamp':
                                           cf.FieldValue.serverTimestamp(),
                                     });
-                              } else {
+
+                                // Show success dialog
                                 if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Failed to update user. Please try again.',
-                                      ),
-                                      backgroundColor: Colors.red,
-                                    ),
+                                  await showDialog(
+                                    context: context,
+                                    barrierDismissible: false,
+                                    builder:
+                                        (dialogContext) => AlertDialog(
+                                          title: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.check_circle,
+                                                color: Colors.green,
+                                                size: 28,
+                                              ),
+                                              SizedBox(width: 12),
+                                              Text('Success'),
+                                            ],
+                                          ),
+                                          content: Text(
+                                            '${user['name']} has been updated successfully!',
+                                          ),
+                                          actions: [
+                                            ElevatedButton(
+                                              onPressed:
+                                                  () =>
+                                                      Navigator.of(
+                                                        dialogContext,
+                                                      ).pop(),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: Colors.green,
+                                                foregroundColor: Colors.white,
+                                              ),
+                                              child: const Text('OK'),
+                                            ),
+                                          ],
+                                        ),
+                                  );
+                                }
+
+                                // Reload users after dialog is dismissed
+                                _loadUsers();
+                              } else {
+                                // Show error dialog
+                                if (mounted) {
+                                  showDialog(
+                                    context: context,
+                                    builder:
+                                        (dialogContext) => AlertDialog(
+                                          title: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.error,
+                                                color: Colors.red,
+                                                size: 28,
+                                              ),
+                                              SizedBox(width: 12),
+                                              Text('Error'),
+                                            ],
+                                          ),
+                                          content: const Text(
+                                            'Failed to update user. Please try again.',
+                                          ),
+                                          actions: [
+                                            ElevatedButton(
+                                              onPressed:
+                                                  () =>
+                                                      Navigator.of(
+                                                        dialogContext,
+                                                      ).pop(),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: Colors.red,
+                                                foregroundColor: Colors.white,
+                                              ),
+                                              child: const Text('OK'),
+                                            ),
+                                          ],
+                                        ),
                                   );
                                 }
                               }
                             } catch (e) {
-                              Navigator.pop(context);
+                              Navigator.pop(context); // Close loading
+
+                              // Show error dialog
                               if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Error updating user: $e'),
-                                    backgroundColor: Colors.red,
-                                  ),
+                                showDialog(
+                                  context: context,
+                                  builder:
+                                      (dialogContext) => AlertDialog(
+                                        title: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.error,
+                                              color: Colors.red,
+                                              size: 28,
+                                            ),
+                                            SizedBox(width: 12),
+                                            Text('Error'),
+                                          ],
+                                        ),
+                                        content: Text(
+                                          'Error updating user: $e',
+                                        ),
+                                        actions: [
+                                          ElevatedButton(
+                                            onPressed:
+                                                () =>
+                                                    Navigator.of(
+                                                      dialogContext,
+                                                    ).pop(),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: Colors.red,
+                                              foregroundColor: Colors.white,
+                                            ),
+                                            child: const Text('OK'),
+                                          ),
+                                        ],
+                                      ),
                                 );
                               }
                             }
@@ -838,7 +928,9 @@ class _UserManagementState extends State<UserManagement> {
                                                                       Navigator.pop(
                                                                         context,
                                                                       ); // Close confirm dialog
+
                                                                       if (success) {
+                                                                        // Log activity
                                                                         await cf
                                                                             .FirebaseFirestore
                                                                             .instance
@@ -859,19 +951,113 @@ class _UserManagementState extends State<UserManagement> {
                                                                               'timestamp':
                                                                                   cf.FieldValue.serverTimestamp(),
                                                                             });
+
+                                                                        // Show success dialog
+                                                                        if (mounted) {
+                                                                          await showDialog(
+                                                                            context:
+                                                                                context,
+                                                                            barrierDismissible:
+                                                                                false,
+                                                                            builder:
+                                                                                (
+                                                                                  dialogContext,
+                                                                                ) => AlertDialog(
+                                                                                  title: Row(
+                                                                                    children: [
+                                                                                      Icon(
+                                                                                        Icons.check_circle,
+                                                                                        color:
+                                                                                            Colors.green,
+                                                                                        size:
+                                                                                            28,
+                                                                                      ),
+                                                                                      SizedBox(
+                                                                                        width:
+                                                                                            12,
+                                                                                      ),
+                                                                                      Text(
+                                                                                        'Success',
+                                                                                      ),
+                                                                                    ],
+                                                                                  ),
+                                                                                  content: Text(
+                                                                                    '${user['name']} has been deleted successfully!',
+                                                                                  ),
+                                                                                  actions: [
+                                                                                    ElevatedButton(
+                                                                                      onPressed:
+                                                                                          () =>
+                                                                                              Navigator.of(
+                                                                                                dialogContext,
+                                                                                              ).pop(),
+                                                                                      style: ElevatedButton.styleFrom(
+                                                                                        backgroundColor:
+                                                                                            Colors.green,
+                                                                                        foregroundColor:
+                                                                                            Colors.white,
+                                                                                      ),
+                                                                                      child: const Text(
+                                                                                        'OK',
+                                                                                      ),
+                                                                                    ),
+                                                                                  ],
+                                                                                ),
+                                                                          );
+                                                                        }
+
+                                                                        // Reload users after dialog is dismissed
                                                                         _loadUsers();
                                                                       } else {
+                                                                        // Show error dialog
                                                                         if (mounted) {
-                                                                          ScaffoldMessenger.of(
-                                                                            context,
-                                                                          ).showSnackBar(
-                                                                            const SnackBar(
-                                                                              content: Text(
-                                                                                'Failed to delete user. Please try again.',
-                                                                              ),
-                                                                              backgroundColor:
-                                                                                  Colors.red,
-                                                                            ),
+                                                                          showDialog(
+                                                                            context:
+                                                                                context,
+                                                                            builder:
+                                                                                (
+                                                                                  dialogContext,
+                                                                                ) => AlertDialog(
+                                                                                  title: Row(
+                                                                                    children: [
+                                                                                      Icon(
+                                                                                        Icons.error,
+                                                                                        color:
+                                                                                            Colors.red,
+                                                                                        size:
+                                                                                            28,
+                                                                                      ),
+                                                                                      SizedBox(
+                                                                                        width:
+                                                                                            12,
+                                                                                      ),
+                                                                                      Text(
+                                                                                        'Error',
+                                                                                      ),
+                                                                                    ],
+                                                                                  ),
+                                                                                  content: const Text(
+                                                                                    'Failed to delete user. Please try again.',
+                                                                                  ),
+                                                                                  actions: [
+                                                                                    ElevatedButton(
+                                                                                      onPressed:
+                                                                                          () =>
+                                                                                              Navigator.of(
+                                                                                                dialogContext,
+                                                                                              ).pop(),
+                                                                                      style: ElevatedButton.styleFrom(
+                                                                                        backgroundColor:
+                                                                                            Colors.red,
+                                                                                        foregroundColor:
+                                                                                            Colors.white,
+                                                                                      ),
+                                                                                      child: const Text(
+                                                                                        'OK',
+                                                                                      ),
+                                                                                    ),
+                                                                                  ],
+                                                                                ),
                                                                           );
                                                                         }
                                                                       }

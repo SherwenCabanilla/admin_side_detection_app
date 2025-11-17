@@ -205,6 +205,17 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
       final pendingUsers =
           allUsers.where((user) => user['status'] == 'pending').toList();
 
+      // Sort by creation date (latest first)
+      pendingUsers.sort((a, b) {
+        final aCreatedAt = a['createdAtRaw'];
+        final bCreatedAt = b['createdAtRaw'];
+
+        if (aCreatedAt != null && bCreatedAt != null) {
+          return bCreatedAt.compareTo(aCreatedAt); // Descending (newest first)
+        }
+        return 0; // Keep order if no timestamps
+      });
+
       setState(() {
         _pendingUsers = pendingUsers;
         _filteredUsers = pendingUsers;
@@ -293,8 +304,32 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           _loadingUserIds.remove(user['id']);
         });
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('User approved successfully')),
+          // Show success dialog
+          showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.green, size: 28),
+                      SizedBox(width: 12),
+                      Text('Success'),
+                    ],
+                  ),
+                  content: Text(
+                    '${user['name']} has been approved successfully!',
+                  ),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
           );
         }
       } catch (e) {
@@ -302,9 +337,31 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           _loadingUserIds.remove(user['id']);
         });
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error approving user: $e')));
+          // Show error dialog
+          showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.error, color: Colors.red, size: 28),
+                      SizedBox(width: 12),
+                      Text('Error'),
+                    ],
+                  ),
+                  content: Text('Failed to approve user: $e'),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
+          );
         }
       }
     }
@@ -361,8 +418,32 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           _loadingUserIds.remove(user['id']);
         });
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('User deleted successfully')),
+          // Show success dialog
+          showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.green, size: 28),
+                      SizedBox(width: 12),
+                      Text('Success'),
+                    ],
+                  ),
+                  content: Text(
+                    '${user['name']} has been deleted successfully!',
+                  ),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
           );
         }
       } catch (e) {
@@ -370,9 +451,31 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           _loadingUserIds.remove(user['id']);
         });
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error deleting user: $e')));
+          // Show error dialog
+          showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.error, color: Colors.red, size: 28),
+                      SizedBox(width: 12),
+                      Text('Error'),
+                    ],
+                  ),
+                  content: Text('Failed to delete user: $e'),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
+          );
         }
       }
     }
@@ -423,14 +526,39 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
             'timestamp': FieldValue.serverTimestamp(),
           });
         }
+        final approvedCount = _filteredUsers.length;
         setState(() {
           _pendingUsers.clear();
           _filteredUsers.clear();
           _isApprovingAll = false;
         });
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('All users approved successfully')),
+          // Show success dialog
+          showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.green, size: 28),
+                      SizedBox(width: 12),
+                      Text('Success'),
+                    ],
+                  ),
+                  content: Text(
+                    'All $approvedCount users have been approved successfully!',
+                  ),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
           );
         }
       } catch (e) {
@@ -438,9 +566,31 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           _isApprovingAll = false;
         });
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error approving users: $e')));
+          // Show error dialog
+          showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.error, color: Colors.red, size: 28),
+                      SizedBox(width: 12),
+                      Text('Error'),
+                    ],
+                  ),
+                  content: Text('Failed to approve users: $e'),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
+          );
         }
       }
     }
@@ -491,14 +641,39 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
             'timestamp': FieldValue.serverTimestamp(),
           });
         }
+        final deletedCount = _filteredUsers.length;
         setState(() {
           _pendingUsers.clear();
           _filteredUsers.clear();
           _isDeletingAll = false;
         });
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('All users deleted successfully')),
+          // Show success dialog
+          showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.green, size: 28),
+                      SizedBox(width: 12),
+                      Text('Success'),
+                    ],
+                  ),
+                  content: Text(
+                    'All $deletedCount users have been deleted successfully!',
+                  ),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
           );
         }
       } catch (e) {
@@ -506,9 +681,31 @@ class _PendingUsersModalContentState extends State<PendingUsersModalContent> {
           _isDeletingAll = false;
         });
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error deleting users: $e')));
+          // Show error dialog
+          showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.error, color: Colors.red, size: 28),
+                      SizedBox(width: 12),
+                      Text('Error'),
+                    ],
+                  ),
+                  content: Text('Failed to delete users: $e'),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('OK'),
+                    ),
+                  ],
+                ),
+          );
         }
       }
     }
