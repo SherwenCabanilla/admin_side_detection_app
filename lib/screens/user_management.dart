@@ -317,10 +317,51 @@ class _UserManagementState extends State<UserManagement> {
                               textInputAction: TextInputAction.next,
                               decoration: const InputDecoration(
                                 labelText: 'Phone Number',
-                                hintText: 'e.g. 09123456789',
+                                hintText: '09123456789 or +639123456789',
                                 prefixIcon: Icon(Icons.phone_outlined),
                                 border: OutlineInputBorder(),
+                                helperText: 'Philippine mobile number format',
                               ),
+                              validator: (v) {
+                                final value = v?.trim() ?? '';
+                                if (value.isEmpty) {
+                                  return 'Phone number is required';
+                                }
+
+                                // Remove any spaces or dashes
+                                final cleanedValue = value.replaceAll(
+                                  RegExp(r'[\s\-]'),
+                                  '',
+                                );
+
+                                // Check if contains only numbers, + and spaces/dashes
+                                if (!RegExp(r'^[\d\+\s\-]+$').hasMatch(value)) {
+                                  return 'Phone number can only contain numbers';
+                                }
+
+                                // Philippine phone number formats:
+                                // 09XXXXXXXXX (11 digits starting with 09)
+                                // +639XXXXXXXXX (13 characters starting with +639)
+                                // 639XXXXXXXXX (12 digits starting with 639)
+
+                                if (cleanedValue.startsWith('+639')) {
+                                  if (cleanedValue.length != 13) {
+                                    return 'Format: +639XXXXXXXXX (13 digits)';
+                                  }
+                                } else if (cleanedValue.startsWith('639')) {
+                                  if (cleanedValue.length != 12) {
+                                    return 'Format: 639XXXXXXXXX (12 digits)';
+                                  }
+                                } else if (cleanedValue.startsWith('09')) {
+                                  if (cleanedValue.length != 11) {
+                                    return 'Format: 09XXXXXXXXX (11 digits)';
+                                  }
+                                } else {
+                                  return 'Must start with 09, 639, or +639';
+                                }
+
+                                return null;
+                              },
                             ),
                             const SizedBox(height: 16),
                             TextFormField(
