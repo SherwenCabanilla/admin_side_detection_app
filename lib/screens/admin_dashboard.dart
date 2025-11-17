@@ -12,6 +12,7 @@ import '../services/scan_requests_service.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'settings.dart' as admin_settings;
+import '../widgets/firebase_status_banner.dart';
 
 // --- Custom snapshot wrappers ---
 class UsersSnapshot {
@@ -696,10 +697,16 @@ class _AdminDashboardState extends State<AdminDashboard>
     return StatefulBuilder(
       builder: (context, setSidebarState) {
         return Scaffold(
-          body: Row(
+          body: Column(
             children: [
-              // Custom Sidebar
-              Container(
+              // Firebase Connection Status Banner
+              const FirebaseStatusBanner(),
+              // Main Content Row
+              Expanded(
+                child: Row(
+                  children: [
+                    // Custom Sidebar
+                    Container(
                 width: 220,
                 color: const Color(0xFF2D7204),
                 child: Column(
@@ -842,8 +849,11 @@ class _AdminDashboardState extends State<AdminDashboard>
                   ],
                 ),
               ),
-              // Main Content
-              Expanded(child: _getScreen(_selectedIndex)),
+                    // Main Content
+                    Expanded(child: _getScreen(_selectedIndex)),
+                  ],
+                ),
+              ),
             ],
           ),
         );

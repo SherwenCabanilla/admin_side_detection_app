@@ -8,6 +8,7 @@ import 'firebase_options.dart';
 import 'screens/admin_login.dart';
 import 'screens/admin_dashboard.dart';
 import 'models/admin_user.dart';
+import 'services/firebase_monitor.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,9 +18,15 @@ void main() async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+
+    // Start Firebase connectivity monitoring
+    FirebaseMonitor().startMonitoring();
+    debugPrint('✅ Firebase initialized and monitoring started');
   } catch (e) {
     // If Firebase is already initialized, just continue
     debugPrint('Firebase already initialized: $e');
+    // Still start monitoring
+    FirebaseMonitor().startMonitoring();
   }
 
   if (kReleaseMode) {
