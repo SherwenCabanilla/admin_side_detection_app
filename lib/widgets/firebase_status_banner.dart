@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import '../services/firebase_monitor.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'dart:html' as html;
 
 /// Banner that displays Firebase connection status
 class FirebaseStatusBanner extends StatelessWidget {
@@ -164,15 +164,13 @@ class FirebaseStatusBanner extends StatelessWidget {
                   _buildBulletPoint('Check Firebase status page', Colors.green),
                   const SizedBox(height: 16),
                   InkWell(
-                    onTap: () async {
-                      final url = Uri.parse(
-                        'https://status.firebase.google.com/',
-                      );
-                      try {
-                        // For web, this will open in a new tab
-                        await launchUrl(url, webOnlyWindowName: '_blank');
-                      } catch (e) {
-                        debugPrint('Could not launch URL: $e');
+                    onTap: () {
+                      // Direct way to open URL in new tab for web
+                      if (kIsWeb) {
+                        html.window.open(
+                          'https://status.firebase.google.com/',
+                          '_blank',
+                        );
                       }
                     },
                     child: Container(
