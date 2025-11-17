@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../services/firebase_monitor.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -167,11 +168,11 @@ class FirebaseStatusBanner extends StatelessWidget {
                       final url = Uri.parse(
                         'https://status.firebase.google.com/',
                       );
-                      if (await canLaunchUrl(url)) {
-                        await launchUrl(
-                          url,
-                          mode: LaunchMode.externalApplication,
-                        );
+                      try {
+                        // For web, this will open in a new tab
+                        await launchUrl(url, webOnlyWindowName: '_blank');
+                      } catch (e) {
+                        debugPrint('Could not launch URL: $e');
                       }
                     },
                     child: Container(
