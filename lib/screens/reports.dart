@@ -5503,7 +5503,39 @@ class _AvgResponseTrendChartState extends State<AvgResponseTrendChart> {
       LineChartData(
         minX: minX,
         maxX: maxX,
-        gridData: FlGridData(show: true, drawVerticalLine: false),
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          horizontalInterval: () {
+            // Use the same interval as Y-axis labels for consistent gridlines
+            if (widget.trend.isEmpty) return 10.0;
+            final maxVal = widget.trend
+                .map((e) => (e['avgHours'] as double))
+                .reduce((a, b) => a > b ? a : b);
+            final maxY = maxVal * 1.15;
+            final roughInterval = maxY / 5;
+            
+            if (roughInterval <= 1) return 1.0;
+            if (roughInterval <= 2) return 2.0;
+            if (roughInterval <= 5) return 5.0;
+            if (roughInterval <= 10) return 10.0;
+            if (roughInterval <= 20) return 20.0;
+            if (roughInterval <= 25) return 25.0;
+            if (roughInterval <= 50) return 50.0;
+            if (roughInterval <= 100) return 100.0;
+            if (roughInterval <= 200) return 200.0;
+            if (roughInterval <= 250) return 250.0;
+            if (roughInterval <= 500) return 500.0;
+            return (roughInterval / 100).ceil() * 100.0;
+          }(),
+          getDrawingHorizontalLine: (value) {
+            // Draw solid light gray lines for regular gridlines
+            return FlLine(
+              color: Colors.grey.withOpacity(0.2),
+              strokeWidth: 1,
+            );
+          },
+        ),
         lineTouchData: LineTouchData(
           touchTooltipData: LineTouchTooltipData(
             tooltipBgColor: Colors.blueGrey,
@@ -5554,32 +5586,49 @@ class _AvgResponseTrendChartState extends State<AvgResponseTrendChart> {
               showTitles: true,
               reservedSize: 56,
               interval: () {
-                // Calculate the max value and use it as interval
-                // This ensures we get called at 0 and maxVal
-                if (widget.trend.isEmpty) return 1.0;
+                // Calculate interval to show maximum 6 labels (including 0)
+                if (widget.trend.isEmpty) return 10.0;
                 final maxVal = widget.trend
                     .map((e) => (e['avgHours'] as double))
                     .reduce((a, b) => a > b ? a : b);
-                return maxVal > 0 ? maxVal : 1.0;
+                
+                // Add 15% padding to match maxY calculation
+                final maxY = maxVal * 1.15;
+                
+                // Calculate interval to get approximately 5 divisions (6 labels including 0)
+                final roughInterval = maxY / 5;
+                
+                // Round up to the nearest nice number
+                if (roughInterval <= 1) return 1.0;
+                if (roughInterval <= 2) return 2.0;
+                if (roughInterval <= 5) return 5.0;
+                if (roughInterval <= 10) return 10.0;
+                if (roughInterval <= 20) return 20.0;
+                if (roughInterval <= 25) return 25.0;
+                if (roughInterval <= 50) return 50.0;
+                if (roughInterval <= 100) return 100.0;
+                if (roughInterval <= 200) return 200.0;
+                if (roughInterval <= 250) return 250.0;
+                if (roughInterval <= 500) return 500.0;
+                // For very large values, calculate dynamically
+                return (roughInterval / 100).ceil() * 100.0;
               }(),
               getTitlesWidget: (value, meta) {
-                // Only show 0 and max value labels
-                if (widget.trend.isEmpty) return const SizedBox.shrink();
-                final maxVal = widget.trend
-                    .map((e) => (e['avgHours'] as double))
-                    .reduce((a, b) => a > b ? a : b);
-
-                if (value == 0) {
-                  return const Text('0', style: TextStyle(fontSize: 10));
-                }
-                if (value >= maxVal * 0.99 && value <= maxVal * 1.01) {
-                  final String label =
-                      maxVal >= 10
-                          ? maxVal.toStringAsFixed(0)
-                          : maxVal.toStringAsFixed(1);
-                  return Text(label, style: const TextStyle(fontSize: 10));
-                }
-                return const SizedBox.shrink();
+                // Show all interval values
+                if (value < 0) return const SizedBox.shrink();
+                
+                // Format the label based on value
+                final String label = value >= 10
+                    ? value.toStringAsFixed(0)
+                    : value.toStringAsFixed(1);
+                    
+                return Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Colors.black87,
+                  ),
+                );
               },
             ),
           ),
@@ -5621,24 +5670,42 @@ class _AvgResponseTrendChartState extends State<AvgResponseTrendChart> {
           // Add 15% padding above the max value for breathing room
           return (maxVal * 1.15).toDouble();
         }(),
-        // Add SLA threshold lines
+        // Add SLA threshold lines (only show if relevant to data range)
         extraLinesData: ExtraLinesData(
-          horizontalLines: [
-            // 24-hour SLA line
-            HorizontalLine(
-              y: 24,
-              color: Colors.orange.withOpacity(0.4),
-              strokeWidth: 2,
-              dashArray: [5, 5],
-            ),
-            // 48-hour line
-            HorizontalLine(
-              y: 48,
-              color: Colors.red.withOpacity(0.4),
-              strokeWidth: 2,
-              dashArray: [5, 5],
-            ),
-          ],
+          horizontalLines: () {
+            if (widget.trend.isEmpty) return <HorizontalLine>[];
+            final maxVal = widget.trend
+                .map((e) => (e['avgHours'] as double))
+                .reduce((a, b) => a > b ? a : b);
+            
+            List<HorizontalLine> lines = [];
+            
+            // Only show 24h line if max value is above 20 and below 200
+            if (maxVal > 20 && maxVal < 200) {
+              lines.add(
+                HorizontalLine(
+                  y: 24,
+                  color: Colors.orange.withOpacity(0.4),
+                  strokeWidth: 2,
+                  dashArray: [5, 5],
+                ),
+              );
+            }
+            
+            // Only show 48h line if max value is above 40 and below 200
+            if (maxVal > 40 && maxVal < 200) {
+              lines.add(
+                HorizontalLine(
+                  y: 48,
+                  color: Colors.red.withOpacity(0.4),
+                  strokeWidth: 2,
+                  dashArray: [5, 5],
+                ),
+              );
+            }
+            
+            return lines;
+          }(),
         ),
         lineBarsData: [
           LineChartBarData(
