@@ -786,15 +786,29 @@ class _SettingsState extends State<Settings> {
                                         'This email is already in use.';
                                     break;
                                   case 'wrong-password':
-                                    errorMessage = 'Incorrect password.';
+                                    errorMessage =
+                                        'The password you entered is incorrect. Please try again.';
+                                    break;
+                                  case 'invalid-credential':
+                                    errorMessage =
+                                        'The password you entered is incorrect. Please check your password and try again.';
                                     break;
                                   case 'requires-recent-login':
                                     errorMessage =
                                         'Session expired. Please log out and log back in.';
                                     break;
                                   default:
-                                    errorMessage =
-                                        e.message ?? 'Failed to change email.';
+                                    // Check if the error message contains password-related keywords
+                                    final message = e.message ?? '';
+                                    if (message.toLowerCase().contains('password') ||
+                                        message.toLowerCase().contains('credential') ||
+                                        message.toLowerCase().contains('incorrect')) {
+                                      errorMessage =
+                                          'The password you entered is incorrect. Please check your password and try again.';
+                                    } else {
+                                      errorMessage =
+                                          'Failed to change email. ${message.isNotEmpty ? message : "Please try again."}';
+                                    }
                                 }
                               });
                             } catch (e) {
@@ -961,9 +975,13 @@ class _SettingsState extends State<Settings> {
                                   builder: (context, setState) {
                                     return AlertDialog(
                                       title: const Text('Change Password'),
-                                      content: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
+                                      contentPadding: const EdgeInsets.fromLTRB(
+                                          24.0, 20.0, 24.0, 24.0),
+                                      content: SizedBox(
+                                        width: 500,
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
                                           TextField(
                                             controller:
                                                 currentPasswordController,
@@ -991,6 +1009,9 @@ class _SettingsState extends State<Settings> {
                                             obscureText: !showNewPassword,
                                             decoration: InputDecoration(
                                               labelText: 'New Password',
+                                              helperText:
+                                                  'Must be 8+ characters with uppercase, lowercase, number, and special character',
+                                              helperMaxLines: 2,
                                               suffixIcon: IconButton(
                                                 icon: Icon(
                                                   showNewPassword
@@ -1059,6 +1080,7 @@ class _SettingsState extends State<Settings> {
                                           ],
                                         ],
                                       ),
+                                      ),
                                       actions: [
                                         TextButton(
                                           onPressed:
@@ -1087,6 +1109,7 @@ class _SettingsState extends State<Settings> {
                                                         confirmPasswordController
                                                             .text
                                                             .trim();
+                                                    // Validation
                                                     if (current.isEmpty ||
                                                         newPass.isEmpty ||
                                                         confirm.isEmpty) {
@@ -1097,19 +1120,78 @@ class _SettingsState extends State<Settings> {
                                                       );
                                                       return;
                                                     }
+
+                                                    // Check if new password is same as current
+                                                    if (newPass == current) {
+                                                      setState(
+                                                        () =>
+                                                            errorMessage =
+                                                                'New password must be different from your current password.',
+                                                      );
+                                                      return;
+                                                    }
+
+                                                    // Check if passwords match
                                                     if (newPass != confirm) {
                                                       setState(
                                                         () =>
                                                             errorMessage =
-                                                                'New passwords do not match.',
+                                                                'New passwords do not match. Please try again.',
                                                       );
                                                       return;
                                                     }
-                                                    if (newPass.length < 6) {
+
+                                                    // Password strength validation
+                                                    if (newPass.length < 8) {
                                                       setState(
                                                         () =>
                                                             errorMessage =
-                                                                'New password must be at least 6 characters long.',
+                                                                'Password must be at least 8 characters long.',
+                                                      );
+                                                      return;
+                                                    }
+
+                                                    // Check for uppercase letter
+                                                    if (!newPass.contains(
+                                                        RegExp(r'[A-Z]'))) {
+                                                      setState(
+                                                        () =>
+                                                            errorMessage =
+                                                                'Password must contain at least one uppercase letter (A-Z).',
+                                                      );
+                                                      return;
+                                                    }
+
+                                                    // Check for lowercase letter
+                                                    if (!newPass.contains(
+                                                        RegExp(r'[a-z]'))) {
+                                                      setState(
+                                                        () =>
+                                                            errorMessage =
+                                                                'Password must contain at least one lowercase letter (a-z).',
+                                                      );
+                                                      return;
+                                                    }
+
+                                                    // Check for number
+                                                    if (!newPass.contains(
+                                                        RegExp(r'[0-9]'))) {
+                                                      setState(
+                                                        () =>
+                                                            errorMessage =
+                                                                'Password must contain at least one number (0-9).',
+                                                      );
+                                                      return;
+                                                    }
+
+                                                    // Check for special character
+                                                    if (!newPass.contains(
+                                                        RegExp(
+                                                            r'[!@#$%^&*(),.?":{}|<>]'))) {
+                                                      setState(
+                                                        () =>
+                                                            errorMessage =
+                                                                'Password must contain at least one special character (!@#\$%^&* etc.).',
                                                       );
                                                       return;
                                                     }
@@ -1195,15 +1277,52 @@ class _SettingsState extends State<Settings> {
                                                     ) {
                                                       setState(() {
                                                         isLoading = false;
-                                                        errorMessage =
-                                                            e.message ??
-                                                            'Failed to change password.';
+                                                        switch (e.code) {
+                                                          case 'wrong-password':
+                                                            errorMessage =
+                                                                'The current password you entered is incorrect. Please try again.';
+                                                            break;
+                                                          case 'invalid-credential':
+                                                            errorMessage =
+                                                                'The current password you entered is incorrect. Please check and try again.';
+                                                            break;
+                                                          case 'weak-password':
+                                                            errorMessage =
+                                                                'The password is too weak. Please use a stronger password.';
+                                                            break;
+                                                          case 'requires-recent-login':
+                                                            errorMessage =
+                                                                'Session expired. Please log out and log back in to change your password.';
+                                                            break;
+                                                          default:
+                                                            // Check if the error message contains password-related keywords
+                                                            final message =
+                                                                e.message ?? '';
+                                                            if (message
+                                                                    .toLowerCase()
+                                                                    .contains(
+                                                                        'password') ||
+                                                                message
+                                                                    .toLowerCase()
+                                                                    .contains(
+                                                                        'credential') ||
+                                                                message
+                                                                    .toLowerCase()
+                                                                    .contains(
+                                                                        'incorrect')) {
+                                                              errorMessage =
+                                                                  'The current password you entered is incorrect. Please check and try again.';
+                                                            } else {
+                                                              errorMessage =
+                                                                  'Failed to change password. ${message.isNotEmpty ? message : "Please try again."}';
+                                                            }
+                                                        }
                                                       });
                                                     } catch (e) {
                                                       setState(() {
                                                         isLoading = false;
                                                         errorMessage =
-                                                            'Failed to change password.';
+                                                            'An unexpected error occurred. Please try again.';
                                                       });
                                                     }
                                                   },
