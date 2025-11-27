@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'admin_login.dart';
 
 class Settings extends StatefulWidget {
   final VoidCallback? onViewReports;
@@ -858,11 +857,14 @@ class _SettingsState extends State<Settings> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return Align(
+      alignment: Alignment.topLeft,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.start,
+          children: [
           const Text(
             'Settings',
             style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
@@ -1414,103 +1416,8 @@ class _SettingsState extends State<Settings> {
               ],
             ),
           ),
-          const SizedBox(height: 16),
-
-          // Session
-          Card(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
-                    'Session',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                    ),
-                  ),
-                ),
-                StatefulBuilder(
-                  builder: (context, setState) {
-                    bool isHovered = false;
-                    return MouseRegion(
-                      onEnter: (_) => setState(() => isHovered = true),
-                      onExit: (_) => setState(() => isHovered = false),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        decoration: BoxDecoration(
-                          color: isHovered ? Colors.red.withOpacity(0.1) : null,
-                        ),
-                        child: ListTile(
-                          leading: const Icon(Icons.logout, color: Colors.red),
-                          title: const Text(
-                            'Logout',
-                            style: TextStyle(color: Colors.red),
-                          ),
-                          onTap: () async {
-                            final shouldLogout = await showDialog<bool>(
-                              context: context,
-                              builder:
-                                  (context) => AlertDialog(
-                                    title: const Text('Confirm Logout'),
-                                    content: const Text(
-                                      'Are you sure you want to logout?',
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed:
-                                            () => Navigator.of(
-                                              context,
-                                            ).pop(false),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      TextButton(
-                                        onPressed:
-                                            () =>
-                                                Navigator.of(context).pop(true),
-                                        child: const Text('Logout'),
-                                      ),
-                                    ],
-                                  ),
-                            );
-                            if (shouldLogout == true) {
-                              // Log admin logout before signing out
-                              try {
-                                await FirebaseFirestore.instance
-                                    .collection('activities')
-                                    .add({
-                                      'action': 'Admin logged out',
-                                      'user': _adminName ?? 'Admin',
-                                      'type': 'logout',
-                                      'color': Colors.orange.value,
-                                      'icon': Icons.logout.codePoint,
-                                      'timestamp': FieldValue.serverTimestamp(),
-                                    });
-                              } catch (e) {
-                                // Continue with logout even if logging fails
-                                print('Failed to log logout activity: $e');
-                              }
-
-                              await FirebaseAuth.instance.signOut();
-                              Navigator.of(context).pushAndRemoveUntil(
-                                MaterialPageRoute(
-                                  builder: (context) => AdminLogin(),
-                                ),
-                                (route) => false,
-                              );
-                            }
-                          },
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
         ],
+        ),
       ),
     );
   }

@@ -12,6 +12,7 @@ import '../services/scan_requests_service.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'settings.dart' as admin_settings;
+import 'admin_login.dart';
 import '../widgets/firebase_status_banner.dart';
 
 // --- Custom snapshot wrappers ---
@@ -78,7 +79,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   };
 
   // Dashboard always shows current month data - no time range selection needed
-  
+
   // Dynamic admin name that updates from Firestore
   String _currentAdminName = '';
 
@@ -341,10 +342,12 @@ class _AdminDashboardState extends State<AdminDashboard>
     final now = DateTime.now();
     final firstDayOfMonth = DateTime(now.year, now.month, 1);
     final lastDayOfMonth = DateTime(now.year, now.month + 1, 0);
-    
-    final startStr = '${firstDayOfMonth.year}-${firstDayOfMonth.month.toString().padLeft(2, '0')}-${firstDayOfMonth.day.toString().padLeft(2, '0')}';
-    final endStr = '${lastDayOfMonth.year}-${lastDayOfMonth.month.toString().padLeft(2, '0')}-${lastDayOfMonth.day.toString().padLeft(2, '0')}';
-    
+
+    final startStr =
+        '${firstDayOfMonth.year}-${firstDayOfMonth.month.toString().padLeft(2, '0')}-${firstDayOfMonth.day.toString().padLeft(2, '0')}';
+    final endStr =
+        '${lastDayOfMonth.year}-${lastDayOfMonth.month.toString().padLeft(2, '0')}-${lastDayOfMonth.day.toString().padLeft(2, '0')}';
+
     return 'Monthly ($startStr to $endStr)';
   }
 
@@ -498,7 +501,8 @@ class _AdminDashboardState extends State<AdminDashboard>
             DiseaseDistributionChart(
               diseaseStats: _diseaseStats,
               selectedTimeRange: _getCurrentMonthTimeRange(),
-              onTimeRangeChanged: null, // Disable time range change in dashboard
+              onTimeRangeChanged:
+                  null, // Disable time range change in dashboard
             ),
             const SizedBox(height: 24),
 
@@ -707,148 +711,280 @@ class _AdminDashboardState extends State<AdminDashboard>
                   children: [
                     // Custom Sidebar
                     Container(
-                width: 220,
-                color: const Color(0xFF2D7204),
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 24.0),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () {
-                          setState(() {
-                            _selectedIndex = 0; // Go to Dashboard
-                          });
-                        },
-                        child: Column(
-                          children: [
-                            Container(
-                              height: 80,
-                              width: 80,
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.1),
-                                    blurRadius: 10,
-                                    spreadRadius: 2,
-                                  ),
-                                ],
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(8.0),
-                                child: ClipOval(
-                                  child: Image.asset(
-                                    'assets/logo.png',
-                                    fit: BoxFit.contain,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            RichText(
-                              text: const TextSpan(
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                      width: 220,
+                      color: const Color(0xFF2D7204),
+                      child: Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 24.0),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: () {
+                                setState(() {
+                                  _selectedIndex = 0; // Go to Dashboard
+                                });
+                              },
+                              child: Column(
                                 children: [
-                                  TextSpan(
-                                    text: 'Mango',
-                                    style: TextStyle(color: Colors.white),
-                                  ),
-                                  TextSpan(
-                                    text: 'Sense',
-                                    style: TextStyle(
-                                      color: Color.fromARGB(255, 200, 183, 25),
+                                  Container(
+                                    height: 80,
+                                    width: 80,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.1),
+                                          blurRadius: 10,
+                                          spreadRadius: 2,
+                                        ),
+                                      ],
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(8.0),
+                                      child: ClipOval(
+                                        child: Image.asset(
+                                          'assets/logo.png',
+                                          fit: BoxFit.contain,
+                                        ),
+                                      ),
                                     ),
                                   ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'Admin Panel',
-                              style: TextStyle(
-                                color: Colors.white70,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    // Sidebar Items
-                    ...List.generate(sidebarItems.length, (index) {
-                      final selected = _selectedIndex == index;
-                      final hovered = hoveredIndex == index;
-                      Color bgColor = Colors.transparent;
-                      Color fgColor = Colors.white;
-                      FontWeight fontWeight = FontWeight.w500;
-                      if (selected) {
-                        bgColor = const Color.fromARGB(255, 200, 183, 25);
-                        fontWeight = FontWeight.bold;
-                      } else if (hovered) {
-                        bgColor = const Color.fromARGB(180, 200, 183, 25);
-                        fontWeight = FontWeight.w600;
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 6.0,
-                          horizontal: 12.0,
-                        ),
-                        child: MouseRegion(
-                          onEnter:
-                              (_) =>
-                                  setSidebarState(() => hoveredIndex = index),
-                          onExit:
-                              (_) => setSidebarState(() => hoveredIndex = null),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(32),
-                            onTap: () {
-                              setState(() {
-                                _selectedIndex = index;
-                              });
-                            },
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: bgColor,
-                                borderRadius: BorderRadius.circular(32),
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 10,
-                                horizontal: 18,
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    sidebarItems[index]['icon'] as IconData,
-                                    color: fgColor,
-                                    size: 28,
+                                  const SizedBox(height: 12),
+                                  RichText(
+                                    text: const TextSpan(
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      children: [
+                                        TextSpan(
+                                          text: 'Mango',
+                                          style: TextStyle(color: Colors.white),
+                                        ),
+                                        TextSpan(
+                                          text: 'Sense',
+                                          style: TextStyle(
+                                            color: Color.fromARGB(
+                                              255,
+                                              200,
+                                              183,
+                                              25,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                  const SizedBox(width: 16),
-                                  Text(
-                                    sidebarItems[index]['label'] as String,
+                                  const SizedBox(height: 4),
+                                  const Text(
+                                    'Admin Panel',
                                     style: TextStyle(
-                                      color: fgColor,
-                                      fontSize: 16,
-                                      fontWeight: fontWeight,
+                                      color: Colors.white70,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
                                     ),
                                   ),
                                 ],
                               ),
                             ),
                           ),
-                        ),
-                      );
-                    }),
-                    const Spacer(),
-                  ],
-                ),
-              ),
+                          const SizedBox(height: 16),
+                          // Sidebar Items
+                          ...List.generate(sidebarItems.length, (index) {
+                            final selected = _selectedIndex == index;
+                            final hovered = hoveredIndex == index;
+                            Color bgColor = Colors.transparent;
+                            Color fgColor = Colors.white;
+                            FontWeight fontWeight = FontWeight.w500;
+                            if (selected) {
+                              bgColor = const Color.fromARGB(255, 200, 183, 25);
+                              fontWeight = FontWeight.bold;
+                            } else if (hovered) {
+                              bgColor = const Color.fromARGB(180, 200, 183, 25);
+                              fontWeight = FontWeight.w600;
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 6.0,
+                                horizontal: 12.0,
+                              ),
+                              child: MouseRegion(
+                                onEnter:
+                                    (_) => setSidebarState(
+                                      () => hoveredIndex = index,
+                                    ),
+                                onExit:
+                                    (_) => setSidebarState(
+                                      () => hoveredIndex = null,
+                                    ),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(32),
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedIndex = index;
+                                    });
+                                  },
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: bgColor,
+                                      borderRadius: BorderRadius.circular(32),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 10,
+                                      horizontal: 18,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          sidebarItems[index]['icon']
+                                              as IconData,
+                                          color: fgColor,
+                                          size: 28,
+                                        ),
+                                        const SizedBox(width: 16),
+                                        Text(
+                                          sidebarItems[index]['label']
+                                              as String,
+                                          style: TextStyle(
+                                            color: fgColor,
+                                            fontSize: 16,
+                                            fontWeight: fontWeight,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }),
+                          const Spacer(),
+                          // Logout Button
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 6.0,
+                              horizontal: 12.0,
+                            ),
+                            child: MouseRegion(
+                              onEnter:
+                                  (_) =>
+                                      setSidebarState(() => hoveredIndex = -1),
+                              onExit:
+                                  (_) => setSidebarState(
+                                    () => hoveredIndex = null,
+                                  ),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(32),
+                                onTap: () async {
+                                  final shouldLogout = await showDialog<bool>(
+                                    context: context,
+                                    builder:
+                                        (context) => AlertDialog(
+                                          title: const Text('Confirm Logout'),
+                                          content: const Text(
+                                            'Are you sure you want to logout?',
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed:
+                                                  () => Navigator.of(
+                                                    context,
+                                                  ).pop(false),
+                                              child: const Text('Cancel'),
+                                            ),
+                                            TextButton(
+                                              onPressed:
+                                                  () => Navigator.of(
+                                                    context,
+                                                  ).pop(true),
+                                              child: const Text('Logout'),
+                                            ),
+                                          ],
+                                        ),
+                                  );
+                                  if (shouldLogout == true) {
+                                    // Log admin logout before signing out
+                                    try {
+                                      await FirebaseFirestore.instance
+                                          .collection('activities')
+                                          .add({
+                                            'action': 'Admin logged out',
+                                            'user':
+                                                _currentAdminName.isNotEmpty
+                                                    ? _currentAdminName
+                                                    : widget.adminUser.username,
+                                            'type': 'logout',
+                                            'color': Colors.orange.value,
+                                            'icon': Icons.logout.codePoint,
+                                            'timestamp':
+                                                FieldValue.serverTimestamp(),
+                                          });
+                                    } catch (e) {
+                                      // Continue with logout even if logging fails
+                                      print(
+                                        'Failed to log logout activity: $e',
+                                      );
+                                    }
+
+                                    await FirebaseAuth.instance.signOut();
+                                    if (context.mounted) {
+                                      Navigator.of(context).pushAndRemoveUntil(
+                                        MaterialPageRoute(
+                                          builder:
+                                              (context) => const AdminLogin(),
+                                        ),
+                                        (route) => false,
+                                      );
+                                    }
+                                  }
+                                },
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color:
+                                        hoveredIndex == -1
+                                            ? const Color.fromARGB(
+                                              213,
+                                              245,
+                                              67,
+                                              54,
+                                            )
+                                            : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(32),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 10,
+                                    horizontal: 18,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.logout,
+                                        color: Colors.white,
+                                        size: 28,
+                                      ),
+                                      const SizedBox(width: 16),
+                                      Text(
+                                        'Logout',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          fontWeight:
+                                              hoveredIndex == -1
+                                                  ? FontWeight.w600
+                                                  : FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                      ),
+                    ),
                     // Main Content
                     Expanded(child: _getScreen(_selectedIndex)),
                   ],
