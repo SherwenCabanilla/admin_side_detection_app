@@ -14,6 +14,10 @@ class AdminLogin extends StatefulWidget {
 }
 
 class _AdminLoginState extends State<AdminLogin> {
+  // Set to true during testing to show "Create Admin Account" option on login screen.
+  // Set to false in production to hide it.
+  static const bool _allowAdminCreation = false;
+
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -41,8 +45,14 @@ class _AdminLoginState extends State<AdminLogin> {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
+      debugPrint('✅ Firebase initialized successfully');
     } catch (e) {
       // Firebase may already be initialized
+      debugPrint('Firebase initialization: $e');
+      // If it's not an "already initialized" error, show a warning
+      if (!e.toString().toLowerCase().contains('already')) {
+        debugPrint('⚠️ Firebase initialization error: $e');
+      }
     }
   }
 
@@ -52,6 +62,22 @@ class _AdminLoginState extends State<AdminLogin> {
         _isLoading = true;
         _errorMessage = null;
       });
+
+      // Verify Firebase is initialized before attempting login
+      try {
+        // Check if Firebase Auth is available (will throw if not initialized)
+        FirebaseAuth.instance;
+        debugPrint('Firebase Auth instance available');
+      } catch (e) {
+        debugPrint('Firebase Auth not available: $e');
+        setState(() {
+          _errorMessage =
+              'System is not ready. Please refresh the page and try again.';
+          _isLoading = false;
+        });
+        return;
+      }
+
       try {
         UserCredential userCredential = await FirebaseAuth.instance
             .signInWithEmailAndPassword(
@@ -59,11 +85,13 @@ class _AdminLoginState extends State<AdminLogin> {
               password: _passwordController.text.trim(),
             );
         String uid = userCredential.user!.uid;
+        debugPrint('Checking admin document for UID: $uid');
         DocumentSnapshot adminDoc =
             await FirebaseFirestore.instance
                 .collection('admins')
                 .doc(uid)
                 .get();
+        debugPrint('Admin document exists: ${adminDoc.exists}');
         if (adminDoc.exists) {
           final adminUser = AdminUser(
             id: adminDoc['adminID'] ?? uid,
@@ -91,13 +119,17 @@ class _AdminLoginState extends State<AdminLogin> {
             ),
           );
         } else {
+          // Sign out the user since they're not an admin
+          await FirebaseAuth.instance.signOut();
           setState(() {
-            _errorMessage = 'You are not registered as an admin.';
+            _errorMessage =
+                'You are not registered as an admin. Please contact the developer at mangosense.app@gmail.com.';
             _isLoading = false;
           });
         }
       } on FirebaseAuthException catch (e) {
         String errorMsg;
+        debugPrint('FirebaseAuthException: ${e.code} - ${e.message}');
         switch (e.code) {
           case 'user-not-found':
             errorMsg = 'No account found with this email address.';
@@ -112,24 +144,59 @@ class _AdminLoginState extends State<AdminLogin> {
             errorMsg = 'This account has been disabled.';
             break;
           case 'too-many-requests':
-            errorMsg = 'Too many failed attempts. Please try again later.';
+            errorMsg =
+                'Too many failed login attempts. Please try again in a few minutes.';
             break;
           case 'invalid-credential':
-            errorMsg = 'Invalid email or password. Please check and try again.';
+            errorMsg =
+                'Invalid email or password.\n\n'
+                'Please verify:\n'
+                '• Email address is correct\n'
+                '• Password is correct\n\n'
+                'If you continue having issues, use "Forgot Password" or contact the developer at mangosense.app@gmail.com.';
             break;
           case 'network-request-failed':
             errorMsg = 'Network error. Please check your connection.';
             break;
+          case 'operation-not-allowed':
+            errorMsg =
+                'Login is currently not available. Please contact the developer at mangosense.app@gmail.com.';
+            break;
+          case 'invalid-api-key':
+            errorMsg =
+                'Something went wrong with the system configuration. Please contact the developer at mangosense.app@gmail.com.';
+            break;
           default:
-            errorMsg = e.message ?? 'Login failed. Please try again.';
+            // Check if the error message contains 400 or bad request
+            if (e.message?.toLowerCase().contains('400') == true ||
+                e.message?.toLowerCase().contains('bad request') == true) {
+              errorMsg =
+                  'Something went wrong. Please contact the developer at mangosense.app@gmail.com.';
+            } else {
+              errorMsg = e.message ?? 'Login failed. Please try again.';
+            }
         }
         setState(() {
           _errorMessage = errorMsg;
           _isLoading = false;
         });
       } catch (e) {
+        // Log the error for debugging
+        debugPrint('Login error: $e');
+        String errorString = e.toString().toLowerCase();
+        String errorMsg;
+
+        // Check for 400 Bad Request errors
+        if (errorString.contains('400') ||
+            errorString.contains('bad request')) {
+          errorMsg =
+              'Something went wrong. Please contact the developer at mangosense.app@gmail.com.';
+        } else {
+          errorMsg = 'An unexpected error occurred. Please try again.';
+        }
+
         setState(() {
-          _errorMessage = 'An unexpected error occurred. Please try again.';
+          _errorMessage = errorMsg;
           _isLoading = false;
         });
       }
@@ -144,7 +211,14 @@ class _AdminLoginState extends State<AdminLogin> {
       });
       return;
     }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
     try {
+      // First check if email exists in Firestore admins collection
       final query =
           await FirebaseFirestore.instance
               .collection('admins')
@@ -155,30 +229,474 @@ class _AdminLoginState extends State<AdminLogin> {
       if (query.docs.isEmpty) {
         setState(() {
           _errorMessage = 'This email is not registered as an admin.';
+          _isLoading = false;
         });
         return;
       }
 
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
-      showDialog(
-        context: context,
-        builder:
-            (context) => AlertDialog(
-              title: const Text('Password Reset'),
-              content: Text('A password reset link has been sent to $email.'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('OK'),
+      // Check if user exists in Firebase Auth by trying to fetch sign-in methods
+      // Note: Firebase doesn't allow checking if user exists directly for security,
+      // but we can try to send the reset email and handle errors
+      try {
+        await FirebaseAuth.instance.sendPasswordResetEmail(
+          email: email,
+          actionCodeSettings: ActionCodeSettings(
+            url: Uri.base.origin,
+            handleCodeInApp: false,
+          ),
+        );
+
+        debugPrint('Password reset email sent successfully to: $email');
+
+        setState(() {
+          _isLoading = false;
+        });
+
+        showDialog(
+          context: context,
+          builder:
+              (context) => AlertDialog(
+                title: const Text('Password Reset'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('A password reset link has been sent to:'),
+                    const SizedBox(height: 8),
+                    Text(
+                      email,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Please check your inbox (and spam folder) for the reset link.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Note: If you don\'t receive the email, please contact the developer at mangosense.app@gmail.com.',
+                      style: TextStyle(fontSize: 11, color: Colors.orange),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-      );
-    } on FirebaseAuthException catch (e) {
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+        );
+      } on FirebaseAuthException catch (authError) {
+        debugPrint(
+          'Firebase Auth error during password reset: ${authError.code} - ${authError.message}',
+        );
+        String errorMsg;
+
+        switch (authError.code) {
+          case 'user-not-found':
+            errorMsg =
+                'No account found for this email. '
+                'Please contact the developer at mangosense.app@gmail.com.';
+            break;
+          case 'invalid-email':
+            errorMsg = 'Invalid email address format.';
+            break;
+          case 'too-many-requests':
+            errorMsg =
+                'Too many password reset attempts. Please wait a few minutes and try again.';
+            break;
+          default:
+            errorMsg =
+                authError.message ??
+                'Failed to send reset email. Error: ${authError.code}';
+        }
+
+        setState(() {
+          _errorMessage = errorMsg;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Unexpected error in password reset: $e');
       setState(() {
-        _errorMessage = e.message ?? 'Failed to send reset email.';
+        _errorMessage = 'An unexpected error occurred. Please try again.';
+        _isLoading = false;
       });
     }
+  }
+
+  Future<void> _showCreateAdminDialog() async {
+    final nameController = TextEditingController();
+    final emailController = TextEditingController();
+    final passwordController = TextEditingController();
+    final confirmPasswordController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    bool isCreating = false;
+    bool obscurePass = true;
+    bool obscureConfirm = true;
+    String? dialogError;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Row(
+                children: [
+                  Icon(
+                    Icons.person_add,
+                    color: const Color.fromARGB(255, 42, 157, 50),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text('Create Admin Account'),
+                ],
+              ),
+              content: SizedBox(
+                width: 400,
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Create a new admin account to access the dashboard.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: nameController,
+                        decoration: InputDecoration(
+                          labelText: 'Admin Name',
+                          prefixIcon: const Icon(Icons.person, size: 18),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter admin name';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: emailController,
+                        decoration: InputDecoration(
+                          labelText: 'Email',
+                          prefixIcon: const Icon(Icons.email, size: 18),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter email';
+                          }
+                          if (!value.contains('@')) {
+                            return 'Please enter a valid email';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: passwordController,
+                        obscureText: obscurePass,
+                        decoration: InputDecoration(
+                          labelText: 'Password',
+                          prefixIcon: const Icon(Icons.lock, size: 18),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              obscurePass
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                              size: 18,
+                            ),
+                            onPressed: () {
+                              setDialogState(() {
+                                obscurePass = !obscurePass;
+                              });
+                            },
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter a password';
+                          }
+                          if (value.length < 6) {
+                            return 'Password must be at least 6 characters';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: confirmPasswordController,
+                        obscureText: obscureConfirm,
+                        decoration: InputDecoration(
+                          labelText: 'Confirm Password',
+                          prefixIcon: const Icon(Icons.lock_outline, size: 18),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              obscureConfirm
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                              size: 18,
+                            ),
+                            onPressed: () {
+                              setDialogState(() {
+                                obscureConfirm = !obscureConfirm;
+                              });
+                            },
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please confirm your password';
+                          }
+                          if (value != passwordController.text) {
+                            return 'Passwords do not match';
+                          }
+                          return null;
+                        },
+                      ),
+                      if (dialogError != null) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(5),
+                            border: Border.all(color: Colors.red.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.error_outline,
+                                color: Colors.red.shade700,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  dialogError!,
+                                  style: TextStyle(
+                                    color: Colors.red.shade700,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed:
+                      isCreating
+                          ? null
+                          : () {
+                            Navigator.of(context).pop();
+                          },
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed:
+                      isCreating
+                          ? null
+                          : () async {
+                            if (!formKey.currentState!.validate()) return;
+
+                            setDialogState(() {
+                              isCreating = true;
+                              dialogError = null;
+                            });
+
+                            try {
+                              // Save values before any async Firebase calls, because
+                              // createUserWithEmailAndPassword auto-signs-in the user,
+                              // which triggers AuthWrapper and may dispose the login page.
+                              final String savedEmail =
+                                  emailController.text.trim();
+                              final String savedPassword =
+                                  passwordController.text.trim();
+                              final String savedName =
+                                  nameController.text.trim();
+
+                              // Step 1: Create user in Firebase Authentication
+                              final UserCredential userCredential =
+                                  await FirebaseAuth.instance
+                                      .createUserWithEmailAndPassword(
+                                        email: savedEmail,
+                                        password: savedPassword,
+                                      );
+
+                              final String uid = userCredential.user!.uid;
+                              debugPrint(
+                                '✅ Firebase Auth account created with UID: $uid',
+                              );
+
+                              // Step 2: Sign out IMMEDIATELY to prevent AuthWrapper from
+                              // navigating away and disposing the login page
+                              await FirebaseAuth.instance.signOut();
+                              debugPrint(
+                                '✅ Signed out newly created user to prevent auto-navigation',
+                              );
+
+                              // Step 3: Create admin document in Firestore (doesn't need auth)
+                              await FirebaseFirestore.instance
+                                  .collection('admins')
+                                  .doc(uid)
+                                  .set({
+                                    'adminID': uid,
+                                    'adminName': savedName,
+                                    'email': savedEmail,
+                                    'createdAt': FieldValue.serverTimestamp(),
+                                  });
+
+                              debugPrint(
+                                '✅ Firestore admin document created for UID: $uid',
+                              );
+
+                              if (context.mounted) {
+                                Navigator.of(context).pop();
+                              }
+
+                              // Pre-fill the email in the login form for convenience
+                              if (mounted) {
+                                _emailController.text = savedEmail;
+                                _passwordController.text = '';
+
+                                ScaffoldMessenger.of(this.context).showSnackBar(
+                                  SnackBar(
+                                    content: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.check_circle,
+                                          color: Colors.white,
+                                          size: 18,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            'Admin account created successfully! You can now log in with your email and password.',
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    backgroundColor: const Color.fromARGB(
+                                      255,
+                                      42,
+                                      157,
+                                      50,
+                                    ),
+                                    duration: const Duration(seconds: 5),
+                                    behavior: SnackBarBehavior.floating,
+                                  ),
+                                );
+                              }
+                            } on FirebaseAuthException catch (e) {
+                              debugPrint(
+                                'FirebaseAuthException during account creation: ${e.code} - ${e.message}',
+                              );
+                              String errorMsg;
+                              switch (e.code) {
+                                case 'email-already-in-use':
+                                  errorMsg =
+                                      'An account with this email already exists.';
+                                  break;
+                                case 'invalid-email':
+                                  errorMsg = 'Invalid email address.';
+                                  break;
+                                case 'weak-password':
+                                  errorMsg =
+                                      'Password is too weak. Please use a stronger password.';
+                                  break;
+                                case 'operation-not-allowed':
+                                  errorMsg =
+                                      'Account creation is currently not available. Please contact the developer at mangosense.app@gmail.com.';
+                                  break;
+                                default:
+                                  errorMsg =
+                                      e.message ??
+                                      'Failed to create account: ${e.code}';
+                              }
+                              setDialogState(() {
+                                dialogError = errorMsg;
+                                isCreating = false;
+                              });
+                            } catch (e) {
+                              debugPrint('Error creating admin account: $e');
+                              setDialogState(() {
+                                dialogError =
+                                    'An unexpected error occurred. Please try again.';
+                                isCreating = false;
+                              });
+                            }
+                          },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color.fromARGB(255, 42, 157, 50),
+                  ),
+                  child:
+                      isCreating
+                          ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                          : const Text(
+                            'Create Account',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    // Note: Do NOT manually dispose dialog controllers here.
+    // The dialog may still be animating out when showDialog returns.
+    // Local controllers will be garbage collected safely.
   }
 
   @override
@@ -565,6 +1083,50 @@ class _AdminLoginState extends State<AdminLogin> {
                                         ),
                               ),
                             ),
+                            // Create Admin Account - only visible when _allowAdminCreation is true
+                            if (_allowAdminCreation) ...[
+                              SizedBox(
+                                height:
+                                    is1366x768 ? padding * 0.3 : padding * 0.5,
+                              ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    'No admin account? ',
+                                    style: TextStyle(
+                                      color: Colors.grey,
+                                      fontSize: subtitleFontSize * 0.85,
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed:
+                                        _isLoading
+                                            ? null
+                                            : _showCreateAdminDialog,
+                                    style: TextButton.styleFrom(
+                                      padding: EdgeInsets.zero,
+                                      minimumSize: Size.zero,
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                    child: Text(
+                                      'Create Admin Account',
+                                      style: TextStyle(
+                                        color: const Color.fromARGB(
+                                          255,
+                                          42,
+                                          157,
+                                          50,
+                                        ),
+                                        fontSize: subtitleFontSize * 0.85,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ],
                         ),
                       ),

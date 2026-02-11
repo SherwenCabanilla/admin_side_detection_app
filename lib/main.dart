@@ -69,8 +69,24 @@ class MyApp extends StatelessWidget {
 class AuthWrapper extends StatelessWidget {
   const AuthWrapper({super.key});
 
+  // Set to true to bypass login and go directly to dashboard (FOR DEBUGGING ONLY)
+  static const bool _bypassLogin = false;
+
   @override
   Widget build(BuildContext context) {
+    // TEMPORARY BYPASS: Skip authentication and go directly to dashboard
+    if (_bypassLogin) {
+      debugPrint('⚠️ LOGIN BYPASS ENABLED - Going directly to dashboard');
+      final bypassAdminUser = AdminUser(
+        id: 'bypass-admin-id',
+        username: 'Bypass Admin',
+        email: 'admin@bypass.local',
+        role: 'admin',
+        lastLogin: DateTime.now(),
+      );
+      return AdminDashboardWrapper(adminUser: bypassAdminUser);
+    }
+
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
@@ -95,6 +111,16 @@ class AuthWrapper extends StatelessWidget {
                 );
               }
 
+              // Handle errors in fetching admin document
+              if (adminSnapshot.hasError) {
+                debugPrint(
+                  'Error checking admin status: ${adminSnapshot.error}',
+                );
+                // Sign out and show login on error
+                FirebaseAuth.instance.signOut();
+                return const AdminLogin();
+              }
+
               if (adminSnapshot.hasData && adminSnapshot.data!.exists) {
                 // User is an admin, create admin user object and show dashboard
                 final adminData =
@@ -109,6 +135,9 @@ class AuthWrapper extends StatelessWidget {
                 return AdminDashboardWrapper(adminUser: adminUser);
               } else {
                 // User is signed in but not an admin, sign them out
+                debugPrint(
+                  'User ${snapshot.data!.uid} is not registered as admin',
+                );
                 FirebaseAuth.instance.signOut();
                 return const AdminLogin();
               }
