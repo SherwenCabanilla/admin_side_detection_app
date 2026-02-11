@@ -12,7 +12,6 @@ class UserManagement extends StatefulWidget {
 
 class _UserManagementState extends State<UserManagement> {
   final TextEditingController _searchController = TextEditingController();
-  final ScrollController _horizontalScrollController = ScrollController();
   String _searchQuery = '';
   String _selectedFilter = 'All';
   List<Map<String, dynamic>> _users = [];
@@ -680,7 +679,6 @@ class _UserManagementState extends State<UserManagement> {
   @override
   void dispose() {
     _searchController.dispose();
-    _horizontalScrollController.dispose();
     _searchDebounce?.cancel();
     super.dispose();
   }
@@ -765,165 +763,282 @@ class _UserManagementState extends State<UserManagement> {
                   _isLoading
                       ? const Center(child: CircularProgressIndicator())
                       : Scrollbar(
-                        controller: _horizontalScrollController,
                         thumbVisibility: true,
                         child: SingleChildScrollView(
-                          controller: _horizontalScrollController,
-                          scrollDirection: Axis.horizontal,
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.vertical,
+                          scrollDirection: Axis.vertical,
+                          child: Container(
+                            width: double.infinity,
                             child: Theme(
                               data: Theme.of(context).copyWith(
                                 // Control the ripple/splash animation duration
                                 splashFactory: InkRipple.splashFactory,
                               ),
-                              child: DataTable(
-                                showCheckboxColumn: false,
-                                columns: const [
-                                  DataColumn(label: Text('Name')),
-                                  DataColumn(label: Text('Email')),
-                                  DataColumn(label: Text('Phone Number')),
-                                  DataColumn(label: Text('Address')),
-                                  DataColumn(label: Text('Status')),
-                                  DataColumn(label: Text('Role')),
-                                  DataColumn(label: Text('Registered')),
-                                  DataColumn(label: Text('Accepted')),
-                                  DataColumn(label: Text('Actions')),
-                                ],
-                                rows:
-                                    _filteredUsers
-                                        .map(
-                                          (user) => DataRow(
-                                            selected:
-                                                _selectedUserId == user['id'],
-                                            onSelectChanged: (selected) {
-                                              setState(() {
-                                                _selectedUserId =
-                                                    _selectedUserId ==
-                                                            user['id']
-                                                        ? null
-                                                        : user['id'];
-                                              });
-                                            },
-                                            color:
-                                                WidgetStateProperty.resolveWith<
-                                                  Color?
-                                                >((states) {
-                                                  if (states.contains(
-                                                    WidgetState.selected,
-                                                  )) {
-                                                    return const Color(
-                                                      0x2D2A9D32,
-                                                    ); // brand green 18% opacity
-                                                  }
-                                                  if (states.contains(
-                                                    WidgetState.hovered,
-                                                  )) {
-                                                    return const Color(
-                                                      0x142A9D32,
-                                                    ); // brand green 8% opacity
-                                                  }
-                                                  return null;
-                                                }),
-                                            cells: [
-                                              DataCell(
-                                                Row(
-                                                  children: [
-                                                    CircleAvatar(
-                                                      radius: 16,
-                                                      backgroundColor:
-                                                          Colors.grey.shade200,
-                                                      backgroundImage:
-                                                          (user['profileImage'] !=
-                                                                      null &&
-                                                                  (user['profileImage']
-                                                                          as String)
-                                                                      .trim()
-                                                                      .isNotEmpty)
-                                                              ? NetworkImage(
-                                                                    (user['profileImage']
-                                                                            as String)
-                                                                        .trim(),
-                                                                  )
-                                                                  as ImageProvider<
-                                                                    Object
-                                                                  >?
-                                                              : null,
-                                                      child:
-                                                          (user['profileImage'] ==
-                                                                      null ||
-                                                                  (user['profileImage']
-                                                                          as String)
-                                                                      .trim()
-                                                                      .isEmpty)
-                                                              ? const Icon(
-                                                                Icons.person,
-                                                                size: 16,
-                                                                color:
-                                                                    Colors.grey,
+                              child: Table(
+                                columnWidths: const {
+                                  0: FlexColumnWidth(1.5), // Name
+                                  1: FlexColumnWidth(2.0), // Email
+                                  2: FlexColumnWidth(1.2), // Phone Number
+                                  3: FlexColumnWidth(2.0), // Address
+                                  4: FlexColumnWidth(1.0), // Status
+                                  5: FlexColumnWidth(1.0), // Role
+                                  6: FlexColumnWidth(1.2), // Registered
+                                  7: FlexColumnWidth(1.2), // Accepted
+                                  8: FlexColumnWidth(1.0), // Actions
+                                },
+                                border: TableBorder(
+                                  horizontalInside: BorderSide(
+                                    color: Colors.grey.shade300,
+                                    width: 1,
+                                  ),
+                                  verticalInside: BorderSide(
+                                    color: Colors.grey.shade300,
+                                    width: 1,
+                                  ),
+                                  top: BorderSide(
+                                    color: Colors.grey.shade300,
+                                    width: 1,
+                                  ),
+                                  bottom: BorderSide(
+                                    color: Colors.grey.shade300,
+                                    width: 1,
+                                  ),
+                                  left: BorderSide(
+                                    color: Colors.grey.shade300,
+                                    width: 1,
+                                  ),
+                                  right: BorderSide(
+                                    color: Colors.grey.shade300,
+                                    width: 1,
+                                  ),
+                                ),
+                                children: [
+                                  // Header row
+                                  TableRow(
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade100,
+                                    ),
+                                    children: [
+                                      _buildHeaderCell('Name'),
+                                      _buildHeaderCell('Email'),
+                                      _buildHeaderCell('Phone Number'),
+                                      _buildHeaderCell('Address'),
+                                      _buildHeaderCell('Status'),
+                                      _buildHeaderCell('Role'),
+                                      _buildHeaderCell('Registered'),
+                                      _buildHeaderCell('Accepted'),
+                                      _buildHeaderCell('Actions'),
+                                    ],
+                                  ),
+                                  // Data rows
+                                  ..._filteredUsers.map((user) {
+                                    final isSelected = _selectedUserId == user['id'];
+                                    return TableRow(
+                                      decoration: BoxDecoration(
+                                        color: isSelected
+                                            ? const Color(0x2D2A9D32)
+                                            : null,
+                                      ),
+                                      children: [
+                                        _buildDataCell(
+                                          Tooltip(
+                                            message: user['name'],
+                                            child: Row(
+                                              children: [
+                                                CircleAvatar(
+                                                  radius: 16,
+                                                  backgroundColor:
+                                                      Colors.grey.shade200,
+                                                  backgroundImage:
+                                                      (user['profileImage'] !=
+                                                                  null &&
+                                                              (user['profileImage']
+                                                                      as String)
+                                                                  .trim()
+                                                                  .isNotEmpty)
+                                                          ? NetworkImage(
+                                                                (user['profileImage']
+                                                                        as String)
+                                                                    .trim(),
                                                               )
-                                                              : null,
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                    Text(user['name']),
-                                                  ],
+                                                              as ImageProvider<
+                                                                Object
+                                                              >?
+                                                          : null,
+                                                  child:
+                                                      (user['profileImage'] ==
+                                                                  null ||
+                                                              (user['profileImage']
+                                                                      as String)
+                                                                  .trim()
+                                                                  .isEmpty)
+                                                          ? const Icon(
+                                                            Icons.person,
+                                                            size: 16,
+                                                            color: Colors.grey,
+                                                          )
+                                                          : null,
                                                 ),
-                                              ),
-                                              DataCell(Text(user['email'])),
-                                              DataCell(
-                                                Text(user['phone'] ?? ''),
-                                              ),
-                                              DataCell(
-                                                Text(user['address'] ?? ''),
-                                              ),
-                                              DataCell(
-                                                Text(
-                                                  user['status'].toUpperCase(),
-                                                  style: TextStyle(
-                                                    color: _getStatusColor(
-                                                      user['status'],
-                                                    ),
-                                                    fontWeight: FontWeight.bold,
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(
+                                                    user['name'],
+                                                    textAlign: TextAlign.center,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    maxLines: 1,
                                                   ),
                                                 ),
+                                              ],
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedUserId =
+                                                  isSelected ? null : user['id'];
+                                            });
+                                          },
+                                        ),
+                                        _buildDataCell(
+                                          Tooltip(
+                                            message: user['email'],
+                                            child: Text(
+                                              user['email'],
+                                              textAlign: TextAlign.center,
+                                              overflow: TextOverflow.ellipsis,
+                                              maxLines: 1,
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedUserId =
+                                                  isSelected ? null : user['id'];
+                                            });
+                                          },
+                                        ),
+                                        _buildDataCell(
+                                          Tooltip(
+                                            message: user['phone'] ?? '',
+                                            child: Text(
+                                              user['phone'] ?? '',
+                                              textAlign: TextAlign.center,
+                                              overflow: TextOverflow.ellipsis,
+                                              maxLines: 1,
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedUserId =
+                                                  isSelected ? null : user['id'];
+                                            });
+                                          },
+                                        ),
+                                        _buildDataCell(
+                                          Tooltip(
+                                            message: user['address'] ?? '',
+                                            child: Text(
+                                              user['address'] ?? '',
+                                              textAlign: TextAlign.center,
+                                              overflow: TextOverflow.ellipsis,
+                                              maxLines: 1,
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedUserId =
+                                                  isSelected ? null : user['id'];
+                                            });
+                                          },
+                                        ),
+                                        _buildDataCell(
+                                          Text(
+                                            user['status'].toUpperCase(),
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color: _getStatusColor(
+                                                user['status'],
                                               ),
-                                              DataCell(
-                                                Text(
-                                                  user['role'].toUpperCase(),
-                                                  style: TextStyle(
-                                                    color: _getRoleColor(
-                                                      user['role'],
-                                                    ),
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedUserId =
+                                                  isSelected ? null : user['id'];
+                                            });
+                                          },
+                                        ),
+                                        _buildDataCell(
+                                          Text(
+                                            user['role'].toUpperCase(),
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color: _getRoleColor(
+                                                user['role'],
+                                              ),
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedUserId =
+                                                  isSelected ? null : user['id'];
+                                            });
+                                          },
+                                        ),
+                                        _buildDataCell(
+                                          Tooltip(
+                                            message: user['registeredAt'],
+                                            child: Text(
+                                              user['registeredAt'],
+                                              textAlign: TextAlign.center,
+                                              overflow: TextOverflow.ellipsis,
+                                              maxLines: 1,
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedUserId =
+                                                  isSelected ? null : user['id'];
+                                            });
+                                          },
+                                        ),
+                                        _buildDataCell(
+                                          Tooltip(
+                                            message: user['acceptedAt'] ?? '—',
+                                            child: Text(
+                                              user['acceptedAt'] ?? '—',
+                                              textAlign: TextAlign.center,
+                                              overflow: TextOverflow.ellipsis,
+                                              maxLines: 1,
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedUserId =
+                                                  isSelected ? null : user['id'];
+                                            });
+                                          },
+                                        ),
+                                        _buildDataCell(
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.edit,
                                                 ),
-                                              ),
-                                              DataCell(
-                                                Text(user['registeredAt']),
-                                              ),
-                                              DataCell(
-                                                Text(user['acceptedAt'] ?? '—'),
-                                              ),
-                                              DataCell(
-                                                Row(
-                                                  children: [
-                                                    IconButton(
-                                                      icon: const Icon(
-                                                        Icons.edit,
-                                                      ),
-                                                      tooltip: 'Edit User',
-                                                      onPressed:
-                                                          () => _showEditDialog(
-                                                            user,
-                                                          ),
+                                                tooltip: 'Edit User',
+                                                onPressed:
+                                                    () => _showEditDialog(
+                                                      user,
                                                     ),
-                                                    IconButton(
-                                                      icon: const Icon(
-                                                        Icons.delete,
-                                                        color: Colors.red,
-                                                      ),
-                                                      tooltip: 'Delete User',
-                                                      onPressed: () {
+                                              ),
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.delete,
+                                                  color: Colors.red,
+                                                ),
+                                                tooltip: 'Delete User',
+                                                onPressed: () {
                                                         showDialog(
                                                           context: context,
                                                           builder:
@@ -1221,11 +1336,11 @@ class _UserManagementState extends State<UserManagement> {
                                                     ),
                                                   ],
                                                 ),
-                                              ),
-                                            ],
                                           ),
-                                        )
-                                        .toList(),
+                                    ],
+                                  );
+                                }).toList(),
+                                ],
                               ),
                             ),
                           ),
@@ -1234,6 +1349,46 @@ class _UserManagementState extends State<UserManagement> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildHeaderCell(String text) {
+    return SizedBox(
+      height: 56,
+      child: Align(
+        alignment: Alignment.center,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12.0),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+              height: 1.2,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDataCell(Widget child, {VoidCallback? onTap}) {
+    return InkWell(
+      onTap: onTap,
+      child: SizedBox(
+        height: 56,
+        child: Align(
+          alignment: Alignment.center,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0),
+            child: DefaultTextStyle(
+              style: const TextStyle(height: 1.2),
+              child: child,
+            ),
+          ),
+        ),
       ),
     );
   }

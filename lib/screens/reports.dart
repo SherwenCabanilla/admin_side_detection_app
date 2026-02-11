@@ -3188,7 +3188,7 @@ class _ReportsState extends State<Reports> {
                                 ),
                                 _buildDetailRow(
                                   'Excludes:',
-                                  'Pending reports, Healthy, Tip Burn, Unknown',
+                                  'Pending reports, Healthy, Burnt leaf, Non mango leaf',
                                 ),
                               ],
                             ),
@@ -3215,15 +3215,15 @@ class _ReportsState extends State<Reports> {
                               children: [
                                 _buildDetailRow(
                                   'Report 1:',
-                                  '3 diseases (Leaf Spot, Rust, Blight) = 3',
+                                  '3 diseases (Dieback, Powdery mildew, Bacterial blackspot) = 3',
                                 ),
                                 _buildDetailRow(
                                   'Report 2:',
-                                  '1 disease (Leaf Spot) = 1',
+                                  '1 disease (Powdery mildew) = 1',
                                 ),
                                 _buildDetailRow(
                                   'Report 3:',
-                                  '2 diseases (Rust, Blight) = 2',
+                                  '2 diseases (Anthracnose, Dieback) = 2',
                                 ),
                                 const SizedBox(height: 8),
                                 Divider(color: Colors.grey.shade400),
@@ -3842,9 +3842,9 @@ class _ReportsState extends State<Reports> {
     if (_totalScansSubmitted < 10) {
       return 'Low disease detection count ($_totalScansSubmitted). This suggests minimal disease pressure in the monitored fields. Continue regular monitoring to maintain crop health.';
     } else if (_totalScansSubmitted < 50) {
-      return 'Moderate disease detection activity ($_totalScansSubmitted unique disease types detected). Review the "Distribution" chart to identify prevalent disease patterns and prioritize management strategies accordingly.';
+      return 'Moderate disease detection activity ($_totalScansSubmitted total diseases detected). Review the "Distribution" chart to identify prevalent disease patterns and prioritize management strategies accordingly.';
     } else {
-      return 'High disease detection activity ($_totalScansSubmitted unique disease types detected). This indicates significant disease pressure requiring immediate attention. Analyze the "Distribution" chart to identify dominant diseases and implement targeted control measures.';
+      return 'High disease detection activity ($_totalScansSubmitted total diseases detected). This indicates significant disease pressure requiring immediate attention. Analyze the "Distribution" chart to identify dominant diseases and implement targeted control measures.';
     }
   }
 

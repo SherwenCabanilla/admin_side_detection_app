@@ -126,18 +126,37 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
         raw.replaceAll(RegExp(r'[_\-]+'), ' ').trim().toLowerCase();
 
     // Fix common spelling issues
+    String result;
     if (normalized == 'backterial b' ||
         normalized == 'backterial blackspot' ||
         normalized == 'bacterial b') {
-      return 'bacterial_blackspot';
+      result = 'bacterial blackspot';
+    } else if (normalized == 'tip burn' || 
+        normalized == 'tipburn' || 
+        normalized == 'unknown') {
+      // Map tip burn and unknown to "burnt leaf"
+      result = 'burnt leaf';
+    } else {
+      // Replace underscores and hyphens with spaces for display
+      result = raw.replaceAll(RegExp(r'[_\-]+'), ' ').trim();
     }
 
-    // Map all tip burn variants to Unknown
-    if (normalized == 'tip burn' || normalized == 'tipburn') {
-      return 'Unknown';
-    }
+    return result;
+  }
 
-    return raw;
+  bool _isValidMangoDisease(String disease) {
+    final normalized =
+        disease
+            .toLowerCase()
+            .replaceAll(RegExp(r'[_\-]+'), ' ')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+    return normalized == 'anthracnose' ||
+        normalized == 'bacterial blackspot' ||
+        normalized == 'bacterial black spot' ||
+        normalized == 'powdery mildew' ||
+        normalized == 'dieback' ||
+        normalized == 'burnt leaf';
   }
 
   Color _colorForDisease(String disease) {
@@ -1068,8 +1087,11 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
               const SizedBox(height: 12),
             ],
 
-            // Disease Summary
-            if (diseaseSummary.isNotEmpty) ...[
+            // Disease Summary - Only show the 4 valid diseases
+            if (diseaseSummary.where((disease) {
+              final diseaseName = (disease['name'] ?? 'Unknown').toString();
+              return _isValidMangoDisease(diseaseName);
+            }).isNotEmpty) ...[
               const Text(
                 'Detected Diseases:',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
@@ -1079,7 +1101,10 @@ class _TotalReportsReviewedCardState extends State<TotalReportsReviewedCard> {
                 spacing: 8,
                 runSpacing: 4,
                 children:
-                    diseaseSummary.map<Widget>((disease) {
+                    (diseaseSummary.where((disease) {
+                      final diseaseName = (disease['name'] ?? 'Unknown').toString();
+                      return _isValidMangoDisease(diseaseName);
+                    }).toList()).map<Widget>((disease) {
                       final diseaseName = _fixDiseaseName(
                         (disease['name'] ?? 'Unknown').toString(),
                       );
@@ -2044,18 +2069,37 @@ class _ReportsModalContentState extends State<ReportsModalContent>
         raw.replaceAll(RegExp(r'[_\-]+'), ' ').trim().toLowerCase();
 
     // Fix common spelling issues
+    String result;
     if (normalized == 'backterial b' ||
         normalized == 'backterial blackspot' ||
         normalized == 'bacterial b') {
-      return 'bacterial_blackspot';
+      result = 'bacterial blackspot';
+    } else if (normalized == 'tip burn' || 
+        normalized == 'tipburn' || 
+        normalized == 'unknown') {
+      // Map tip burn and unknown to "burnt leaf"
+      result = 'burnt leaf';
+    } else {
+      // Replace underscores and hyphens with spaces for display
+      result = raw.replaceAll(RegExp(r'[_\-]+'), ' ').trim();
     }
 
-    // Map all tip burn variants to Unknown
-    if (normalized == 'tip burn' || normalized == 'tipburn') {
-      return 'Unknown';
-    }
+    return result;
+  }
 
-    return raw;
+  bool _isValidMangoDisease(String disease) {
+    final normalized =
+        disease
+            .toLowerCase()
+            .replaceAll(RegExp(r'[_\-]+'), ' ')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+    return normalized == 'anthracnose' ||
+        normalized == 'bacterial blackspot' ||
+        normalized == 'bacterial black spot' ||
+        normalized == 'powdery mildew' ||
+        normalized == 'dieback' ||
+        normalized == 'burnt leaf';
   }
 
   List<Widget> _buildRecommendationsList(dynamic recommendations) {
@@ -3045,8 +3089,11 @@ class _ReportsModalContentState extends State<ReportsModalContent>
               const SizedBox(height: 12),
             ],
 
-            // Disease Summary
-            if (diseaseSummary.isNotEmpty) ...[
+            // Disease Summary - Only show the 4 valid diseases
+            if (diseaseSummary.where((disease) {
+              final diseaseName = (disease['name'] ?? 'Unknown').toString();
+              return _isValidMangoDisease(diseaseName);
+            }).isNotEmpty) ...[
               const Text(
                 'Detected Diseases:',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
@@ -3056,7 +3103,10 @@ class _ReportsModalContentState extends State<ReportsModalContent>
                 spacing: 8,
                 runSpacing: 4,
                 children:
-                    diseaseSummary.map<Widget>((disease) {
+                    (diseaseSummary.where((disease) {
+                      final diseaseName = (disease['name'] ?? 'Unknown').toString();
+                      return _isValidMangoDisease(diseaseName);
+                    }).toList()).map<Widget>((disease) {
                       final diseaseName = _fixDiseaseName(
                         (disease['name'] ?? 'Unknown').toString(),
                       );
