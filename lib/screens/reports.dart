@@ -17,6 +17,21 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 // picker moved to lib/shared/date_range_picker.dart
 
+// Helper function to check if disease is one of the 4 valid mango diseases
+bool _isValidMangoDisease(String disease) {
+  final normalized =
+      disease
+          .toLowerCase()
+          .replaceAll(RegExp(r'[_\-]+'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+  return normalized == 'anthracnose' ||
+      normalized == 'bacterial blackspot' ||
+      normalized == 'bacterial black spot' ||
+      normalized == 'powdery mildew' ||
+      normalized == 'dieback';
+}
+
 class Reports extends StatefulWidget {
   final VoidCallback? onGoToUsers;
   const Reports({Key? key, this.onGoToUsers}) : super(key: key);
@@ -454,8 +469,67 @@ class _ReportsState extends State<Reports> {
     // 1. Reviews Completed (reviewedAt-based)
     final int reviewsCompletedCount = completedInWindow;
 
-    // 2. Total Scans Submitted (createdAt-based)
-    final int totalScansCount = totalForCompletion;
+    // 2. Total Detected Diseases (createdAt-based)
+    // Count unique disease types across all COMPLETED reports only
+    // Each unique disease type in a report counts as 1, regardless of bounding boxes
+    // Example: 1 report with 3 different diseases = count of 3
+    // Exclude healthy, tip burn, unknown, and pending reports
+    int totalDetectedDiseases = 0;
+    for (final r in scanRequests) {
+      // Only count completed reports
+      final status = (r['status'] ?? '').toString();
+      if (status != 'completed') continue;
+
+      final createdAtRaw = r['createdAt'];
+      DateTime? createdAt;
+      if (createdAtRaw is Timestamp) createdAt = createdAtRaw.toDate();
+      if (createdAtRaw is String) createdAt = DateTime.tryParse(createdAtRaw);
+
+      if (createdAt != null) {
+        final inWindow =
+            _selectedTimeRange == '1 Day'
+                ? createdAt.isAfter(startInclusive)
+                : (!createdAt.isBefore(startInclusive) &&
+                    createdAt.isBefore(endExclusive));
+
+        if (inWindow) {
+          final List<dynamic> diseaseSummary =
+              (r['diseaseSummary'] as List<dynamic>?) ?? [];
+
+          // Skip if empty (healthy-only, no detections)
+          if (diseaseSummary.isEmpty) continue;
+
+          // Track unique disease types in this report
+          final Set<String> uniqueDiseasesInReport = {};
+
+          for (final d in diseaseSummary) {
+            String name = 'Unknown';
+            if (d is Map<String, dynamic>) {
+              name = d['name'] ?? d['label'] ?? d['disease'] ?? 'Unknown';
+            } else if (d is String) {
+              name = d;
+            }
+            final lower = name.toLowerCase();
+
+            // Skip tip burn, unknown, and healthy entries
+            if (lower.contains('tip burn') ||
+                lower.contains('unknown') ||
+                lower == 'healthy') {
+              continue;
+            }
+
+            // Only include the 4 valid mango diseases
+            if (_isValidMangoDisease(name)) {
+              // Use original name (not lowercased) to preserve disease name
+              uniqueDiseasesInReport.add(name);
+            }
+          }
+
+          // Count each unique disease type in this report
+          totalDetectedDiseases += uniqueDiseasesInReport.length;
+        }
+      }
+    }
 
     // 3. TRUE Completion Rate - scans submitted AND completed within the period
     // Count scans that were submitted in period AND reviewed in period
@@ -498,10 +572,11 @@ class _ReportsState extends State<Reports> {
     }
 
     // Card shows TRUE completion rate: scans submitted AND completed in period
+    // Use totalForCompletion (total reports) for completion rate calculation
     final String completionRateStr =
-        totalScansCount == 0
+        totalForCompletion == 0
             ? '—'
-            : '${((scansSubmittedAndCompletedInPeriod / totalScansCount) * 100).toStringAsFixed(0)}%';
+            : '${((scansSubmittedAndCompletedInPeriod / totalForCompletion) * 100).toStringAsFixed(0)}%';
 
     // 3. Healthy Rate - calculate from disease stats in the time window
     // Use createdAt (when disease occurred) for accurate disease timing
@@ -574,7 +649,7 @@ class _ReportsState extends State<Reports> {
 
       // Update new metrics
       _reviewsCompleted = reviewsCompletedCount;
-      _totalScansSubmitted = totalScansCount;
+      _totalScansSubmitted = totalDetectedDiseases;
       _scansCompletedFromPeriod =
           completedByCreated; // Lifetime completion (for modal)
       _healthyRate = healthyRateStr;
@@ -771,38 +846,74 @@ class _ReportsState extends State<Reports> {
       // If no data, show a message
       if (mounted) {
         if (diseaseData.isEmpty) {
-          setState(() {
-            _diseaseStats = [
-              {
-                'name': 'No Data Available',
-                'count': 0,
-                'percentage': 0.0,
-                'type': 'disease',
-              },
-            ];
-          });
+          final emptyData = [
+            {
+              'name': 'No Data Available',
+              'count': 0,
+              'percentage': 0.0,
+              'type': 'disease',
+            },
+          ];
+          // Only update if data actually changed to prevent flicker
+          if (!_isDiseaseStatsEqual(_diseaseStats, emptyData)) {
+            setState(() {
+              _diseaseStats = emptyData;
+            });
+          }
         } else {
-          setState(() {
-            _diseaseStats = diseaseData;
-          });
+          // Only update if data actually changed to prevent flicker
+          if (!_isDiseaseStatsEqual(_diseaseStats, diseaseData)) {
+            setState(() {
+              _diseaseStats = diseaseData;
+            });
+          }
         }
       }
     } catch (e) {
       // log suppressed in production
       // Fallback data
       if (mounted) {
-        setState(() {
-          _diseaseStats = [
-            {
-              'name': 'Error Loading Data',
-              'count': 0,
-              'percentage': 0.0,
-              'type': 'disease',
-            },
-          ];
-        });
+        final errorData = [
+          {
+            'name': 'Error Loading Data',
+            'count': 0,
+            'percentage': 0.0,
+            'type': 'disease',
+          },
+        ];
+        // Only update if data actually changed to prevent flicker
+        if (!_isDiseaseStatsEqual(_diseaseStats, errorData)) {
+          setState(() {
+            _diseaseStats = errorData;
+          });
+        }
       }
     }
+  }
+
+  // Helper to compare disease stats to prevent unnecessary updates
+  bool _isDiseaseStatsEqual(
+    List<Map<String, dynamic>> a,
+    List<Map<String, dynamic>> b,
+  ) {
+    if (a.length != b.length) return false;
+    // Create maps for easier comparison
+    final Map<String, Map<String, dynamic>> aMap = {};
+    final Map<String, Map<String, dynamic>> bMap = {};
+    for (final item in a) {
+      aMap[item['name'] as String] = item;
+    }
+    for (final item in b) {
+      bMap[item['name'] as String] = item;
+    }
+    // Compare each disease by count (more reliable than percentage)
+    for (final name in aMap.keys) {
+      if (!bMap.containsKey(name)) return false;
+      final aItem = aMap[name]!;
+      final bItem = bMap[name]!;
+      if ((aItem['count'] as int) != (bItem['count'] as int)) return false;
+    }
+    return true;
   }
 
   Future<void> _loadSla() async {
@@ -1220,7 +1331,14 @@ class _ReportsState extends State<Reports> {
                   mainAxisSpacing: 16,
                   childAspectRatio: 1.2,
                   children: [
-                    // Row 1: Volume & Health metrics
+                    // Row 1: Volume & Status metrics
+                    _buildStatCard(
+                      'Total Detected Diseases',
+                      _totalScansSubmitted.toString(),
+                      Icons.bug_report,
+                      Colors.red,
+                      onTap: () => _showTotalScansSubmittedModal(context),
+                    ),
                     _buildStatCard(
                       'Reviews Completed',
                       _reviewsCompleted.toString(),
@@ -1229,32 +1347,11 @@ class _ReportsState extends State<Reports> {
                       onTap: () => _showReviewsCompletedModal(context),
                     ),
                     _buildStatCard(
-                      'Total Scans Submitted',
-                      _totalScansSubmitted.toString(),
-                      Icons.upload_file,
-                      Colors.blue,
-                      onTap: () => _showTotalScansSubmittedModal(context),
-                    ),
-                    _buildStatCard(
-                      'Healthy Rate',
-                      _healthyRate,
-                      Icons.verified,
-                      Colors.lightGreen,
-                      onTap: () => _showHealthyRateModal(context),
-                    ),
-                    _buildStatCard(
-                      'Completion Rate',
-                      _completionRate ?? '—',
-                      Icons.task_alt,
-                      Colors.blueGrey,
-                      onTap: () async {
-                        setState(() {
-                          _completionWarningDismissed = true;
-                        });
-                        await _saveCompletionWarningDismissed(true);
-                        _showCompletionRateModal(context);
-                      },
-                      showWarning: _hasCompletionRateMismatch(),
+                      'Pending Reports',
+                      (_stats['pendingRequests'] ?? 0).toString(),
+                      Icons.pending_actions,
+                      Colors.amber,
+                      onTap: () => _showPendingReportsModal(context),
                     ),
                     _buildStatCard(
                       'Overdue Pending >24h',
@@ -2990,7 +3087,7 @@ class _ReportsState extends State<Reports> {
                       children: [
                         const Expanded(
                           child: Text(
-                            'Total Scans Submitted',
+                            'Total Detected Diseases',
                             style: TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.bold,
@@ -3013,7 +3110,7 @@ class _ReportsState extends State<Reports> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'What does this show?',
+                            'Overview',
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
@@ -3022,10 +3119,11 @@ class _ReportsState extends State<Reports> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Total number of scan requests submitted by farmers within the selected time range.',
+                            'This metric represents the total count of unique disease types detected across completed scan reports within the selected time period. Only reports with "completed" status are included. Each unique disease type in a report counts as 1, regardless of the number of bounding boxes or instances detected. For example, if one completed report contains 3 different diseases, it contributes 3 to the total count.',
                             style: TextStyle(
                               fontSize: 14,
                               color: Colors.grey[700],
+                              height: 1.5,
                             ),
                           ),
                           const SizedBox(height: 16),
@@ -3053,7 +3151,7 @@ class _ReportsState extends State<Reports> {
                                       MainAxisAlignment.spaceBetween,
                                   children: [
                                     Text(
-                                      'Total Scans Submitted:',
+                                      'Total Detected Diseases:',
                                       style: TextStyle(
                                         fontSize: 14,
                                         color: Colors.grey[700],
@@ -3064,13 +3162,13 @@ class _ReportsState extends State<Reports> {
                                       style: TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.bold,
-                                        color: Colors.blue.shade900,
+                                        color: Colors.red.shade900,
                                       ),
                                     ),
                                   ],
                                 ),
                                 const SizedBox(height: 8),
-                                Divider(color: Colors.blue.shade200),
+                                Divider(color: Colors.red.shade200),
                                 const SizedBox(height: 8),
                                 _buildDetailRow(
                                   'Time Range:',
@@ -3081,15 +3179,23 @@ class _ReportsState extends State<Reports> {
                                   'When scan was submitted',
                                 ),
                                 _buildDetailRow(
-                                  'Includes:',
-                                  'All submitted scans (pending + completed)',
+                                  'Status:',
+                                  'Only completed reports are counted',
+                                ),
+                                _buildDetailRow(
+                                  'Counting Method:',
+                                  'Each unique disease type per report = 1',
+                                ),
+                                _buildDetailRow(
+                                  'Excludes:',
+                                  'Pending reports, Healthy, Tip Burn, Unknown',
                                 ),
                               ],
                             ),
                           ),
                           const SizedBox(height: 16),
                           const Text(
-                            'Comparing with Reviews',
+                            'Calculation Example',
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
@@ -3108,12 +3214,16 @@ class _ReportsState extends State<Reports> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 _buildDetailRow(
-                                  'Scans Submitted:',
-                                  '$_totalScansSubmitted',
+                                  'Report 1:',
+                                  '3 diseases (Leaf Spot, Rust, Blight) = 3',
                                 ),
                                 _buildDetailRow(
-                                  'Reviews Completed:',
-                                  '$_reviewsCompleted',
+                                  'Report 2:',
+                                  '1 disease (Leaf Spot) = 1',
+                                ),
+                                _buildDetailRow(
+                                  'Report 3:',
+                                  '2 diseases (Rust, Blight) = 2',
                                 ),
                                 const SizedBox(height: 8),
                                 Divider(color: Colors.grey.shade400),
@@ -3123,7 +3233,7 @@ class _ReportsState extends State<Reports> {
                                       MainAxisAlignment.spaceBetween,
                                   children: [
                                     Text(
-                                      'Gap:',
+                                      'Total:',
                                       style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.bold,
@@ -3131,23 +3241,18 @@ class _ReportsState extends State<Reports> {
                                       ),
                                     ),
                                     Text(
-                                      '${_totalScansSubmitted - _reviewsCompleted}',
+                                      '6 detected diseases',
                                       style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.bold,
-                                        color:
-                                            (_totalScansSubmitted -
-                                                        _reviewsCompleted) >
-                                                    0
-                                                ? Colors.orange.shade700
-                                                : Colors.green.shade700,
+                                        color: Colors.red.shade700,
                                       ),
                                     ),
                                   ],
                                 ),
                                 const SizedBox(height: 12),
                                 Text(
-                                  'This gap represents scans still pending or reviewed outside the time range.',
+                                  'Note: Multiple bounding boxes of the same disease type in one report still count as 1.',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: Colors.grey[600],
@@ -3175,6 +3280,191 @@ class _ReportsState extends State<Reports> {
         );
       },
     );
+  }
+
+  void _showPendingReportsModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 600,
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            child: Container(
+              width:
+                  MediaQuery.of(context).size.width > 700
+                      ? 600
+                      : MediaQuery.of(context).size.width * 0.9,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Fixed header with close button
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Pending Reports',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                          tooltip: 'Close',
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Scrollable content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'What does this show?',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.amber,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Total number of scan reports that are currently pending review within the selected time range.',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Calculation Details',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.amber,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.amber.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Pending Reports:',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    Text(
+                                      '${_stats['pendingRequests'] ?? 0}',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.amber.shade900,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Divider(color: Colors.amber.shade200),
+                                const SizedBox(height: 8),
+                                _buildDetailRow(
+                                  'Time Range:',
+                                  _displayRangeLabel(_selectedTimeRange),
+                                ),
+                                _buildDetailRow(
+                                  'Filters by:',
+                                  'When scan was submitted',
+                                ),
+                                _buildDetailRow(
+                                  'Status:',
+                                  'Pending reports only',
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  color: Colors.blue.shade700,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'This counts reports that were submitted within the time range and are still awaiting expert review.',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.blue.shade900,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          _buildInsightBox(
+                            'Insight',
+                            _getPendingReportsInsight(),
+                            Icons.lightbulb_outline,
+                            Colors.amber,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _getPendingReportsInsight() {
+    final pendingCount = _stats['pendingRequests'] ?? 0;
+    if (pendingCount == 0) {
+      return 'Excellent! No pending reports in the selected time range. All submissions have been reviewed.';
+    } else if (pendingCount <= 5) {
+      return 'Good progress. Only $pendingCount reports are pending review. Your team is keeping up with the workload.';
+    } else if (pendingCount <= 20) {
+      return 'Moderate backlog: $pendingCount reports are pending. Consider prioritizing reviews to maintain response times.';
+    } else {
+      return 'Significant backlog detected: $pendingCount reports are pending review. Immediate attention needed. Consider redistributing workload or adding more reviewers.';
+    }
   }
 
   void _showHealthyRateModal(BuildContext context) {
@@ -3543,20 +3833,18 @@ class _ReportsState extends State<Reports> {
   }
 
   String _getTotalScansSubmittedInsight() {
-    final gap = _totalScansSubmitted - _reviewsCompleted;
-
-    if (gap <= 0) {
-      return 'Excellent! All submitted scans have been reviewed. Your team is keeping up with demand effectively.';
+    if (_totalScansSubmitted == 0) {
+      return 'No disease detections recorded in this period. This could indicate healthy crop conditions or limited scan submissions. Monitor the "Distribution" chart for disease patterns over time.';
     }
 
-    final gapPercentage = (gap / _totalScansSubmitted) * 100;
-
-    if (gapPercentage > 30) {
-      return 'Significant backlog detected: $gap scans (${gapPercentage.toStringAsFixed(0)}%) are pending or reviewed outside the time range. Check "Overdue Pending >24h" and consider redistributing workload.';
-    } else if (gapPercentage > 15) {
-      return 'Moderate gap of $gap scans (${gapPercentage.toStringAsFixed(0)}%). Some reports may still be in review. Monitor the "Avg. Response Time" to ensure timely processing.';
+    // Calculate average diseases per report (approximate)
+    // Since we don't have exact report count here, provide general insights
+    if (_totalScansSubmitted < 10) {
+      return 'Low disease detection count ($_totalScansSubmitted). This suggests minimal disease pressure in the monitored fields. Continue regular monitoring to maintain crop health.';
+    } else if (_totalScansSubmitted < 50) {
+      return 'Moderate disease detection activity ($_totalScansSubmitted unique disease types detected). Review the "Distribution" chart to identify prevalent disease patterns and prioritize management strategies accordingly.';
     } else {
-      return 'Small gap of $gap scans (${gapPercentage.toStringAsFixed(0)}%). This is normal as some scans may have been reviewed just outside the time window or are newly submitted.';
+      return 'High disease detection activity ($_totalScansSubmitted unique disease types detected). This indicates significant disease pressure requiring immediate attention. Analyze the "Distribution" chart to identify dominant diseases and implement targeted control measures.';
     }
   }
 
@@ -4684,14 +4972,11 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   @override
   void initState() {
     super.initState();
-    // Re-enable live updates with debounce to prevent flicker
-    _streamSub = FirebaseFirestore.instance
-        .collection('scan_requests')
-        .snapshots()
-        .listen((snap) {
-          _lastSnapshot = snap;
-          _scheduleDebouncedRecompute();
-        });
+    // Initialize with pre-loaded data to prevent flicker
+    _liveAggregated = widget.diseaseStats;
+    // Disable automatic live updates to prevent flicker
+    // Data will only update when time range changes or widget is rebuilt
+    // _streamSub is intentionally not initialized here to prevent automatic updates
     // Load saved chart mode preference
     () async {
       try {
@@ -4719,15 +5004,16 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
   @override
   void didUpdateWidget(covariant DiseaseDistributionChart oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.selectedTimeRange != widget.selectedTimeRange &&
-        _lastSnapshot != null) {
-      final agg = _aggregateFromSnapshot(
-        _lastSnapshot,
-        widget.selectedTimeRange,
-      );
+    // Always use the new diseaseStats from parent to prevent flicker
+    // This ensures we use the same data source (getDiseaseStats) consistently
+    if (oldWidget.diseaseStats != widget.diseaseStats) {
       setState(() {
-        _liveAggregated = agg;
+        _liveAggregated = widget.diseaseStats;
       });
+    }
+    if (oldWidget.selectedTimeRange != widget.selectedTimeRange) {
+      // When time range changes, use the new diseaseStats from parent
+      // No need to set _liveAggregated since build() now uses widget.diseaseStats directly
       if (_chartMode == 'line') {
         setState(() {
           _loadingTrend = true;
@@ -4755,9 +5041,12 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
         _lastSnapshot,
         widget.selectedTimeRange,
       );
-      setState(() {
-        _liveAggregated = agg;
-      });
+      // Only update if data actually changed to prevent flicker
+      if (!_isDataEqual(_liveAggregated, agg)) {
+        setState(() {
+          _liveAggregated = agg;
+        });
+      }
       if (_chartMode == 'line') {
         setState(() {
           _loadingTrend = true;
@@ -4767,6 +5056,32 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
         _loadTrend();
       }
     });
+  }
+
+  // Helper to compare if two disease stat lists are equal
+  bool _isDataEqual(
+    List<Map<String, dynamic>> a,
+    List<Map<String, dynamic>> b,
+  ) {
+    if (a.length != b.length) return false;
+    // Create maps for easier comparison
+    final Map<String, Map<String, dynamic>> aMap = {};
+    final Map<String, Map<String, dynamic>> bMap = {};
+    for (final item in a) {
+      aMap[item['name'] as String] = item;
+    }
+    for (final item in b) {
+      bMap[item['name'] as String] = item;
+    }
+    // Compare each disease
+    for (final name in aMap.keys) {
+      if (!bMap.containsKey(name)) return false;
+      final aItem = aMap[name]!;
+      final bItem = bMap[name]!;
+      // Compare count (more reliable than percentage due to rounding)
+      if ((aItem['count'] as int) != (bItem['count'] as int)) return false;
+    }
+    return true;
   }
 
   Future<void> _loadTrend() async {
@@ -4813,28 +5128,40 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
           healthyByDay[key] = (healthyByDay[key] ?? 0) + 1;
           continue;
         }
+
+        // Track unique diseases per report (each report counts as 1 per disease type)
+        final Set<String> diseasesInReport = {};
+        bool hasHealthy = false;
+
         for (final d in diseaseSummary) {
           String name = 'Unknown';
-          int count = 1;
           if (d is Map<String, dynamic>) {
             name =
                 (d['name'] ?? d['label'] ?? d['disease'] ?? 'Unknown')
                     .toString();
-            final c = d['count'] ?? d['confidence'] ?? 1;
-            if (c is num) count = c.round();
           } else if (d is String) {
             name = d;
           }
           final lower = name.toLowerCase();
           if (lower == 'healthy') {
-            healthyByDay[key] = (healthyByDay[key] ?? 0) + count;
+            hasHealthy = true;
             continue;
           }
           if (lower.contains('tip burn') || lower.contains('unknown')) continue;
-          diseaseByDay[key] = (diseaseByDay[key] ?? 0) + count;
-          final perDay = diseaseDayCounts[lower] ?? <String, int>{};
-          perDay[key] = (perDay[key] ?? 0) + count;
-          diseaseDayCounts[lower] = perDay;
+          // Only include the 4 valid mango diseases
+          if (!_isValidMangoDisease(name)) continue;
+          diseasesInReport.add(lower);
+        }
+
+        // Count this report once per disease type
+        if (hasHealthy) {
+          healthyByDay[key] = (healthyByDay[key] ?? 0) + 1;
+        }
+        for (final diseaseName in diseasesInReport) {
+          diseaseByDay[key] = (diseaseByDay[key] ?? 0) + 1;
+          final perDay = diseaseDayCounts[diseaseName] ?? <String, int>{};
+          perDay[key] = (perDay[key] ?? 0) + 1;
+          diseaseDayCounts[diseaseName] = perDay;
         }
       }
 
@@ -4853,7 +5180,8 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
               )
               .toList()
             ..sort((a, b) => b.value.compareTo(a.value));
-      final top = totals.take(4).map((e) => e.key).toList();
+      // Since we filter to only 4 valid mango diseases, show all of them
+      final top = totals.map((e) => e.key).toList();
 
       final Map<String, List<double>> series = {};
       for (final name in top) {
@@ -5194,23 +5522,20 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
         continue;
       }
 
+      // Track unique diseases per report (each report counts as 1 per disease type)
+      final Set<String> diseasesInReport = {};
+      bool hasHealthy = false;
+
       for (final d in diseaseSummary) {
         if (d is Map<String, dynamic>) {
           final String rawName =
               (d['name'] ?? d['label'] ?? d['disease'] ?? 'Unknown').toString();
           final String normalized =
               rawName.replaceAll(RegExp(r'[_\-]+'), ' ').trim().toLowerCase();
-          final dynamic countRaw = d['count'] ?? d['confidence'] ?? 1;
-          int countVal;
-          if (countRaw is num) {
-            countVal = countRaw.round();
-          } else {
-            final parsed = int.tryParse(countRaw.toString());
-            countVal = parsed == null ? 1 : parsed;
-          }
+
           // Route Healthy to dedicated panel, do not include in disease bars
           if (normalized == 'healthy') {
-            healthyCount += countVal;
+            hasHealthy = true;
             continue;
           }
           // Do not display Unknown/Tip Burn in disease bars
@@ -5219,8 +5544,21 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
               normalized == 'tipburn') {
             continue;
           }
-          diseaseToCount[rawName] = (diseaseToCount[rawName] ?? 0) + countVal;
+          // Only include the 4 valid mango diseases
+          if (!_isValidMangoDisease(rawName)) {
+            continue;
+          }
+          // Add disease to set (each report counts as 1 per disease type)
+          diseasesInReport.add(rawName);
         }
+      }
+
+      // Count this report once per disease type
+      if (hasHealthy) {
+        healthyCount += 1;
+      }
+      for (final diseaseName in diseasesInReport) {
+        diseaseToCount[diseaseName] = (diseaseToCount[diseaseName] ?? 0) + 1;
       }
     }
 
@@ -5248,6 +5586,21 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
 
   // Removed old getters; we snapshot build-scoped lists instead to avoid hover flicker
 
+  // Check if disease is one of the 4 valid mango diseases
+  bool _isValidMangoDisease(String disease) {
+    final normalized =
+        disease
+            .toLowerCase()
+            .replaceAll(RegExp(r'[_\-]+'), ' ')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+    return normalized == 'anthracnose' ||
+        normalized == 'bacterial blackspot' ||
+        normalized == 'bacterial black spot' ||
+        normalized == 'powdery mildew' ||
+        normalized == 'dieback';
+  }
+
   Color _getDiseaseColor(String disease) {
     // Normalize common separators and whitespace
     final normalized =
@@ -5273,15 +5626,16 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
       case 'healthy':
         return const Color.fromARGB(255, 2, 119, 252);
       default:
+        // Default grey for any other items (should not appear with filtering)
         return Colors.grey;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Build-scoped immutable lists using live data when available
-    final List<Map<String, dynamic>> dataSnapshot =
-        _liveAggregated.isNotEmpty ? _liveAggregated : widget.diseaseStats;
+    // Always use widget.diseaseStats to prevent flicker from live updates
+    // This ensures consistent data source from parent component
+    final List<Map<String, dynamic>> dataSnapshot = widget.diseaseStats;
     final List<Map<String, dynamic>> diseaseData =
         dataSnapshot.where((item) => item['type'] == 'disease').toList();
     final List<Map<String, dynamic>> healthyData =
@@ -5432,7 +5786,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                       ),
                                       const Spacer(),
                                       Text(
-                                        'Total: ${diseaseData.isEmpty ? 0 : diseaseData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
+                                        'Distribution',
                                         style: TextStyle(
                                           fontSize: 14,
                                           color: Colors.grey[600],
@@ -5475,21 +5829,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                         BarChartAlignment
                                                             .spaceAround,
                                                     maxY:
-                                                        sortedDiseases.isEmpty
-                                                            ? 100.0
-                                                            : sortedDiseases
-                                                                    .map(
-                                                                      (d) =>
-                                                                          d['count']
-                                                                              .toDouble(),
-                                                                    )
-                                                                    .reduce(
-                                                                      (a, b) =>
-                                                                          a > b
-                                                                              ? a
-                                                                              : b,
-                                                                    ) *
-                                                                1.2,
+                                                        100.0, // Always 100% for percentages
                                                     barTouchData: BarTouchData(
                                                       enabled: true,
                                                       touchTooltipData: BarTouchTooltipData(
@@ -5512,7 +5852,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                           final disease =
                                                               sortedDiseases[groupIndex];
                                                           return BarTooltipItem(
-                                                            '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                            '${disease['name']}\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
                                                             const TextStyle(
                                                               color:
                                                                   Colors.white,
@@ -5613,94 +5953,28 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                           showTitles: true,
                                                           reservedSize: 40,
                                                           interval:
-                                                              (() {
-                                                                // Use the same maxY calculation as the chart
-                                                                final double
-                                                                chartMaxY =
-                                                                    sortedDiseases
-                                                                            .isEmpty
-                                                                        ? 100.0
-                                                                        : sortedDiseases
-                                                                                .map(
-                                                                                  (
-                                                                                    d,
-                                                                                  ) =>
-                                                                                      (d['count']
-                                                                                              as num)
-                                                                                          .toDouble(),
-                                                                                )
-                                                                                .reduce(
-                                                                                  (
-                                                                                    a,
-                                                                                    b,
-                                                                                  ) =>
-                                                                                      a >
-                                                                                              b
-                                                                                          ? a
-                                                                                          : b,
-                                                                                ) *
-                                                                            1.2;
-
-                                                                // Calculate interval based on chart's actual maxY
-                                                                if (chartMaxY <=
-                                                                    12)
-                                                                  return 2.0;
-                                                                if (chartMaxY <=
-                                                                    24)
-                                                                  return 5.0;
-                                                                if (chartMaxY <=
-                                                                    60)
-                                                                  return 10.0;
-                                                                if (chartMaxY <=
-                                                                    120)
-                                                                  return 25.0;
-                                                                if (chartMaxY <=
-                                                                    240)
-                                                                  return 50.0;
-                                                                if (chartMaxY <=
-                                                                    600)
-                                                                  return 100.0;
-                                                                if (chartMaxY <=
-                                                                    1200)
-                                                                  return 200.0;
-                                                                if (chartMaxY <=
-                                                                    2400)
-                                                                  return 500.0;
-                                                                if (chartMaxY <=
-                                                                    6000)
-                                                                  return 1000.0;
-                                                                if (chartMaxY <=
-                                                                    12000)
-                                                                  return 2000.0;
-                                                                if (chartMaxY <=
-                                                                    24000)
-                                                                  return 5000.0;
-                                                                if (chartMaxY <=
-                                                                    60000)
-                                                                  return 10000.0;
-                                                                // For extremely large numbers, use dynamic calculation
-                                                                return (chartMaxY /
-                                                                        5)
-                                                                    .ceilToDouble();
-                                                              })(),
+                                                              25.0, // Show 0, 25, 50, 75, 100
                                                           getTitlesWidget: (
                                                             value,
                                                             meta,
                                                           ) {
-                                                            return Text(
-                                                              value
-                                                                  .toInt()
-                                                                  .toString(),
-                                                              style: TextStyle(
-                                                                color:
-                                                                    Colors
-                                                                        .grey[600],
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w500,
-                                                                fontSize: 12,
-                                                              ),
-                                                            );
+                                                            // Show only 0, 25, 50, 75, 100
+                                                            if (value == 0 ||
+                                                                value == 25 ||
+                                                                value == 50 ||
+                                                                value == 75 ||
+                                                                value == 100) {
+                                                              return Text(
+                                                                '${value.toInt()}%',
+                                                                style: TextStyle(
+                                                                  color:
+                                                                      Colors
+                                                                          .grey[700],
+                                                                  fontSize: 12,
+                                                                ),
+                                                              );
+                                                            }
+                                                            return const SizedBox.shrink();
                                                           },
                                                         ),
                                                       ),
@@ -5722,36 +5996,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                       show: true,
                                                       drawVerticalLine: false,
                                                       horizontalInterval:
-                                                          (() {
-                                                            final double
-                                                            maxVal =
-                                                                sortedDiseases
-                                                                        .isEmpty
-                                                                    ? 100
-                                                                    : sortedDiseases
-                                                                        .map(
-                                                                          (d) =>
-                                                                              (d['count']
-                                                                                      as num)
-                                                                                  .toDouble(),
-                                                                        )
-                                                                        .reduce(
-                                                                          (
-                                                                            a,
-                                                                            b,
-                                                                          ) =>
-                                                                              a > b
-                                                                                  ? a
-                                                                                  : b,
-                                                                        );
-                                                            if (maxVal <= 10)
-                                                              return 2.0;
-                                                            if (maxVal <= 20)
-                                                              return 5.0;
-                                                            if (maxVal <= 50)
-                                                              return 10.0;
-                                                            return 20.0;
-                                                          })(),
+                                                          25.0, // Grid lines at 0, 25, 50, 75, 100
                                                       getDrawingHorizontalLine: (
                                                         value,
                                                       ) {
@@ -5777,7 +6022,8 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                                 barRods: [
                                                                   BarChartRodData(
                                                                     toY:
-                                                                        disease['count']
+                                                                        (disease['percentage'] *
+                                                                                100)
                                                                             .toDouble(),
                                                                     color: _getDiseaseColor(
                                                                       disease['name'],
@@ -5855,7 +6101,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                       ),
                                       const Spacer(),
                                       Text(
-                                        'Total: ${healthyData.isEmpty ? 0 : healthyData.fold<int>(0, (sum, item) => sum + (item['count'] as int))} cases',
+                                        'Distribution',
                                         style: TextStyle(
                                           fontSize: 14,
                                           color: Colors.grey[600],
@@ -5883,21 +6129,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                     BarChartAlignment
                                                         .spaceAround,
                                                 maxY:
-                                                    healthyData.isEmpty
-                                                        ? 100.0
-                                                        : healthyData
-                                                                .map(
-                                                                  (d) =>
-                                                                      d['count']
-                                                                          .toDouble(),
-                                                                )
-                                                                .reduce(
-                                                                  (a, b) =>
-                                                                      a > b
-                                                                          ? a
-                                                                          : b,
-                                                                ) *
-                                                            1.2,
+                                                    100.0, // Always 100% for percentages
                                                 barTouchData: BarTouchData(
                                                   enabled: true,
                                                   touchTooltipData: BarTouchTooltipData(
@@ -5919,7 +6151,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                       final disease =
                                                           healthyData[groupIndex];
                                                       return BarTooltipItem(
-                                                        '${disease['name']}\n${disease['count']} cases\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
+                                                        '${disease['name']}\n${(disease['percentage'] * 100).toStringAsFixed(1)}%',
                                                         const TextStyle(
                                                           color: Colors.white,
                                                         ),
@@ -6017,85 +6249,9 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                   ),
                                                   leftTitles: AxisTitles(
                                                     sideTitles: SideTitles(
-                                                      showTitles: true,
-                                                      reservedSize: 40,
-                                                      interval:
-                                                          (() {
-                                                            // Use the same maxY calculation as the chart
-                                                            final double
-                                                            chartMaxY =
-                                                                healthyData
-                                                                        .isEmpty
-                                                                    ? 100.0
-                                                                    : healthyData
-                                                                            .map(
-                                                                              (
-                                                                                d,
-                                                                              ) =>
-                                                                                  (d['count']
-                                                                                          as num)
-                                                                                      .toDouble(),
-                                                                            )
-                                                                            .reduce((a, b) => a > b ? a : b) *
-                                                                        1.2;
-
-                                                            // Calculate interval based on chart's actual maxY
-                                                            if (chartMaxY <= 12)
-                                                              return 2.0;
-                                                            if (chartMaxY <= 24)
-                                                              return 5.0;
-                                                            if (chartMaxY <= 60)
-                                                              return 10.0;
-                                                            if (chartMaxY <=
-                                                                120)
-                                                              return 25.0;
-                                                            if (chartMaxY <=
-                                                                240)
-                                                              return 50.0;
-                                                            if (chartMaxY <=
-                                                                600)
-                                                              return 100.0;
-                                                            if (chartMaxY <=
-                                                                1200)
-                                                              return 200.0;
-                                                            if (chartMaxY <=
-                                                                2400)
-                                                              return 500.0;
-                                                            if (chartMaxY <=
-                                                                6000)
-                                                              return 1000.0;
-                                                            if (chartMaxY <=
-                                                                12000)
-                                                              return 2000.0;
-                                                            if (chartMaxY <=
-                                                                24000)
-                                                              return 5000.0;
-                                                            if (chartMaxY <=
-                                                                60000)
-                                                              return 10000.0;
-                                                            // For extremely large numbers, use dynamic calculation
-                                                            return (chartMaxY /
-                                                                    5)
-                                                                .ceilToDouble();
-                                                          })(),
-                                                      getTitlesWidget: (
-                                                        value,
-                                                        meta,
-                                                      ) {
-                                                        return Text(
-                                                          value
-                                                              .toInt()
-                                                              .toString(),
-                                                          style: TextStyle(
-                                                            color:
-                                                                Colors
-                                                                    .grey[600],
-                                                            fontWeight:
-                                                                FontWeight.w500,
-                                                            fontSize: 12,
-                                                          ),
-                                                        );
-                                                      },
+                                                      showTitles:
+                                                          false, // Hide Y-axis labels for healthy chart
+                                                      reservedSize: 0,
                                                     ),
                                                   ),
                                                   topTitles: AxisTitles(
@@ -6116,31 +6272,7 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                   show: true,
                                                   drawVerticalLine: false,
                                                   horizontalInterval:
-                                                      (() {
-                                                        final double maxVal =
-                                                            healthyData.isEmpty
-                                                                ? 100
-                                                                : healthyData
-                                                                    .map(
-                                                                      (d) =>
-                                                                          (d['count']
-                                                                                  as num)
-                                                                              .toDouble(),
-                                                                    )
-                                                                    .reduce(
-                                                                      (a, b) =>
-                                                                          a > b
-                                                                              ? a
-                                                                              : b,
-                                                                    );
-                                                        if (maxVal <= 10)
-                                                          return 2.0;
-                                                        if (maxVal <= 20)
-                                                          return 5.0;
-                                                        if (maxVal <= 50)
-                                                          return 10.0;
-                                                        return 20.0;
-                                                      })(),
+                                                      25.0, // Grid lines at 0, 25, 50, 75, 100
                                                   getDrawingHorizontalLine: (
                                                     value,
                                                   ) {
@@ -6165,7 +6297,8 @@ class _DiseaseDistributionChartState extends State<DiseaseDistributionChart> {
                                                             barRods: [
                                                               BarChartRodData(
                                                                 toY:
-                                                                    disease['count']
+                                                                    (disease['percentage'] *
+                                                                            100)
                                                                         .toDouble(),
                                                                 color: _getDiseaseColor(
                                                                   disease['name'],

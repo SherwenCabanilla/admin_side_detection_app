@@ -120,8 +120,9 @@ class ReportPdfService {
     }
 
     // Build disease stats from validated data
+    // Each report counts as 1 per disease type (not per bounding box)
     final Map<String, int> diseaseCounts = {};
-    int totalDetections = 0;
+    int healthyCount = 0;
     for (final r in filteredCreatedCompleted) {
       List<dynamic> diseaseSummary = [];
       if (r['diseaseSummary'] != null) {
@@ -133,21 +134,42 @@ class ReportPdfService {
       } else if (r['results'] != null) {
         diseaseSummary = r['results'] as List<dynamic>? ?? [];
       }
+      
+      if (diseaseSummary.isEmpty) {
+        healthyCount += 1;
+        continue;
+      }
+      
+      // Track unique diseases per report (each report counts as 1 per disease type)
+      final Set<String> diseasesInReport = {};
+      bool hasHealthy = false;
+      
       for (final d in diseaseSummary) {
         String name = 'Unknown';
-        int count = 1;
         if (d is Map<String, dynamic>) {
           name = d['name'] ?? d['label'] ?? d['disease'] ?? 'Unknown';
-          count = d['count'] ?? d['confidence'] ?? 1;
         } else if (d is String) {
           name = d;
         }
         final lower = name.toLowerCase();
         if (lower.contains('tip burn') || lower.contains('unknown')) continue;
-        diseaseCounts[name] = (diseaseCounts[name] ?? 0) + count;
-        totalDetections += count;
+        if (lower == 'healthy') {
+          hasHealthy = true;
+          continue;
+        }
+        diseasesInReport.add(name); // Use original name, not lower
+      }
+      
+      // Count this report once per disease type
+      if (hasHealthy) {
+        healthyCount += 1;
+      }
+      for (final diseaseName in diseasesInReport) {
+        diseaseCounts[diseaseName] = (diseaseCounts[diseaseName] ?? 0) + 1;
       }
     }
+    
+    final int totalDetections = diseaseCounts.values.fold(healthyCount, (a, b) => a + b);
     final List<Map<String, dynamic>> diseaseStats = [];
     // Application frequency column removed per request; focus on trend only
 
@@ -209,10 +231,20 @@ class ReportPdfService {
         'name': name,
         'count': count,
         'percentage': pct,
-        'type': name.toLowerCase() == 'healthy' ? 'healthy' : 'disease',
+        'type': 'disease',
         'trend': 'N/A',
       });
     });
+    if (healthyCount > 0) {
+      final pct = totalDetections > 0 ? healthyCount / totalDetections : 0.0;
+      diseaseStats.add({
+        'name': 'Healthy',
+        'count': healthyCount,
+        'percentage': pct,
+        'type': 'healthy',
+        'trend': 'N/A',
+      });
+    }
     diseaseStats.sort(
       (a, b) => (b['count'] as int).compareTo(a['count'] as int),
     );
@@ -254,12 +286,14 @@ class ReportPdfService {
       }
 
       if (diseaseSummary.isNotEmpty) {
+        // Track unique diseases per report (each report counts as 1 per disease type)
+        final Set<String> diseasesInReport = {};
+        bool hasHealthy = false;
+        
         for (final d in diseaseSummary) {
           String name = 'Unknown';
-          int count = 1;
           if (d is Map<String, dynamic>) {
             name = d['name'] ?? d['label'] ?? d['disease'] ?? 'Unknown';
-            count = d['count'] ?? d['confidence'] ?? 1;
           } else if (d is String) {
             name = d;
           }
@@ -268,13 +302,21 @@ class ReportPdfService {
             continue;
           }
           if (lower == 'healthy') {
-            healthyByDay[key] = (healthyByDay[key] ?? 0) + count;
-          } else {
-            diseaseByDay[key] = (diseaseByDay[key] ?? 0) + count;
-            final perDay = diseaseDayCounts[lower] ?? <String, int>{};
-            perDay[key] = (perDay[key] ?? 0) + count;
-            diseaseDayCounts[lower] = perDay;
+            hasHealthy = true;
+            continue;
           }
+          diseasesInReport.add(lower);
+        }
+        
+        // Count this report once per disease type
+        if (hasHealthy) {
+          healthyByDay[key] = (healthyByDay[key] ?? 0) + 1;
+        }
+        for (final diseaseName in diseasesInReport) {
+          diseaseByDay[key] = (diseaseByDay[key] ?? 0) + 1;
+          final perDay = diseaseDayCounts[diseaseName] ?? <String, int>{};
+          perDay[key] = (perDay[key] ?? 0) + 1;
+          diseaseDayCounts[diseaseName] = perDay;
         }
       }
     }
@@ -545,7 +587,7 @@ class ReportPdfService {
 
               // Disease Distribution (paired with chart above - excludes Tip burn/Unknown)
               pw.SizedBox(height: isSmall ? 4 : 6),
-              pw.Text('Disease Distribution (Total Counts)', style: tsH2),
+              pw.Text('Disease Distribution', style: tsH2),
               pw.SizedBox(height: 3),
               _buildStatsTable(
                 diseaseOnlyStats,
@@ -696,24 +738,18 @@ class ReportPdfService {
           ),
           pw.Padding(
             padding: const pw.EdgeInsets.all(4),
-            child: pw.Text('Count', style: headerStyle),
-          ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.all(4),
             child: pw.Text('Percentage', style: headerStyle),
           ),
           pw.Padding(
             padding: const pw.EdgeInsets.all(4),
             child: pw.Text('Trend', style: headerStyle),
           ),
-          // Frequency column removed
         ],
       ),
     ];
 
     for (final d in top) {
       final name = (d['name'] ?? 'Unknown').toString();
-      final count = (d['count'] ?? 0).toString();
       final pct = ((d['percentage'] ?? 0.0) * 100).toStringAsFixed(1) + '%';
       final trend = (d['trend'] ?? 'N/A').toString();
       rows.add(
@@ -725,17 +761,12 @@ class ReportPdfService {
             ),
             pw.Padding(
               padding: const pw.EdgeInsets.all(4),
-              child: pw.Text(count, style: cellStyle),
-            ),
-            pw.Padding(
-              padding: const pw.EdgeInsets.all(4),
               child: pw.Text(pct, style: cellStyle),
             ),
             pw.Padding(
               padding: const pw.EdgeInsets.all(4),
               child: pw.Text(trend, style: cellStyle),
             ),
-            // Frequency cell removed
           ],
         ),
       );
@@ -749,7 +780,6 @@ class ReportPdfService {
               padding: const pw.EdgeInsets.all(4),
               child: pw.Text('No Data', style: cellStyle),
             ),
-            pw.SizedBox(),
             pw.SizedBox(),
           ],
         ),

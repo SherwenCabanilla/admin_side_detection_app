@@ -2,6 +2,21 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 // import 'package:flutter/foundation.dart';
 import 'dart:async';
 
+// Helper function to check if disease is one of the 4 valid mango diseases
+bool _isValidMangoDisease(String disease) {
+  final normalized =
+      disease
+          .toLowerCase()
+          .replaceAll(RegExp(r'[_\-]+'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+  return normalized == 'anthracnose' ||
+      normalized == 'bacterial blackspot' ||
+      normalized == 'bacterial black spot' ||
+      normalized == 'powdery mildew' ||
+      normalized == 'dieback';
+}
+
 class ScanRequestsService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   // Cache and throttle to avoid repeated reads and rebuilds
@@ -177,6 +192,7 @@ class ScanRequestsService {
       // Aggregate disease data
       final Map<String, int> diseaseCounts = {};
       int totalDetections = 0;
+      int healthyCount = 0;
 
       for (final request in filteredRequests) {
         // Try different possible field names for disease data
@@ -192,12 +208,22 @@ class ScanRequestsService {
           diseaseSummary = request['results'] as List<dynamic>? ?? [];
         }
 
+        // If no disease summary, count as healthy
+        if (diseaseSummary.isEmpty) {
+          healthyCount += 1;
+          totalDetections += 1;
+          continue;
+        }
+
         // debugPrint(
         //   'Processing request ${request['id']} with ${diseaseSummary.length} diseases',
         // );
         // debugPrint(
         //   'Disease summary data: $diseaseSummary',
         // ); // Debug: Print disease summary
+
+        bool hasHealthy = false;
+        bool hasDiseases = false;
 
         for (final disease in diseaseSummary) {
           // debugPrint(
@@ -220,21 +246,41 @@ class ScanRequestsService {
             count = 1;
           }
 
-          // Skip Tip Burn as it's not a disease but a scanning feature
+          // Check if it's healthy
+          if (diseaseName.toLowerCase() == 'healthy') {
+            hasHealthy = true;
+            continue;
+          }
+
+          // Skip Tip Burn and Unknown
           if (diseaseName.toLowerCase().contains('tip burn') ||
               diseaseName.toLowerCase().contains('unknown')) {
             // debugPrint('Skipping Tip Burn/Unknown: $diseaseName');
             continue;
           }
 
+          // Only include the 4 valid mango diseases
+          if (!_isValidMangoDisease(diseaseName)) {
+            // debugPrint('Skipping non-mango disease: $diseaseName');
+            continue;
+          }
+
           diseaseCounts[diseaseName] =
               (diseaseCounts[diseaseName] ?? 0) + count;
           totalDetections += count;
+          hasDiseases = true;
+        }
+
+        // If the report had "Healthy" label, count it
+        if (hasHealthy) {
+          healthyCount += 1;
+          totalDetections += 1;
         }
       }
 
       // debugPrint('Disease counts: $diseaseCounts');
       // debugPrint('Total detections: $totalDetections');
+      // debugPrint('Healthy count: $healthyCount');
 
       // Convert to list format with percentages
       final List<Map<String, dynamic>> diseaseStats = [];
@@ -245,10 +291,20 @@ class ScanRequestsService {
           'name': diseaseName,
           'count': count,
           'percentage': percentage,
-          'type':
-              diseaseName.toLowerCase() == 'healthy' ? 'healthy' : 'disease',
+          'type': 'disease',
         });
       });
+
+      // Add healthy data if we have any healthy scans
+      if (healthyCount > 0) {
+        final percentage = totalDetections > 0 ? healthyCount / totalDetections : 0.0;
+        diseaseStats.add({
+          'name': 'Healthy',
+          'count': healthyCount,
+          'percentage': percentage,
+          'type': 'healthy',
+        });
+      }
 
       // Do not inject dummy data; return only real disease stats
 
