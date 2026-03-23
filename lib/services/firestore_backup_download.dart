@@ -6,3 +6,9 @@ Future<void> triggerJsonDownload({
   required String content,
 }) =>
     impl.triggerJsonDownload(filename: filename, content: content);
+
+Future<void> triggerBinaryDownload({
+  required String filename,
+  required List<int> bytes,
+}) =>
+    impl.triggerBinaryDownload(filename: filename, bytes: bytes);

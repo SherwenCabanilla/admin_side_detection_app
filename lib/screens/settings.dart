@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../services/admin_backup_package_service.dart';
 import '../services/firestore_backup_service.dart';
 
 class Settings extends StatefulWidget {
@@ -32,16 +35,60 @@ class _SettingsState extends State<Settings> {
     } catch (_) {}
   }
 
-  Future<void> _downloadFirestoreBackup() async {
+  Future<void> _withBackupProgressDialog(
+    Future<void> Function(void Function(String message) setMessage) work,
+  ) async {
+    final message = ValueNotifier<String>('Starting…');
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dctx) {
+        return ValueListenableBuilder<String>(
+          valueListenable: message,
+          builder: (_, msg, __) {
+            return AlertDialog(
+              content: Row(
+                children: [
+                  const SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 20),
+                  Expanded(child: Text(msg)),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+    try {
+      await work((s) => message.value = s);
+    } finally {
+      message.dispose();
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+    }
+  }
+
+  Future<void> _downloadFullBackupZip() async {
     if (_backupBusy) return;
     setState(() => _backupBusy = true);
     try {
-      await FirestoreBackupService.downloadBackup(FirebaseFirestore.instance);
-      await _logBackupActivity('Firestore data backup downloaded (JSON)');
+      await _withBackupProgressDialog((setMsg) async {
+        await AdminBackupPackageService.downloadFullZipBackup(
+          FirebaseFirestore.instance,
+          onProgress: setMsg,
+        );
+      });
+      await _logBackupActivity('Full backup downloaded (ZIP with database and images)');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Backup file download started.'),
+          content: Text('ZIP backup download started.'),
           backgroundColor: Colors.green,
         ),
       );
@@ -101,13 +148,14 @@ class _SettingsState extends State<Settings> {
                 ),
                 content: SingleChildScrollView(
                   child: Text(
+                    'Use a ZIP file from this admin app (database + images), or an older JSON-only backup.\n\n'
                     'This applies your backup to the same data you work with in this admin panel:\n\n'
                     '• Users — accounts and profiles from the Users section\n'
                     '• Scan requests — disease scan submissions from the app\n'
                     '• Recent activity — the activity history on your Dashboard\n'
                     '• Admin profiles — admin names and preferences from Settings\n\n'
-                    'Records that appear in the backup replace what is stored for those entries. '
-                    'Anything that exists only in the app and is not in the backup file is not removed. '
+                    'ZIP restores upload images to cloud storage first, then updates the database. '
+                    'Records in the backup replace matching entries; data not listed in the backup is not removed. '
                     'Continue only if you trust this file.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       height: 1.45,
@@ -139,16 +187,38 @@ class _SettingsState extends State<Settings> {
     );
     if (agreed != true || !mounted) return;
 
-    final root = await FirestoreBackupService.pickAndParseBackup();
+    final pick = await AdminBackupPackageService.pickBackupFile();
     if (!mounted) return;
-    if (root == null) {
+    if (pick == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('No file selected or file is not valid JSON.'),
+          content: Text('No file selected.'),
           backgroundColor: Colors.orange,
         ),
       );
       return;
+    }
+
+    Map<String, dynamic>? jsonRoot;
+    if (pick.isZip) {
+      jsonRoot = null;
+    } else {
+      try {
+        final decoded = jsonDecode(utf8.decode(pick.bytes));
+        if (decoded is! Map) {
+          throw const FormatException('Not a JSON object');
+        }
+        jsonRoot = Map<String, dynamic>.from(decoded);
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not read backup JSON.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
     }
 
     final controller = TextEditingController();
@@ -177,7 +247,7 @@ class _SettingsState extends State<Settings> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'Type RESTORE in capitals to confirm importing this backup into your live admin data.',
+                      'Type RESTORE in capitals to confirm applying this backup (ZIP or JSON) to your live data.',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         height: 1.45,
                         color: cs.onSurfaceVariant,
@@ -233,11 +303,21 @@ class _SettingsState extends State<Settings> {
 
     setState(() => _backupBusy = true);
     try {
-      await FirestoreBackupService.restoreFromPayload(
-        FirebaseFirestore.instance,
-        root,
-      );
-      await _logBackupActivity('Firestore data restored from JSON backup');
+      if (pick.isZip) {
+        await _withBackupProgressDialog((setMsg) async {
+          await AdminBackupPackageService.restoreFromZipBytes(
+            pick.bytes,
+            onProgress: setMsg,
+          );
+        });
+        await _logBackupActivity('Full backup restored from ZIP');
+      } else {
+        await FirestoreBackupService.restoreFromPayload(
+          FirebaseFirestore.instance,
+          jsonRoot!,
+        );
+        await _logBackupActivity('Database restored from JSON backup');
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1671,10 +1751,11 @@ class _SettingsState extends State<Settings> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                   child: Text(
-                    'Saves Users, scan requests, Dashboard activity history, and admin '
-                    'profile data from Settings into one JSON file. Profile photos and '
-                    'other files in cloud storage are not included. You can import the '
-                    'same file later to restore those records.',
+                    'Download a ZIP that contains your database export (firestore.json), a '
+                    'manifest, and a storage folder with Firebase images linked from that '
+                    'data (for example profile and scan photos). Very large libraries may take '
+                    'a while or hit browser memory limits — use smaller ranges or server '
+                    'exports if needed.',
                     style: TextStyle(
                       fontSize: 13,
                       color: Colors.grey.shade700,
@@ -1689,18 +1770,18 @@ class _SettingsState extends State<Settings> {
                             height: 24,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                          : const Icon(Icons.download),
-                  title: const Text('Download backup (JSON)'),
+                          : const Icon(Icons.archive_outlined),
+                  title: const Text('Download full backup (ZIP)'),
                   subtitle: const Text(
-                    'Saves a single file you can store offline',
+                    'Database JSON + images from cloud storage (linked + scanned)',
                   ),
-                  onTap: _backupBusy ? null : _downloadFirestoreBackup,
+                  onTap: _backupBusy ? null : _downloadFullBackupZip,
                 ),
                 ListTile(
-                  leading: const Icon(Icons.upload),
-                  title: const Text('Restore from backup (JSON)'),
+                  leading: const Icon(Icons.upload_file),
+                  title: const Text('Restore from backup'),
                   subtitle: const Text(
-                    'Overwrites documents that exist in the backup file',
+                    'Choose a ZIP from here, or a legacy JSON-only export',
                   ),
                   onTap: _backupBusy ? null : _restoreFirestoreBackup,
                 ),
