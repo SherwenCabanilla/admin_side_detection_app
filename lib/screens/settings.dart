@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../services/firestore_backup_service.dart';
+
 class Settings extends StatefulWidget {
   final VoidCallback? onViewReports;
   const Settings({Key? key, this.onViewReports}) : super(key: key);
@@ -15,6 +17,254 @@ class _SettingsState extends State<Settings> {
   String? _adminName;
   String? _email; // Initialize as null, load from Firestore
   bool _isLoadingData = true; // Track loading state
+  bool _backupBusy = false;
+
+  Future<void> _logBackupActivity(String action) async {
+    try {
+      await FirebaseFirestore.instance.collection('activities').add({
+        'action': action,
+        'user': _adminName ?? 'Admin',
+        'type': 'settings_change',
+        'color': Colors.indigo.value,
+        'icon': Icons.backup.codePoint,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _downloadFirestoreBackup() async {
+    if (_backupBusy) return;
+    setState(() => _backupBusy = true);
+    try {
+      await FirestoreBackupService.downloadBackup(FirebaseFirestore.instance);
+      await _logBackupActivity('Firestore data backup downloaded (JSON)');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Backup file download started.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } on UnsupportedError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.message?.isNotEmpty == true
+                ? e.message!
+                : 'Backup download is not available on this platform.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Backup failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _backupBusy = false);
+    }
+  }
+
+  Future<void> _restoreFirestoreBackup() async {
+    if (_backupBusy) return;
+
+    final agreed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final cs = theme.colorScheme;
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Material(
+              color: Colors.transparent,
+              child: AlertDialog(
+                insetPadding: EdgeInsets.zero,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                icon: Icon(
+                  Icons.warning_amber_rounded,
+                  color: cs.tertiary,
+                  size: 28,
+                ),
+                iconPadding: const EdgeInsets.only(top: 20),
+                title: const Text('Restore from backup?'),
+                titleTextStyle: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+                content: SingleChildScrollView(
+                  child: Text(
+                    'This applies your backup to the same data you work with in this admin panel:\n\n'
+                    '• Users — accounts and profiles from the Users section\n'
+                    '• Scan requests — disease scan submissions from the app\n'
+                    '• Recent activity — the activity history on your Dashboard\n'
+                    '• Admin profiles — admin names and preferences from Settings\n\n'
+                    'Records that appear in the backup replace what is stored for those entries. '
+                    'Anything that exists only in the app and is not in the backup file is not removed. '
+                    'Continue only if you trust this file.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      height: 1.45,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                actionsAlignment: MainAxisAlignment.end,
+                actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: cs.tertiary,
+                      foregroundColor: cs.onTertiary,
+                    ),
+                    child: const Text('Continue'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    if (agreed != true || !mounted) return;
+
+    final root = await FirestoreBackupService.pickAndParseBackup();
+    if (!mounted) return;
+    if (root == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No file selected or file is not valid JSON.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final controller = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final cs = theme.colorScheme;
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Material(
+              color: Colors.transparent,
+              child: AlertDialog(
+                insetPadding: EdgeInsets.zero,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                title: const Text('Confirm restore'),
+                titleTextStyle: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Type RESTORE in capitals to confirm importing this backup into your live admin data.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        height: 1.45,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: controller,
+                      decoration: const InputDecoration(
+                        labelText: 'Confirmation',
+                        hintText: 'RESTORE',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.characters,
+                      onSubmitted: (_) {
+                        if (controller.text.trim() == 'RESTORE') {
+                          Navigator.pop(ctx, true);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+                actionsAlignment: MainAxisAlignment.end,
+                actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    onPressed: () {
+                      if (controller.text.trim() == 'RESTORE') {
+                        Navigator.pop(ctx, true);
+                      }
+                    },
+                    style: FilledButton.styleFrom(
+                      backgroundColor: cs.error,
+                      foregroundColor: cs.onError,
+                    ),
+                    child: const Text('Restore now'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    controller.dispose();
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _backupBusy = true);
+    try {
+      await FirestoreBackupService.restoreFromPayload(
+        FirebaseFirestore.instance,
+        root,
+      );
+      await _logBackupActivity('Firestore data restored from JSON backup');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Restore completed. Refresh other pages if needed.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } on FormatException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Invalid backup: ${e.message}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Restore failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _backupBusy = false);
+    }
+  }
 
   Future<void> _updateEmailNotificationPref(bool enabled) async {
     try {
@@ -939,19 +1189,7 @@ class _SettingsState extends State<Settings> {
                           ? null // Disable if data is still loading or email is null
                           : () => _showChangeEmailDialog(),
                 ),
-                StatefulBuilder(
-                  builder: (context, setState) {
-                    bool isHovered = false;
-                    return MouseRegion(
-                      onEnter: (_) => setState(() => isHovered = true),
-                      onExit: (_) => setState(() => isHovered = false),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        decoration: BoxDecoration(
-                          color:
-                              isHovered ? Colors.green.withOpacity(0.1) : null,
-                        ),
-                        child: ListTile(
+                ListTile(
                           leading: const Icon(Icons.lock),
                           title: const Text('Change Password'),
                           subtitle: const Text(
@@ -1350,10 +1588,6 @@ class _SettingsState extends State<Settings> {
                               },
                             );
                           },
-                        ),
-                      ),
-                    );
-                  },
                 ),
               ],
             ),
@@ -1413,6 +1647,64 @@ class _SettingsState extends State<Settings> {
                     );
                   },
                 ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Data backup & restore
+          Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    'Data backup & restore',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    'Saves Users, scan requests, Dashboard activity history, and admin '
+                    'profile data from Settings into one JSON file. Profile photos and '
+                    'other files in cloud storage are not included. You can import the '
+                    'same file later to restore those records.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading:
+                      _backupBusy
+                          ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                          : const Icon(Icons.download),
+                  title: const Text('Download backup (JSON)'),
+                  subtitle: const Text(
+                    'Saves a single file you can store offline',
+                  ),
+                  onTap: _backupBusy ? null : _downloadFirestoreBackup,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.upload),
+                  title: const Text('Restore from backup (JSON)'),
+                  subtitle: const Text(
+                    'Overwrites documents that exist in the backup file',
+                  ),
+                  onTap: _backupBusy ? null : _restoreFirestoreBackup,
+                ),
+                const SizedBox(height: 8),
               ],
             ),
           ),

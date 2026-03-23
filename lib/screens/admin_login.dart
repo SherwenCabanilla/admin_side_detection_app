@@ -14,9 +14,9 @@ class AdminLogin extends StatefulWidget {
 }
 
 class _AdminLoginState extends State<AdminLogin> {
-  // Set to true during testing to show "Create Admin Account" option on login screen.
+  // Set to true to show "Create Admin Account" so additional admins can sign up (magro untouched).
   // Set to false in production to hide it.
-  static const bool _allowAdminCreation = false;
+  static const bool _allowAdminCreation = true;
 
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
@@ -566,14 +566,8 @@ class _AdminLoginState extends State<AdminLogin> {
                                 '✅ Firebase Auth account created with UID: $uid',
                               );
 
-                              // Step 2: Sign out IMMEDIATELY to prevent AuthWrapper from
-                              // navigating away and disposing the login page
-                              await FirebaseAuth.instance.signOut();
-                              debugPrint(
-                                '✅ Signed out newly created user to prevent auto-navigation',
-                              );
-
-                              // Step 3: Create admin document in Firestore (doesn't need auth)
+                              // Step 2: Create admin document in Firestore WHILE STILL SIGNED IN
+                              // (Firestore rules require request.auth != null for writes)
                               await FirebaseFirestore.instance
                                   .collection('admins')
                                   .doc(uid)
@@ -586,6 +580,12 @@ class _AdminLoginState extends State<AdminLogin> {
 
                               debugPrint(
                                 '✅ Firestore admin document created for UID: $uid',
+                              );
+
+                              // Step 3: Sign out so AuthWrapper doesn't navigate away
+                              await FirebaseAuth.instance.signOut();
+                              debugPrint(
+                                '✅ Signed out newly created user to prevent auto-navigation',
                               );
 
                               if (context.mounted) {
@@ -658,11 +658,20 @@ class _AdminLoginState extends State<AdminLogin> {
                                 dialogError = errorMsg;
                                 isCreating = false;
                               });
-                            } catch (e) {
+                            } catch (e, st) {
                               debugPrint('Error creating admin account: $e');
+                              debugPrint('Stack trace: $st');
+                              String errorMsg = 'An unexpected error occurred. Please try again.';
+                              if (e is FirebaseException) {
+                                if (e.code == 'permission-denied') {
+                                  errorMsg =
+                                      'Permission denied. The admin record could not be saved. Check Firestore rules for the admins collection.';
+                                } else {
+                                  errorMsg = e.message ?? errorMsg;
+                                }
+                              }
                               setDialogState(() {
-                                dialogError =
-                                    'An unexpected error occurred. Please try again.';
+                                dialogError = errorMsg;
                                 isCreating = false;
                               });
                             }
